@@ -259,6 +259,9 @@ def main() -> None:
                     help="assumed horizontal FOV in degrees, if not calibrated")
     ap.add_argument("--heading-offset", type=float, default=0.0,
                     help="degrees added to theta, if the tag is not mounted upright")
+    ap.add_argument("--tag-height", type=float, default=0.0,
+                    help="metres the tag sits above the field (0 = lying on it; a robot's "
+                         "shell height for a tag on top of a robot)")
     ap.add_argument("--list-cameras", action="store_true")
     ap.add_argument("--display-width", type=int, default=1600,
                     help="scale the window to this width in pixels; "
@@ -471,7 +474,8 @@ def main() -> None:
                                    camera_params=cam_params, tag_size=args.tag_size)
 
         poses = [
-            tag_field_pose(d, transform, field, args.heading_offset, K=K) for d in dets
+            tag_field_pose(d, transform, field, args.heading_offset, K=K,
+                               tag_height=args.tag_height) for d in dets
         ]
         states = tracker.update(poses, dt)
 

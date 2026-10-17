@@ -577,6 +577,9 @@ def main() -> None:
                     help="black-square width in metres (default 0.080)")
     ap.add_argument("--heading-offset", type=float, default=0.0,
                     help="degrees added to tag theta, if not mounted upright")
+    ap.add_argument("--tag-height", type=float, default=0.0,
+                    help="metres the tag sits above the field (0 = lying on it; a robot's "
+                         "shell height for a tag on top of a robot)")
     ap.add_argument("--tag-sigma-a", type=float, default=1.0,
                     help="tag filter process noise, m/s^2 (raise for a fast robot)")
     ap.add_argument("--tag-sigma-alpha", type=float, default=180.0,
@@ -832,7 +835,8 @@ def main() -> None:
                                                camera_params=cam_params,
                                                tag_size=args.tag_size)
                 tag_poses = [
-                    tag_field_pose(d, transform, field, args.heading_offset, K=K) for d in dets
+                    tag_field_pose(d, transform, field, args.heading_offset, K=K,
+                                   tag_height=args.tag_height) for d in dets
                 ]
                 tag_states = tag_tracker.update(tag_poses, dt)
                 t1 = time.perf_counter()
