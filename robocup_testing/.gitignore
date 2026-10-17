@@ -29,5 +29,5 @@ Thumbs.db
 # NOT ignored, on purpose:
 #   calib/intrinsics.json   shared: the team is on one rig. If you end up on
 #                           different webcams, ignore it -- the loader only
-#                           rejects a mismatched RESOLUTION, so two cameras both
-#                           at 1280x720 would silently share one wrong fx.
+#                           checks RESOLUTION and aspect ratio, so two cameras
+#                           both at 640x480 would silently share one wrong fx.

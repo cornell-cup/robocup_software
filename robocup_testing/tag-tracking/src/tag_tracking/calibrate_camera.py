@@ -114,8 +114,9 @@ def _run_live(args):
                 size = (bgr.shape[1], bgr.shape[0])
                 if size != (args.width, args.height):
                     print(f"note: asked for {args.width}x{args.height}, camera gives "
-                          f"{size[0]}x{size[1]} -- calibrating at {size[0]}x{size[1]}; "
-                          f"pass that --width/--height to every other command")
+                          f"{size[0]}x{size[1]} -- calibrating at {size[0]}x{size[1]} "
+                          f"(other commands load it at whatever size the camera gives, "
+                          f"scaled if the aspect ratio matches)")
             grey = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
             ch_corners, ch_ids, _mk_corners, mk_ids = detector.detectBoard(grey)
             disp = cv2.cvtColor(grey, cv2.COLOR_GRAY2BGR)

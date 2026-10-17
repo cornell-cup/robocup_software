@@ -5,8 +5,13 @@ fx turns apparent size in pixels into metric distance, so it decides whether
 synthetic and stops being survivable once reference tags locate it -- see the
 tag-tracking README.
 
-Everything is keyed on resolution: a matrix for 1280x720 is wrong for 640x480,
-and using it silently would be worse than guessing.
+Everything is keyed on resolution: a matrix for 1280x720 is wrong for 640x480
+as it stands. A webcam that delivers the same picture at another size with the
+same aspect ratio (1280x960 vs 640x480) is just scaling its sensor, so the
+matrix scales with it and the distortion coefficients, which live in
+normalised coordinates, carry over unchanged. A different aspect ratio
+(4:3 vs 16:9) means the camera cropped, and where it cropped is unknowable from
+here -- that still falls back to a guess rather than pretend.
 """
 
 from __future__ import annotations
@@ -63,11 +68,34 @@ def undistort_maps(K: np.ndarray, dist: np.ndarray, width: int, height: int):
     return cv2.initUndistortRectifyMap(K, dist, None, K, (width, height), cv2.CV_16SC2)
 
 
+#: How far two aspect ratios may differ and still count as the same picture
+#: (covers sizes like 1920x1080 vs 1280x720 rounding, not 4:3 vs 16:9).
+ASPECT_TOLERANCE = 0.01
+
+
+def scale_to(K: np.ndarray, from_w: int, from_h: int, to_w: int, to_h: int) -> np.ndarray:
+    """A camera matrix measured at one resolution, rescaled to another.
+
+    Valid only when both are the same picture at a different size (same aspect
+    ratio). Uses OpenCV's pixel-centre convention, so the principal point maps
+    exactly rather than drifting by half a pixel.
+    """
+    sx, sy = to_w / from_w, to_h / from_h
+    K2 = np.array(K, np.float64, copy=True)
+    K2[0, 0] *= sx
+    K2[1, 1] *= sy
+    K2[0, 2] = (K[0, 2] + 0.5) * sx - 0.5
+    K2[1, 2] = (K[1, 2] + 0.5) * sy - 0.5
+    return K2
+
+
 def load(
     width: int, height: int, path: Path | None = None
 ) -> tuple[np.ndarray, np.ndarray, str]:
-    """Real calibration if we have it for this resolution, otherwise a guess.
+    """Real calibration if we have it for this picture, otherwise a guess.
 
+    An exact resolution match is used as-is; the same aspect ratio at another
+    size is rescaled (see the module docstring); anything else is a guess.
     Returns (camera_matrix, dist_coeffs, source), where `source` is a short
     human-readable note to put on screen so nobody mistakes a guess for a
     measurement.
@@ -75,13 +103,22 @@ def load(
     path = path or intrinsics_path()
     if path.exists():
         d = json.loads(path.read_text())
-        if d.get("width") == width and d.get("height") == height:
-            K = np.array(d["camera_matrix"], np.float64)
-            dist = np.array(d.get("dist_coeffs", [0.0] * 5), np.float64).ravel()
-            return K, dist, d.get("source", str(path))
+        cw, ch = d.get("width"), d.get("height")
+        K = np.array(d["camera_matrix"], np.float64)
+        dist = np.array(d.get("dist_coeffs", [0.0] * 5), np.float64).ravel()
+        source = d.get("source", str(path))
+        if cw == width and ch == height:
+            return K, dist, source
+        if cw and ch and abs(cw / ch - width / height) <= ASPECT_TOLERANCE * (width / height):
+            print(
+                f"note: {path} is for {cw}x{ch}, camera is {width}x{height} -- "
+                f"same aspect ratio, scaling it"
+            )
+            return scale_to(K, cw, ch, width, height), dist, f"{source}, scaled from {cw}x{ch}"
         print(
-            f"note: {path} is for {d.get('width')}x{d.get('height')}, "
-            f"camera is {width}x{height} -- ignoring it"
+            f"note: {path} is for {cw}x{ch}, camera is {width}x{height} -- different "
+            f"aspect ratio (the camera crops), ignoring it; re-run calibrate-camera "
+            f"at {width}x{height}"
         )
     return (
         from_fov(width, height, DEFAULT_HFOV_DEG),
