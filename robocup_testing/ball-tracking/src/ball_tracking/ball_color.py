@@ -119,8 +119,8 @@ class BallColor:
             cv2.normalize(out, out, 0, 255, cv2.NORM_MINMAX)
         return out
 
-    def mask(self, frame_bgr: np.ndarray) -> np.ndarray:
-        """A uint8 0/255 mask of where this ball probably is."""
+    def probability(self, frame_bgr: np.ndarray) -> np.ndarray:
+        """The gated, smoothed 0..255 likelihood that mask() thresholds."""
         hsv = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2HSV)
         prob = cv2.calcBackProject(
             [hsv], [0, 1], self.working_hist(), [0, H_RANGE, 0, S_RANGE], scale=1.0
@@ -133,7 +133,15 @@ class BallColor:
         prob = cv2.bitwise_and(prob, gate)
         # A small blur before thresholding fills single-pixel pinholes that
         # thresholding would otherwise turn into ragged blob edges.
-        prob = cv2.GaussianBlur(prob, (5, 5), 0)
+        return cv2.GaussianBlur(prob, (5, 5), 0)
+
+    def mask(self, frame_bgr: np.ndarray, prob: np.ndarray | None = None) -> np.ndarray:
+        """A uint8 0/255 mask of where this ball probably is.
+
+        Pass `prob` from probability() to skip recomputing it.
+        """
+        if prob is None:
+            prob = self.probability(frame_bgr)
         _, m = cv2.threshold(prob, self.threshold, 255, cv2.THRESH_BINARY)
         return m
 

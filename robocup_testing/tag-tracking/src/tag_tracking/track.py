@@ -291,7 +291,8 @@ def main() -> None:
                          "(camera fixed), e.g. a robot carrying a single AprilTag "
                          "driven to each corner, instead of all 4 tags visible at once")
     ap.add_argument("--frames-per-corner", type=int, default=FRAMES_PER_CORNER,
-                    help="--sequential: samples to average at each corner (default 15)")
+                    help=f"--sequential: samples to average at each corner "
+                         f"(default {FRAMES_PER_CORNER})")
     args = ap.parse_args()
 
     if args.list_cameras:

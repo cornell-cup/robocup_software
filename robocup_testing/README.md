@@ -164,7 +164,7 @@ against the wrong physical size until you correct it.
 | `--field-pose PATH` | Field calibration file to load/save | `calib/field_pose.json` | `track` (incl. `--calibrate-live`) |
 | `--layout ID:X,Y ...` | Custom reference-tag positions, overrides the default 4 corners | corners of `--field` | `calibrate-field` |
 | `--sequential` | One tag moved to each corner in turn (camera fixed), instead of 4 tags at once | off | `calibrate-field`, `track --calibrate-live` |
-| `--frames-per-corner` | Samples to average at each corner | `15` | `calibrate-field --sequential`, `track --calibrate-live --sequential` |
+| `--frames-per-corner` | Samples to average at each corner | `30` | `calibrate-field --sequential`, `track --calibrate-live --sequential` |
 | `--origin X Y` / `--origin center` | Put `(0,0)` here instead of the first corner, metres from that corner — skips the click picker | ask by click | `calibrate-field` |
 | `--no-origin` | Skip the origin picker, keep the first corner as `(0,0)` | off | `calibrate-field` |
 | `--corner-origin` | Ignore a saved custom origin for this run, report from the first corner | off | `track`, `track-ball`, `track-combined` |

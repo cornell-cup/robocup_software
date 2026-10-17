@@ -44,7 +44,7 @@ each tracker has its own independent `sigma_a`:
 | Flag | For |
 | --- | --- |
 | `--tag-size`, `--heading-offset`, `--tag-sigma-a`, `--tag-sigma-alpha` | the tag tracker |
-| `--ball-profile`, `--ball-radius`, `--ball-sigma-a`, `--ball-sigma-a-air`, `--ball-sigma-px` | the ball tracker |
+| `--ball-profile`, `--ball-radius`, `--ball-sigma-a`, `--ball-sigma-a-air`, `--ball-sigma-px`, `--ball-min-conc` | the ball tracker (`--ball-min-conc`: mean color likelihood 0-255 a blob needs to count as the ball, default 80; below it no ball is published) |
 | `--json-out`, `--serve-http`, `--json-log`, `--zmq-pub`, `--no-window` | publishing to another program — see [Feeding another program](#feeding-another-program) |
 | `--mjpg` | ask the camera for MJPG, which most USB webcams need to reach 720p at full frame rate — see [Latency](#latency-capture-thread-and---mjpg) |
 | everything else | shared: field, camera, calibration |

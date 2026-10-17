@@ -18,7 +18,7 @@ to either tracker show up here too, automatically.
 Keys:
     q / Esc  quit            g  grid on/off           t  trails on/off
     m        mask overlay    w  wall / floor          r  reset trails/tracks
-    [ / ]    fx -/+ 2%       s  save intrinsics
+    [ / ]    fx -/+ 2%       s  save intrinsics       - / =  min ball concentration
 
 With --no-window there is no window and no keys: nothing is drawn at all, and
 Ctrl+C quits. That is the mode for when the only reader is another program
@@ -135,7 +135,8 @@ def draw_combined_readout(
     # ones in use, so it stays put as tags come and go.
     y = h - strip_h + 20 + 22 * n_tag_lines
     if ball_state is None:
-        cv2.putText(frame, "no ball detected (check: uv run calibrate-ball)",
+        cv2.putText(frame, "no ball detected (check: uv run calibrate-ball, or lower "
+                    "the min concentration with -)",
                     (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (140, 140, 210), 1, cv2.LINE_AA)
         return frame
 
@@ -560,6 +561,7 @@ def _new_ball_tracker(args, color, transform, K, field) -> BallTracker:
     return BallTracker(
         color, transform, K, None, sigma_px=args.ball_sigma_px,
         sigma_a=args.ball_sigma_a, sigma_a_air=args.ball_sigma_a_air, field=field,
+        min_concentration=args.ball_min_conc,
     )
 
 
@@ -567,7 +569,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(
         description=__doc__.splitlines()[0],
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="Keys: q quit, g grid, t trails, m mask, w wall/floor, [ ] fx, r reset, s save "
+        epilog="Keys: q quit, g grid, t trails, m mask, w wall/floor, [ ] fx, r reset, s save, - = min ball conc "
                "(with --no-window: none, Ctrl+C quits)",
     )
     # -- tag-specific --------------------------------------------------
@@ -596,8 +598,12 @@ def main() -> None:
                     help="ball filter process noise while grounded, m/s^2")
     ap.add_argument("--ball-sigma-a-air", type=float, default=10.0,
                     help="ball filter process noise while airborne, m/s^2")
-    ap.add_argument("--ball-sigma-px", type=float, default=1.5,
+    ap.add_argument("--ball-sigma-px", type=float, default=3.0,
                     help="assumed pixel noise on the ball centre")
+    ap.add_argument("--ball-min-conc", type=float, default=80.0,
+                    help="mean color likelihood (0-255) a blob needs to count as "
+                         "the ball; below it no ball is published. Each blob's "
+                         "value is drawn on the video; tune live with - / =")
     # -- shared: field / camera -----------------------------------------
     ap.add_argument("--field", type=float, nargs=2, metavar=("W", "H"),
                     default=None,
@@ -834,11 +840,12 @@ def main() -> None:
                 t2 = time.perf_counter()
 
                 off_plane.add(tag_poses)
-                if ball_state is not None:
-                    if ball_state.visible:
-                        ball_trail.append((ball_state.x, ball_state.y))
-                    else:
-                        ball_dropouts += 1
+                # None is the tracker idling (nothing reached --ball-min-conc),
+                # which is a frame without the ball as much as a coasting one is.
+                if ball_state is not None and ball_state.visible:
+                    ball_trail.append((ball_state.x, ball_state.y))
+                else:
+                    ball_dropouts += 1
                 for s in tag_states:
                     if s.visible:
                         tag_trails[s.tag_id].append((s.x, s.y))
@@ -951,6 +958,11 @@ def main() -> None:
                         ball_tracker = _new_ball_tracker(args, color, transform, K, field)
                         off_plane = OffPlaneWatch(synthetic=True)
                         print(f"transform: {transform.source}")
+                elif key in (ord("-"), ord("=")):
+                    step = -5.0 if key == ord("-") else 5.0
+                    args.ball_min_conc = float(np.clip(args.ball_min_conc + step, 0.0, 255.0))
+                    ball_tracker.detector.min_concentration = args.ball_min_conc
+                    print(f"min ball concentration {args.ball_min_conc:.0f}")
                 elif key == ord("s"):
                     path = intr.save(K, w, h, intr_source, dist=dist)
                     print(f"saved {path}")

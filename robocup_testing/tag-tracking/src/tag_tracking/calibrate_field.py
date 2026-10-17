@@ -61,7 +61,7 @@ from .pose import tag_field_pose
 
 MIN_FRAMES = 10
 MAX_LIVE_FRAMES = 40
-FRAMES_PER_CORNER = 15
+FRAMES_PER_CORNER = 30
 #: --sequential: a new sample this far (px) from the running mean means the tag
 #: is being moved, not held, so the corner's samples restart.
 STILL_PX = 3.0
@@ -750,7 +750,7 @@ def main() -> None:
     ap.add_argument("--min-frames", type=int, default=MIN_FRAMES)
     ap.add_argument(
         "--frames-per-corner", type=int, default=FRAMES_PER_CORNER,
-        help="--sequential: samples to average at each corner (default 15)",
+        help=f"--sequential: samples to average at each corner (default {FRAMES_PER_CORNER})",
     )
     ap.add_argument(
         "--out", type=str, default=None,

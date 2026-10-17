@@ -84,6 +84,9 @@ class BallBlob:
     circularity: float  # 4*pi*A / P^2, 1.0 for a perfect circle
     fill: float  # contour area / min-enclosing-circle area
     score: float
+    #: Mean color likelihood inside the blob, 0..255 -- how ball-colored it is
+    #: as a whole, where the mask threshold only asks it of each pixel.
+    concentration: float = 0.0
 
 
 class BallDetector:
@@ -101,23 +104,33 @@ class BallDetector:
         max_area_frac: float = 0.25,
         open_px: int = 3,
         close_px: int = 7,
+        min_concentration: float = 80.0,
     ) -> None:
         self.color = color
         self.min_area_px = min_area_px
         self.max_area_frac = max_area_frac
+        #: A blob whose mean likelihood is below this is not a ball, however
+        #: round. The one hard reject: the profile's per-pixel threshold lets
+        #: through faint patches of nearly-the-right color, and without this
+        #: the best of them is tracked whenever the real ball is out of view.
+        self.min_concentration = float(min_concentration)
+        #: The blobs ranked() turned away on concentration, for the overlay.
+        self.last_rejected: list[BallBlob] = []
         # OPEN first, then CLOSE. Order matters: OPEN removes the speckle that
         # CLOSE would otherwise weld into blobs, and CLOSE then fills the holes
         # left by highlights and the ball's own shading.
         self._open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (open_px, open_px))
         self._close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (close_px, close_px))
 
-    def mask(self, frame_bgr: np.ndarray) -> np.ndarray:
-        m = self.color.mask(frame_bgr)
+    def mask(self, frame_bgr: np.ndarray, prob: np.ndarray | None = None) -> np.ndarray:
+        m = self.color.mask(frame_bgr, prob)
         m = cv2.morphologyEx(m, cv2.MORPH_OPEN, self._open)
         m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, self._close)
         return m
 
-    def candidates(self, mask: np.ndarray) -> list[BallBlob]:
+    def candidates(self, mask: np.ndarray, prob: np.ndarray | None = None) -> list[BallBlob]:
+        """Every blob in the mask. With `prob` (BallColor.probability), each
+        carries its concentration; without, concentration is 0."""
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         max_area = self.max_area_frac * mask.size
         out: list[BallBlob] = []
@@ -137,8 +150,14 @@ class BallDetector:
             if r <= 0.0:
                 continue
             fill = float(area / (np.pi * r * r))
+            conc = 0.0
+            if prob is not None:
+                x, y, bw, bh = cv2.boundingRect(c)
+                inside = np.zeros((bh, bw), np.uint8)
+                cv2.drawContours(inside, [c - np.array([x, y])], -1, 255, cv2.FILLED)
+                conc = float(cv2.mean(prob[y:y + bh, x:x + bw], mask=inside)[0])
             out.append(
-                BallBlob(float(u), float(v), float(r), area, circularity, fill, 0.0)
+                BallBlob(float(u), float(v), float(r), area, circularity, fill, 0.0, conc)
             )
         return out
 
@@ -163,9 +182,18 @@ class BallDetector:
         mask: np.ndarray,
         predicted_px: tuple[float, float] | None = None,
         predicted_radius_px: float | None = None,
+        prob: np.ndarray | None = None,
     ) -> list[BallBlob]:
-        """Every candidate, scored as in best(), highest first."""
-        cands = self.candidates(mask)
+        """Every candidate, scored as in best(), highest first.
+
+        With `prob`, candidates below min_concentration are dropped first and
+        kept in last_rejected; without it, nothing is dropped.
+        """
+        cands = self.candidates(mask, prob)
+        self.last_rejected = []
+        if prob is not None:
+            self.last_rejected = [c for c in cands if c.concentration < self.min_concentration]
+            cands = [c for c in cands if c.concentration >= self.min_concentration]
         scored: list[BallBlob] = []
         for c in cands:
             # A ball is round: circularity and fill both say so, from different
@@ -181,7 +209,8 @@ class BallDetector:
                 span = max(predicted_radius_px or c.radius_px, 4.0)
                 score += 0.5 * float(np.exp(-0.5 * (d / (3.0 * span)) ** 2))
             scored.append(
-                BallBlob(c.u, c.v, c.radius_px, c.area_px, c.circularity, c.fill, score)
+                BallBlob(c.u, c.v, c.radius_px, c.area_px, c.circularity, c.fill, score,
+                         c.concentration)
             )
         return sorted(scored, key=lambda b: b.score, reverse=True)
 
@@ -559,7 +588,7 @@ class BallTracker:
         transform: CameraFieldTransform,
         K: np.ndarray,
         dist: np.ndarray | None = None,
-        sigma_px: float = 1.5,
+        sigma_px: float = 3.0,
         sigma_a: float = 3.0,
         sigma_a_air: float = 10.0,
         air_sigmas: float = 1.5,
@@ -571,9 +600,10 @@ class BallTracker:
         ball_max_speed: float = 6.5,
         field_margin: float = 0.10,
         max_z: float = 1.0,
+        min_concentration: float = 80.0,
     ) -> None:
         self.color = color
-        self.detector = BallDetector(color)
+        self.detector = BallDetector(color, min_concentration=min_concentration)
         self.transform = transform
         self.K = np.asarray(K, np.float64)
         self.dist = None if dist is None else np.asarray(dist, np.float64)
@@ -609,6 +639,8 @@ class BallTracker:
         self._blank = self._new_filter()
 
         self.last_mask: np.ndarray | None = None
+        #: Blobs in the last frame turned away for low concentration.
+        self.last_rejected: list[BallBlob] = []
         self.last_blob: BallBlob | None = None
         self.last_obs: BallObservation | None = None
 
@@ -719,8 +751,12 @@ class BallTracker:
 
     # -- tracks ------------------------------------------------------------
 
-    def _measure(self, h: _Hypothesis, blob: BallBlob) -> bool:
-        """Offer one blob to one track. False, track untouched, if refused."""
+    def _measure(self, h: _Hypothesis, blob: BallBlob, in_reach: bool = False) -> bool:
+        """Offer one blob to one track. False, track untouched, if refused.
+
+        `in_reach` says the blob lies inside the track's reach circle, so the
+        ball could physically have got there since the track last saw it.
+        """
         votes = (h.air_votes, h.airborne)
         obs = self.observe(blob, h)
         use_air = obs.airborne and obs.air_point is not None and obs.air_cov is not None
@@ -736,12 +772,25 @@ class BallTracker:
             # by a measurement's noise. Tell the filter how far, so the gate lets
             # the first measurement of the new regime in.
             jump = float(np.linalg.norm(np.asarray(point, np.float64) - f.position))
-            if use_air:
-                ok = f.update_airborne(point, obs.air_cov, jump=jump)
-            else:
-                ok = f.update_grounded(
+
+            def update() -> bool:
+                if use_air:
+                    return f.update_airborne(point, obs.air_cov, jump=jump)
+                return f.update_grounded(
                     np.asarray(point)[:2], obs.sigma_xy, self.radius_m, jump=jump
                 )
+
+            ok = update()
+            if not ok and in_reach:
+                # A kick is a velocity step, which a low sigma_a calls impossible:
+                # the gate refuses every frame after it, this track coasts on a
+                # ball that is standing still, and the output stays frozen until
+                # a rival track out-heals it (~0.3 s) and then teleports. The
+                # reach circle is the physical bound, and this blob is inside it,
+                # so loosen by the jump -- the same move as a regime change --
+                # and take it, velocity re-estimated from here.
+                f.release(jump)
+                ok = update()
         if ok:
             h.hit, h.blob, h.obs = True, blob, obs
         else:
@@ -772,8 +821,14 @@ class BallTracker:
     # -- one frame ---------------------------------------------------------
 
     def update(self, frame_bgr: np.ndarray, dt: float) -> BallFieldState | None:
-        """Process one frame. Returns None only before the ball is ever seen.
+        """Process one frame. Returns None -- idle -- whenever no blob in the
+        frame reaches the detector's min_concentration: no ball, so no ghost
+        of one coasting on its last velocity. Tracks still live on internally
+        for their max_coast_s, so a ball that blurs out for a frame or two
+        resumes with its velocity instead of from rest.
 
+        A frame with candidates that the tracks refuse is different: the output
+        may coast on its prediction then, reported with visible=False.
         Unseen for longer than the filter's max_coast_s, the state comes back
         with lost=True, held where the coast ran out rather than extrapolated,
         and the next sighting starts a fresh track wherever the ball turns up.
@@ -790,13 +845,16 @@ class BallTracker:
             self._out.filter.predict(dt)  # held after its track died: age keeps running
 
         pred = self.predicted_pixel()
-        mask = self.detector.mask(frame_bgr)
+        prob = self.color.probability(frame_bgr)
+        mask = self.detector.mask(frame_bgr, prob)
         blobs = self.detector.ranked(
             mask,
             predicted_px=pred[0] if pred else None,
             predicted_radius_px=pred[1] if pred else None,
+            prob=prob,
         )[: self.max_candidates]
         self.last_mask = mask
+        self.last_rejected = self.detector.last_rejected
 
         # Each track claims at most one blob, closest (in reach radii) first.
         pairs: list[tuple[float, int, int]] = []
@@ -819,7 +877,7 @@ class BallTracker:
             h = self.tracks[i]
             if h.hit or j in used:
                 continue
-            if self._measure(h, blobs[j]):
+            if self._measure(h, blobs[j], in_reach=True):
                 used.add(j)
         for h in self.tracks:
             h.health = (min(h.health + self.HEALTH_INC, self.HEALTH_MAX) if h.hit
@@ -847,6 +905,10 @@ class BallTracker:
 
         self.tracks = [h for h in self.tracks if not h.filter.lost()]
         self._out = out = self._choose()
+
+        if not blobs:
+            self.last_blob = self.last_obs = None
+            return None
 
         self.last_blob = (out.blob if out is not None and out.blob is not None
                           else (blobs[0] if blobs else None))

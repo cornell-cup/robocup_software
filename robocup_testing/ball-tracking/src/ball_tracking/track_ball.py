@@ -10,6 +10,7 @@ Keys:
     q / Esc  quit            g  grid on/off           t  trails on/off
     m        mask overlay    w  wall / floor          r  reset trail and track
     [ / ]    fx -/+ 2%       s  save intrinsics       p  pause
+    - / =    min ball concentration -/+ 5
 """
 
 from __future__ import annotations
@@ -65,6 +66,15 @@ def draw_ball_marks(
         m = tracker.last_mask.astype(bool)
         frame[m] = cv2.addWeighted(frame, 0.45, tint, 0.55, 0)[m]
 
+    # Blobs turned away for low concentration, thin and grey, with the number:
+    # this is what to read when setting --min-conc.
+    for b in tracker.last_rejected:
+        bc = (int(round(b.u)), int(round(b.v)))
+        cv2.circle(frame, bc, max(int(round(b.radius_px)), 3), GHOST_COLOR, 1, cv2.LINE_AA)
+        cv2.putText(frame, f"{b.concentration:.0f}",
+                    (bc[0] + int(b.radius_px) + 4, bc[1] + 4),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, GHOST_COLOR, 1, cv2.LINE_AA)
+
     blob = tracker.last_blob
     if blob is None:
         return
@@ -79,11 +89,12 @@ def draw_ball_marks(
         # The two range estimates, side by side. When they disagree the ball is
         # in the air, and seeing both numbers is what makes that legible rather
         # than magic.
-        txt = f"plane {obs.ground_depth:.2f} m | radius {obs.radius_depth:.2f} m"
+        txt = (f"plane {obs.ground_depth:.2f} m | radius {obs.radius_depth:.2f} m"
+               f" | conc {blob.concentration:.0f}")
         # Clear of the circle, and haloed: this label is the same color as the
         # ball it sits next to, so over the ball itself it is invisible.
         r = int(round(blob.radius_px))
-        org = (min(c[0] + r + 10, frame.shape[1] - 260), max(c[1] - r - 8, 50))
+        org = (min(c[0] + r + 10, frame.shape[1] - 330), max(c[1] - r - 8, 50))
         cv2.putText(frame, txt, org, cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 0), 3,
                     cv2.LINE_AA)
         cv2.putText(frame, txt, org, cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1,
@@ -164,7 +175,8 @@ def draw_readout(
     if state is None:
         cv2.putText(frame, "no ball detected", (10, h - 22),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.58, (140, 140, 210), 1, cv2.LINE_AA)
-        cv2.putText(frame, "check the color profile: uv run calibrate-ball",
+        cv2.putText(frame, "check the color profile (uv run calibrate-ball) "
+                    f"or lower min conc {tracker.detector.min_concentration:.0f} with -",
                     (10, h - 44), cv2.FONT_HERSHEY_SIMPLEX, 0.46,
                     (120, 120, 160), 1, cv2.LINE_AA)
         return frame
@@ -221,7 +233,7 @@ def main() -> None:
         description=__doc__.splitlines()[0],
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="Keys: q quit, g grid, t trails, m mask, w wall/floor, "
-               "[ ] fx, r reset trail and track, s save, p pause",
+               "[ ] fx, r reset trail and track, s save, p pause, - = min conc",
     )
     ap.add_argument("--ball-profile", default="test",
                     help="named color profile from calib/ball_color.json "
@@ -261,8 +273,12 @@ def main() -> None:
                          "gravity, a bounce, or a hand moving the ball: there "
                          "is no ballistic model, because a held ball does not "
                          "fall and the radius ranger cannot see a parabola")
-    ap.add_argument("--sigma-px", type=float, default=1.5,
+    ap.add_argument("--sigma-px", type=float, default=3.0,
                     help="assumed pixel noise on the ball centre")
+    ap.add_argument("--min-conc", type=float, default=80.0,
+                    help="mean color likelihood (0-255) a blob needs to count as "
+                         "the ball; below it the tracker reports no ball. Each "
+                         "blob's value is drawn on the video; tune live with - / =")
     ap.add_argument("--camera", type=int, default=0, help="camera index")
     ap.add_argument("--width", type=int, default=1280)
     ap.add_argument("--height", type=int, default=720)
@@ -347,7 +363,8 @@ def main() -> None:
             K, dist, intr_source = intr.load(w, h)
 
         tracker = BallTracker(color, transform, K, dist, sigma_px=args.sigma_px,
-                              sigma_a=args.sigma_a, sigma_a_air=args.sigma_a_air, field=field)
+                              sigma_a=args.sigma_a, sigma_a_air=args.sigma_a_air, field=field,
+                              min_concentration=args.min_conc)
         plan = PlanView(field, height=h, mode=mode)
         trail: deque = deque(maxlen=TRAIL_LEN)
 
@@ -426,7 +443,8 @@ def main() -> None:
                 # BallTracker has no reset(); rebuilding it is the reset. A
                 # stale track is usually what 'r' is pressed to get rid of.
                 tracker = BallTracker(color, transform, K, dist, sigma_px=args.sigma_px,
-                                      sigma_a=args.sigma_a, sigma_a_air=args.sigma_a_air, field=field)
+                                      sigma_a=args.sigma_a, sigma_a_air=args.sigma_a_air, field=field,
+                                      min_concentration=args.min_conc)
                 state = None
             elif key in (ord("["), ord("]")):
                 K = K.copy()
@@ -434,7 +452,8 @@ def main() -> None:
                 K[1, 1] = K[0, 0]
                 intr_source = "hand-tuned"
                 tracker = BallTracker(color, transform, K, dist, sigma_px=args.sigma_px,
-                                      sigma_a=args.sigma_a, sigma_a_air=args.sigma_a_air, field=field)
+                                      sigma_a=args.sigma_a, sigma_a_air=args.sigma_a_air, field=field,
+                                      min_concentration=args.min_conc)
                 trail.clear()
                 print(f"fx {K[0, 0]:.1f}  -> {intr.hfov_of(K, w):.1f} deg HFOV")
             elif key == ord("w") and using_calibrated:
@@ -445,9 +464,15 @@ def main() -> None:
                 transform = build_transform(args, field, mode)
                 plan = PlanView(field, height=h, mode=mode)
                 tracker = BallTracker(color, transform, K, dist, sigma_px=args.sigma_px,
-                                      sigma_a=args.sigma_a, sigma_a_air=args.sigma_a_air, field=field)
+                                      sigma_a=args.sigma_a, sigma_a_air=args.sigma_a_air, field=field,
+                                      min_concentration=args.min_conc)
                 trail.clear()
                 print(f"transform: {transform.source}")
+            elif key in (ord("-"), ord("=")):
+                step = -5.0 if key == ord("-") else 5.0
+                args.min_conc = float(np.clip(args.min_conc + step, 0.0, 255.0))
+                tracker.detector.min_concentration = args.min_conc
+                print(f"min ball concentration {args.min_conc:.0f}")
             elif key == ord("s"):
                 # Keep whatever distortion was loaded: saving K alone would
                 # silently zero a calibrate-camera result.
