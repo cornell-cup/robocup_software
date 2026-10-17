@@ -31,7 +31,7 @@ from vision_core.field import (
     field_pose_path,
     resolve_field,
 )
-from vision_core.planview import OUT_COLOR, PlanView, draw_field
+from vision_core.planview import OUT_COLOR, PlanView, draw_field, side_by_side
 
 from .ball import BallFieldState, BallTracker
 from .ball_color import color_file, load_all, load_profile
@@ -41,6 +41,7 @@ TRAIL_LEN = 120
 BALL_COLOR = (200, 80, 240)  # BGR, magenta-ish: the ball itself
 AIR_COLOR = (90, 200, 255)  # amber: airborne, stop trusting the ground position
 GHOST_COLOR = (120, 120, 120)  # coasting, not actually seen this frame
+HEADER_H = 38  # px, the band above the camera image
 
 
 # --------------------------------------------------------------------------
@@ -140,10 +141,17 @@ def draw_readout(
     profile_name: str,
     intr_source: str,
     fps: float,
-) -> None:
-    """Header, and the numbers the whole exercise is about."""
-    h, w = frame.shape[:2]
-    cv2.rectangle(frame, (0, 0), (w, 38), (0, 0, 0), -1)
+) -> np.ndarray:
+    """Header, and the numbers the whole exercise is about.
+
+    Returns `frame` with a header band above it and the readout band below, so
+    no text covers the camera image.
+    """
+    w = frame.shape[1]
+    strip_h = 68
+    frame = cv2.copyMakeBorder(frame, HEADER_H, strip_h, 0, 0,
+                               cv2.BORDER_CONSTANT, value=(0, 0, 0))
+    h = frame.shape[0]
     head = (
         f"{transform.source}  |  ball '{profile_name}' "
         f"r={tracker.radius_m * 1000:.0f} mm  |  "
@@ -153,16 +161,13 @@ def draw_readout(
     cv2.putText(frame, head, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.52,
                 (220, 220, 220), 1, cv2.LINE_AA)
 
-    strip_h = 68
-    cv2.rectangle(frame, (0, h - strip_h), (w, h), (0, 0, 0), -1)
-
     if state is None:
         cv2.putText(frame, "no ball detected", (10, h - 22),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.58, (140, 140, 210), 1, cv2.LINE_AA)
         cv2.putText(frame, "check the color profile: uv run calibrate-ball",
                     (10, h - 44), cv2.FONT_HERSHEY_SIMPLEX, 0.46,
                     (120, 120, 160), 1, cv2.LINE_AA)
-        return
+        return frame
 
     if state.lost:
         status, color = f"LOST {state.age:4.1f} s (held)", GHOST_COLOR
@@ -192,6 +197,7 @@ def draw_readout(
         cv2.putText(frame, "airborne: ground position is NOT reliable",
                     (w - 430, h - 16), cv2.FONT_HERSHEY_SIMPLEX, 0.52,
                     AIR_COLOR, 1, cv2.LINE_AA)
+    return frame
 
 
 # --------------------------------------------------------------------------
@@ -386,14 +392,14 @@ def main() -> None:
             shown = frame.copy()
             draw_field(shown, field, transform, K, show_grid)
             draw_ball_marks(shown, tracker, state, show_mask)
-            draw_readout(shown, state, tracker, field, transform, K, color.name,
-                         intr_source, fps)
+            shown = draw_readout(shown, state, tracker, field, transform, K, color.name,
+                                 intr_source, fps)
             if paused:
                 cv2.putText(shown, "PAUSED", (w // 2 - 60, 70),
                             cv2.FONT_HERSHEY_SIMPLEX, 1.0, (60, 200, 255), 2, cv2.LINE_AA)
 
             panel = draw_plan(plan, state, trail, transform, show_trails)
-            composite = np.hstack([shown, panel])
+            composite = side_by_side(shown, panel)
             if composite.shape[1] != args.display_width:
                 k = args.display_width / composite.shape[1]
                 # INTER_AREA is the right filter for shrinking and a poor one

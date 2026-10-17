@@ -59,10 +59,11 @@ from vision_core.field import (
     field_pose_path,
     resolve_field,
 )
-from vision_core.planview import OUT_COLOR, PlanView, color_for, draw_field
+from vision_core.planview import OUT_COLOR, PlanView, color_for, draw_field, side_by_side
 
 TAG_TRAIL_LEN = 90
 BALL_TRAIL_LEN = 120
+HEADER_H = 38  # px, the band above the camera image
 
 #: A tag lying on the field reads off_plane_m within a centimetre or so of 0
 #: (selfcheck's synthetic tags: under 1 cm). A median |off_plane_m| past this,
@@ -88,10 +89,22 @@ def draw_combined_readout(
     ball_radius_m: float,
     intr_source: str,
     fps: float,
-) -> None:
-    """Header (what's calibrated, fps), then one line per tag, then the ball."""
-    h, w = frame.shape[:2]
-    cv2.rectangle(frame, (0, 0), (w, 38), (0, 0, 0), -1)
+    tag_rows: int = 1,
+) -> np.ndarray:
+    """Header (what's calibrated, fps), then one line per tag, then the ball.
+
+    Returns `frame` with a header band above it and the readout band below, so
+    no text covers the camera image. The bottom band has room for `tag_rows`
+    tag lines (more if more tags are on screen); pass the most seen so far so
+    the window does not change size every time a tag comes and goes.
+    """
+    w = frame.shape[1]
+    n_tag_lines = max(len(tag_states), tag_rows, 1)
+    n_ball_lines = 2 if ball_state is not None else 1
+    strip_h = 16 + 22 * n_tag_lines + 22 * n_ball_lines
+    frame = cv2.copyMakeBorder(frame, HEADER_H, strip_h, 0, 0,
+                               cv2.BORDER_CONSTANT, value=(0, 0, 0))
+    h = frame.shape[0]
     head = (
         f"{transform.source}  |  tag {tag_size * 1000:.0f}mm  |  "
         f"ball '{ball_name}' r={ball_radius_m * 1000:.0f}mm  |  "
@@ -100,10 +113,6 @@ def draw_combined_readout(
     cv2.putText(frame, head, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.48,
                 (220, 220, 220), 1, cv2.LINE_AA)
 
-    n_tag_lines = max(len(tag_states), 1)
-    n_ball_lines = 2 if ball_state is not None else 1
-    strip_h = 16 + 22 * n_tag_lines + 22 * n_ball_lines
-    cv2.rectangle(frame, (0, h - strip_h), (w, h), (0, 0, 0), -1)
     y = h - strip_h + 20
 
     if not tag_states:
@@ -122,10 +131,13 @@ def draw_combined_readout(
                         color if s.inside else OUT_COLOR, 1, cv2.LINE_AA)
             y += 22
 
+    # The ball sits below every tag row the band has room for, not just the
+    # ones in use, so it stays put as tags come and go.
+    y = h - strip_h + 20 + 22 * n_tag_lines
     if ball_state is None:
         cv2.putText(frame, "no ball detected (check: uv run calibrate-ball)",
                     (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (140, 140, 210), 1, cv2.LINE_AA)
-        return
+        return frame
 
     status = (
         f"LOST {ball_state.age:.1f}s (held)" if ball_state.lost
@@ -150,6 +162,7 @@ def draw_combined_readout(
     cv2.putText(frame, line1, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
     y += 22
     cv2.putText(frame, line2, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
+    return frame
 
 
 def draw_combined_plan(
@@ -743,6 +756,7 @@ def main() -> None:
         ball_tracker = _new_ball_tracker(args, color, transform, K, field)
 
         plan = PlanView(field, height=h, mode=mode)
+        readout_rows = 1  # most tag lines shown so far; the bottom band only grows
         tag_trails: dict[int, deque] = defaultdict(lambda: deque(maxlen=TAG_TRAIL_LEN))
         ball_trail: deque = deque(maxlen=BALL_TRAIL_LEN)
 
@@ -880,12 +894,13 @@ def main() -> None:
                 for d, pose in zip(dets, tag_poses):
                     draw_tag_marks(frame, d, pose, color_for(pose.tag_id))
                 draw_ball_marks(frame, ball_tracker, ball_state, show_mask)
-                draw_combined_readout(frame, tag_states, ball_state, field, transform, K,
-                                      args.tag_size, color.name, color.radius_m,
-                                      intr_source, fps)
+                readout_rows = max(readout_rows, len(tag_states))
+                shown = draw_combined_readout(frame, tag_states, ball_state, field, transform,
+                                              K, args.tag_size, color.name, color.radius_m,
+                                              intr_source, fps, tag_rows=readout_rows)
                 panel = draw_combined_plan(plan, tag_states, tag_trails, ball_state,
                                            ball_trail, transform, show_trails)
-                composite = np.hstack([frame, panel])
+                composite = side_by_side(shown, panel)
                 if composite.shape[1] != args.display_width:
                     k = args.display_width / composite.shape[1]
                     # INTER_AREA is the right filter for shrinking and a poor

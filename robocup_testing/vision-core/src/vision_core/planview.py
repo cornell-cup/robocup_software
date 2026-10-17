@@ -42,6 +42,18 @@ def color_for(index: int) -> tuple[int, int, int]:
     return PALETTE[int(index) % len(PALETTE)]
 
 
+def side_by_side(video: np.ndarray, panel: np.ndarray) -> np.ndarray:
+    """The video column and the plan panel in one image, padded at the bottom
+    to the taller of the two (the video column grows text bands above and below
+    the camera image, so it is usually the panel that gets padded)."""
+    h = max(video.shape[0], panel.shape[0])
+    video = cv2.copyMakeBorder(video, 0, h - video.shape[0], 0, 0,
+                               cv2.BORDER_CONSTANT, value=(0, 0, 0))
+    panel = cv2.copyMakeBorder(panel, 0, h - panel.shape[0], 0, 0,
+                               cv2.BORDER_CONSTANT, value=BG_COLOR)
+    return np.hstack([video, panel])
+
+
 class PlanView:
     """A fixed-size panel with a field rectangle scaled to fit inside it."""
 

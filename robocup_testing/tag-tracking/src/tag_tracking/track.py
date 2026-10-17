@@ -46,7 +46,7 @@ from vision_core.field import (
     SyntheticFieldTransform,
     resolve_field,
 )
-from vision_core.planview import OUT_COLOR, PlanView, color_for, draw_field
+from vision_core.planview import OUT_COLOR, PlanView, color_for, draw_field, side_by_side
 
 from .calibrate_field import (
     FRAMES_PER_CORNER,
@@ -65,6 +65,7 @@ from .pose import TagFieldPose, tag_field_pose
 TRAIL_LEN = 90
 GHOST_COLOR = (120, 120, 120)  # coasting: not actually seen this frame
 VELOCITY_COLOR = (255, 255, 255)
+HEADER_H = 38  # px, the band above the camera image
 
 
 @contextlib.contextmanager
@@ -159,10 +160,21 @@ def draw_readout(
     tag_size: float,
     intr_source: str,
     fps: float,
-) -> None:
-    """The text block: what the transform is, and one line per tag."""
-    h, w = frame.shape[:2]
-    cv2.rectangle(frame, (0, 0), (w, 38), (0, 0, 0), -1)
+    rows: int = 1,
+) -> np.ndarray:
+    """The text block: what the transform is, and one line per tag.
+
+    Returns `frame` with a header band above it and the readout band below, so
+    no text covers the camera image. The bottom band has room for `rows` tag
+    lines (more if more tags are on screen); pass the most seen so far so the
+    window does not change size every time a tag comes and goes.
+    """
+    w = frame.shape[1]
+    n = max(len(states), rows, 1)
+    strip_h = 20 + 24 * n
+    frame = cv2.copyMakeBorder(frame, HEADER_H, strip_h, 0, 0,
+                               cv2.BORDER_CONSTANT, value=(0, 0, 0))
+    h = frame.shape[0]
     head = (
         f"{transform.source}  |  tag {tag_size * 1000:.0f} mm  |  "
         f"fx {K[0, 0]:.0f} ({intr.hfov_of(K, w):.0f} deg HFOV, {intr_source})"
@@ -171,18 +183,12 @@ def draw_readout(
     cv2.putText(frame, head, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.52,
                 (220, 220, 220), 1, cv2.LINE_AA)
 
-    # A solid strip behind the numbers: a text halo turns to mush over a busy
-    # camera image, and these are the numbers the whole exercise is about.
-    n = max(len(states), 1)
-    strip_h = 20 + 24 * n
-    cv2.rectangle(frame, (0, h - strip_h), (w, h), (0, 0, 0), -1)
-
-    if not states:
-        cv2.putText(frame, "no tags detected", (10, h - 14),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.58, (140, 140, 210), 1, cv2.LINE_AA)
-        return
-
     y = h - strip_h + 28
+    if not states:
+        cv2.putText(frame, "no tags detected", (10, y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.58, (140, 140, 210), 1, cv2.LINE_AA)
+        return frame
+
     for s in states:
         color = color_for(s.tag_id) if s.visible else GHOST_COLOR
         where = "IN " if s.inside else "OUT"
@@ -194,6 +200,7 @@ def draw_readout(
         cv2.putText(frame, line, (10, y), cv2.FONT_HERSHEY_SIMPLEX, 0.56,
                     color if s.inside else OUT_COLOR, 1, cv2.LINE_AA)
         y += 24
+    return frame
 
 
 # --------------------------------------------------------------------------
@@ -423,6 +430,7 @@ def main() -> None:
     trails: dict[int, deque] = defaultdict(lambda: deque(maxlen=TRAIL_LEN))
     tracker = TagTracker(field, sigma_a=args.sigma_a, sigma_alpha_deg=args.sigma_alpha)
     plan = PlanView(field, height=h, mode=mode)
+    readout_rows = 1  # most tag lines shown so far; the bottom band only grows
     fps, last_t = 0.0, time.perf_counter()
 
     print(f"\nfield {field.width:g} x {field.height:g} m, {transform.source}")
@@ -472,7 +480,9 @@ def main() -> None:
         for s in states:
             if s.visible:
                 trails[s.tag_id].append((s.x, s.y))
-        draw_readout(frame, states, transform, K, args.tag_size, intr_source, fps)
+        readout_rows = max(readout_rows, len(states))
+        shown = draw_readout(frame, states, transform, K, args.tag_size, intr_source, fps,
+                             rows=readout_rows)
 
         if args.print_poses:
             for s in states:
@@ -480,7 +490,7 @@ def main() -> None:
                       f"{s.vx:+.3f}\t{s.vy:+.3f}\t{s.speed:.3f}", flush=True)
 
         panel = draw_plan(plan, states, poses, trails, transform, show_trails)
-        composite = np.hstack([frame, panel])
+        composite = side_by_side(shown, panel)
         if composite.shape[1] != args.display_width:
             k = args.display_width / composite.shape[1]
             # INTER_AREA is the right filter for shrinking and a poor one
