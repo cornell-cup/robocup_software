@@ -7,7 +7,7 @@ up.
 
 | File | Made by | What it is |
 | --- | --- | --- |
-| `intrinsics.json` | `s` in `track`, or `calibrate-camera` | The camera matrix: how zoomed-in the lens is, and (from `calibrate-camera`) real lens distortion coefficients. Stores the resolution it was measured at, and is ignored on load if that does not match. |
+| `intrinsics.json` | `s` in `track`, or `calibrate-camera` | The camera matrix: how zoomed-in the lens is, and (from `calibrate-camera`) real lens distortion coefficients. Stores the resolution it was measured at. Loaded as-is at that size, rescaled at another size with the same aspect ratio (e.g. 1280x960 from 640x480), and ignored for a different aspect ratio (4:3 vs 16:9), which needs its own `calibrate-camera` run. |
 | `field_pose.json` | `calibrate-field`, or `track --calibrate-live` | Where the field is, relative to the camera -- an `R`/`t` solved from four reference AprilTags. Both `track` and `track-ball` load it automatically in place of the made-up field. It also records the `field` size it was solved for, which every tracker uses as its `--field` default. An optional `origin: [x, y]` (metres from the first corner, set by `calibrate-field`'s picker or `--origin`) moves `(0,0)` there; delete the key to go back to the corner. |
 | `ball_color.json` | `calibrate-ball` | Named ball profiles: a measured hue/saturation histogram plus each ball's radius. Pick one with `--ball-profile`. |
 
