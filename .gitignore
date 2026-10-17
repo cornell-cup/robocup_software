@@ -1,0 +1,21 @@
+# Repo-wide ignores. robocup/ and robocup_testing/ keep their own .gitignore
+# files for folder-specific rules; these apply everywhere, including the root.
+
+# Python
+__pycache__/
+*.py[oc]
+.venv/
+
+# Tracker run output (track-combined --json-log / --json-out). Run output, not
+# source: a session is ~10 MB per ten minutes. test.jsonl is the one committed
+# sample recording.
+runs/
+*.jsonl
+!robocup_testing/test.jsonl
+*.json.tmp
+state.json
+live_state.json
+
+# OS / editor noise
+.DS_Store
+Thumbs.db

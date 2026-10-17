@@ -114,7 +114,7 @@ python run_pipeline.py --color red
 
 # Mirror the real field from the camera, or replay a recording (see Vision Mirror)
 python run_pipeline.py --vision tcp://localhost:5556
-python run_pipeline.py --vision path/to/session.jsonl
+python run_pipeline.py --vision ../../robocup_testing/test.jsonl
 python run_pipeline.py --vision tcp://localhost:5556 --field 1.93 1.32   # sim field at the real table's size
 ```
 
@@ -201,13 +201,13 @@ python viz_node.py                                     # # connects to sim, rend
 
 ```powershell
 cd F:\Cornell\CornellCupRobotics\robocup_software\robocup\python
-uv run python run_pipeline.py --vision ..\..\robocup_testing\session.jsonl
+uv run python run_pipeline.py --vision ..\..\robocup_testing\test.jsonl
 ```
 
 - Add `--replay-speed 3` to fast-forward. The replay loops at the end.
-- Add `--field 1.93 1.32` to replay at true size (see [D](#d-true-size-field)).
-- `session.jsonl` is about 14 min: tag 4 until ~7.8 min, then tag 0. With auto mapping tag 4 claims robot 0 once it first lands on the field, and tag 0 then takes robot 1. Tag 4 was recorded uncalibrated, so its robot is mostly grey. `--tag-map 0:0,4:1` gives the old fixed layout.
-- Logs from either tracker branch replay the same way.
+- Add `--field 1.93 1.32` to replay at true size (see [D](#d-true-size-field)); `test.jsonl` was recorded on a 1.93 x 1.32 m field.
+- `test.jsonl` is the one committed recording: 5 runs, about 7 min of playback (the gaps between runs are squashed to 1 s). Run 1 (~3 min) has tag 4 and the ball, run 2 (~1 min) the ball only, runs 3-5 (~1 min each) tag 1 with the ball mostly unseen. With auto mapping tag 4 claims robot 0 when it first lands on the field, and tag 1 then takes robot 1; `--tag-map 4:0,1:1` pins that layout.
+- Any `--json-log` file from `track-combined` replays the same way, e.g. your own `..\..\robocup_testing\runs\myrun.jsonl` (see [C](#c-record-a-session)). Run logs are gitignored, so they stay local.
 
 ### B. Live (camera, two terminals)
 

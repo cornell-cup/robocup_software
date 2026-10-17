@@ -1,0 +1,23 @@
+{
+  "include": ["robocup/python", "robocup/decision_making", "robocup_testing"],
+  "exclude": [".venv", "**/__pycache__", "robocup/godot_archive"],
+  "pythonVersion": "3.12",
+  "venvPath": ".",
+  "venv": ".venv",
+
+  "executionEnvironments": [
+    { "root": "robocup", "extraPaths": ["robocup", "robocup/python"] },
+    { "root": "robocup_testing" }
+  ],
+
+  "reportUnknownVariableType": "none",
+  "reportUnknownArgumentType": "none",
+  "reportUnknownMemberType": "none",
+  "reportUnknownParameterType": "none",
+  "reportUnknownLambdaType": "none",
+  "reportMissingTypeStubs": "none",
+
+  "reportAny": "none",
+  "reportExplicitAny": "none",
+  "reportMissingParameterType": "none"
+}

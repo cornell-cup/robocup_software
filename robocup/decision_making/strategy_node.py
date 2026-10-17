@@ -21,9 +21,10 @@ STRATEGY_PORT = 9091
 COMMAND_PORT = 9092
 MANUAL_PORT = 9093
 
+# The one checkpoint committed to git (.gitignore keeps only first_final/final.zip).
 DEFAULT_RL_CHECKPOINT = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
-    "rl", "checkpoints", "first_final", "ppo_kick_1720608_steps.zip",
+    "rl", "checkpoints", "first_final", "final.zip",
 )
 
 from decision_making.geometry import distance, lerp, opp_goal, our_goal  # noqa: E402

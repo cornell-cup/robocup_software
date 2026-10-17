@@ -20,6 +20,8 @@ robocup_software/
 ├── pyproject.toml              # the one uv environment for everything (see Setup)
 ├── uv.lock                     # exact pinned versions, committed
 ├── .python-version             # 3.12
+├── pyrightconfig.json          # editor type checking for the whole repo (VS Code / Pylance)
+├── .gitignore                  # repo-wide: caches, venv, tracker run logs (runs/, *.jsonl)
 ├── robocup/
 │   ├── python/                 # the simulator pipeline
 │   │   ├── run_pipeline.py     # launcher: spawns the four nodes below
@@ -111,7 +113,10 @@ speed installs, keep the cache on the same drive, e.g.
 or set `UV_LINK_MODE=copy` to just hide the warning.
 
 **VS Code / Pyright:** select `.venv\Scripts\python.exe` at the repo root as the
-interpreter. `robocup/pyrightconfig.json` already points there.
+interpreter. The root `pyrightconfig.json` already points there and tells Pylance
+where the sim's script-style imports (`config`, `decision_making.*`) live. Open
+the repo root (`robocup_software`) as the VS Code folder; `robocup/pyrightconfig.json`
+is only used when running `pyright` from inside `robocup/`.
 
 ### Without uv (pip)
 
