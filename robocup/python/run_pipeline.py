@@ -1,0 +1,162 @@
+#!/usr/bin/env python3
+"""
+Pipeline Launcher — starts all nodes as separate subprocesses.
+
+Usage:
+    python run_pipeline.py
+    python run_pipeline.py --no-viz
+    python run_pipeline.py --vision http://localhost:8000/state
+    python run_pipeline.py --vision tcp://localhost:5556 --field 1.93 1.32
+    python run_pipeline.py --vision tcp://localhost:5556 --field ../../robocup_testing/calib/field_pose.json
+"""
+
+from __future__ import annotations
+
+import argparse
+import os
+import signal
+import subprocess
+import sys
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, HERE)
+from config import FIELD_ENV, parse_field  # noqa: E402
+
+DECISION_DIR = os.path.join(os.path.dirname(HERE), "decision_making")
+
+# Ordered start sequence: simulation must bind its sockets before others connect.
+# (name, script, cwd)
+NODES = [
+    ("SimNode", "simulation_node.py", HERE),
+    ("StrategyNode", "strategy_node.py", DECISION_DIR),
+    ("RobotNode", "robot_node.py", HERE),
+    ("VizNode", "viz_node.py", HERE),
+]
+
+processes: list[subprocess.Popen] = []
+
+
+def _launch(
+    name: str, script: str, cwd: str, extra_args: list[str] | None = None
+) -> subprocess.Popen:
+    path = os.path.join(cwd, script)
+    cmd = [sys.executable, path] + (extra_args or [])
+    p = subprocess.Popen(cmd, cwd=cwd)
+    print(f"  [{name}]  PID {p.pid:<6}  {script}")
+    return p
+
+
+def _shutdown(sig=None, frame=None) -> None:
+    print("\n[Launcher] Shutting down all nodes ...")
+    for p in processes:
+        p.terminate()
+    for p in processes:
+        try:
+            p.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            p.kill()
+    print("[Launcher] Done.")
+    sys.exit(0)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="RoboCup Python Pipeline Launcher")
+    _ = parser.add_argument(
+        "--no-viz", action="store_true", help="Skip the Pygame visualization node"
+    )
+    _ = parser.add_argument(
+        "--no-strategy", action="store_true", help="Skip the autonomous strategy node"
+    )
+    _ = parser.add_argument(
+        "--color",
+        choices=["blue", "red"],
+        default="blue",
+        help="Team color for the strategy node",
+    )
+    _ = parser.add_argument(
+        "--vision",
+        default=None,
+        help="Mirror camera tracking into the sim (URL, tcp:// ZMQ, or .jsonl replay)",
+    )
+    _ = parser.add_argument("--tag-map", default=None, help='e.g. "0:0,4:1", default auto')
+    _ = parser.add_argument("--ignore-tags", default=None, help='e.g. "0,1,2,3"')
+    _ = parser.add_argument("--flip-x", action="store_true")
+    _ = parser.add_argument("--flip-y", action="store_true")
+    _ = parser.add_argument("--replay-speed", type=float, default=None)
+    _ = parser.add_argument(
+        "--field",
+        nargs="+",
+        metavar="W H | FILE",
+        default=None,
+        help="True-size sim field in metres, or robocup_testing's calib/field_pose.json. "
+        + "Default 9 x 6 (camera field stretched onto it).",
+    )
+    args = parser.parse_args()
+
+    if args.field:
+        if len(args.field) not in (1, 2):
+            parser.error("--field takes W H or one calibration file")
+        try:
+            fw, fh = parse_field(" ".join(args.field))
+        except ValueError as e:
+            parser.error(str(e))
+        # config.py reads this at import, in every child process.
+        os.environ[FIELD_ENV] = f"{fw} {fh}"
+        print(f"[Launcher] sim field {fw} x {fh} m")
+
+    sim_args: list[str] = []
+    if args.vision:
+        src = args.vision
+        if "://" not in src:
+            src = os.path.abspath(src)  # SimNode runs with cwd=python/
+        sim_args += ["--vision", src]
+    if args.tag_map:
+        sim_args += ["--tag-map", args.tag_map]
+    if args.ignore_tags:
+        sim_args += ["--ignore-tags", args.ignore_tags]
+    if args.flip_x:
+        sim_args.append("--flip-x")
+    if args.flip_y:
+        sim_args.append("--flip-y")
+    if args.replay_speed is not None:
+        sim_args += ["--replay-speed", str(args.replay_speed)]
+
+    skip = set()
+    if args.no_viz:
+        skip.add("VizNode")
+    if args.no_strategy:
+        skip.add("StrategyNode")
+
+    signal.signal(signal.SIGINT, _shutdown)
+    signal.signal(signal.SIGTERM, _shutdown)
+
+    print("[Launcher] Starting RoboCup pipeline ...\n")
+
+    nodes = [(n, s, d) for n, s, d in NODES if n not in skip]
+
+    for name, script, cwd in nodes:
+        extra = None
+        if name == "StrategyNode":
+            extra = ["--mode", "zmq", "--color", args.color]
+        elif name == "SimNode":
+            extra = sim_args
+        p = _launch(name, script, cwd, extra_args=extra)
+        processes.append(p)
+        time.sleep(0.4)  # stagger so PUB sockets bind before SUBs connect
+
+    print(f"\n[Launcher] {len(nodes)} nodes running.  Ctrl+C to stop.\n")
+
+    try:
+        while True:
+            for i, (name, _, _) in enumerate(nodes):
+                ret = processes[i].poll()
+                if ret is not None:
+                    print(f"[Launcher] WARNING: {name} exited with code {ret}")
+            time.sleep(2)
+    except KeyboardInterrupt:
+        _shutdown()
+
+
+if __name__ == "__main__":
+    main()
