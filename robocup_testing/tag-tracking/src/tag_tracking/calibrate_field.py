@@ -498,6 +498,13 @@ def _choose_origin(args, read_bgr, transform, field, K, dist, out):
                        initial=saved_origin(out) if out else None)
 
 
+def _synthetic_height(field: Field) -> float:
+    """Camera height for the synthetic rig: 1.1 m frames the default 1.2 x 0.8
+    field; a bigger --field raises the camera in proportion so the corner tags
+    stay in view."""
+    return 1.1 * max(1.0, field.width / 1.2, field.height / 0.8)
+
+
 def _run_synthetic(args, field: Field, layout: dict[int, tuple[float, float]]):
     from vision_core.intrinsics import from_fov
 
@@ -505,7 +512,7 @@ def _run_synthetic(args, field: Field, layout: dict[int, tuple[float, float]]):
 
     shape = (args.height, args.width)
     K = from_fov(args.width, args.height)
-    truth = SyntheticFieldTransform.floor(field, height=1.1, pitch_deg=40.0)
+    truth = SyntheticFieldTransform.floor(field, height=_synthetic_height(field), pitch_deg=40.0)
     moving_truth = (round(field.width * 0.6, 3), round(field.height * 0.55, 3), 30.0)
     cam = SyntheticFieldCamera(
         layout, truth, tag_size=args.tag_size, shape=shape, K=K,
@@ -533,7 +540,7 @@ def _run_synthetic(args, field: Field, layout: dict[int, tuple[float, float]]):
     )
     moving = next((d for d in dets if d.tag_id == 7), None)
     if moving is not None:
-        pose = tag_field_pose(moving, result.transform, field)
+        pose = tag_field_pose(moving, result.transform, field, K=K)
         print(
             f"moving tag readback: x={pose.x:.3f} y={pose.y:.3f} th={pose.theta_deg:+.1f}  "
             f"(placed at x={moving_truth[0]:.3f} y={moving_truth[1]:.3f} th={moving_truth[2]:+.1f})"
@@ -610,7 +617,7 @@ def _run_synthetic_sequential(args, field: Field, layout: dict[int, tuple[float,
 
     shape = (args.height, args.width)
     K = from_fov(args.width, args.height)
-    truth = SyntheticFieldTransform.floor(field, height=1.1, pitch_deg=40.0)
+    truth = SyntheticFieldTransform.floor(field, height=_synthetic_height(field), pitch_deg=40.0)
     print(f"Synthetic field -- ground truth: {truth.source}")
     print("simulating one tag carried to each corner in turn...\n")
 
@@ -623,11 +630,18 @@ def _run_synthetic_sequential(args, field: Field, layout: dict[int, tuple[float,
         )
         samples: list[np.ndarray] = []
         corner_samples: list[np.ndarray] = []
-        while len(samples) < args.frames_per_corner:
+        for _ in range(args.frames_per_corner * 10):
+            if len(samples) >= args.frames_per_corner:
+                break
             dets = detector.detect(cam.read())
             if len(dets) == 1:
                 samples.append(np.asarray(dets[0].center, np.float64))
                 corner_samples.append(np.asarray(dets[0].corners, np.float64))
+        if len(samples) < args.frames_per_corner:
+            raise RuntimeError(
+                f"synthetic tag {tag_id} at ({cx:g}, {cy:g}) was detected in only "
+                f"{len(samples)}/{args.frames_per_corner} frames -- out of view or too small"
+            )
         avg = np.mean(samples, axis=0)
         averaged[tag_id] = _AveragedDetection(tag_id, avg, np.mean(corner_samples, axis=0))
         print(f"  corner id {tag_id} at ({cx:g}, {cy:g}): "

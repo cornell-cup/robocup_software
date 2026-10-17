@@ -462,7 +462,7 @@ def main() -> None:
                                    camera_params=cam_params, tag_size=args.tag_size)
 
         poses = [
-            tag_field_pose(d, transform, field, args.heading_offset) for d in dets
+            tag_field_pose(d, transform, field, args.heading_offset, K=K) for d in dets
         ]
         states = tracker.update(poses, dt)
 

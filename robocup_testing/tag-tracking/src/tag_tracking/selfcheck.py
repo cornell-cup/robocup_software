@@ -140,9 +140,13 @@ def check_round_trip() -> list[str]:
             if not found:
                 failures.append(f"{name}: no detection for pose {want}")
                 continue
-            got = tag_field_pose(found[0], transform, field)
+            got = tag_field_pose(found[0], transform, field, K=K)
             dx, dy = abs(got.x - want[0]), abs(got.y - want[1])
-            dth = abs((got.theta_deg - want[2] + 180) % 360 - 180)
+            # Both heading paths: corners (what the trackers use, given K) and
+            # pose_R (the fallback without K). Each pins its own sign convention.
+            via_pose_r = tag_field_pose(found[0], transform, field).theta_deg
+            dth = max(abs((th - want[2] + 180) % 360 - 180)
+                      for th in (got.theta_deg, via_pose_r))
             ok = (
                 dx < TOL_XY_M
                 and dy < TOL_XY_M

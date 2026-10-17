@@ -49,11 +49,27 @@ class TagFieldPose:
 TAG_VISUAL_RIGHT = np.array([-1.0, 0.0, 0.0])
 
 
+def _corner_right_on_field(detection, transform: CameraFieldTransform, K: np.ndarray):
+    """The tag's visual-right direction on the field plane, from its corners.
+
+    Edge midpoint of corners 0+3 minus that of corners 1+2: the same direction
+    as pose_R @ TAG_VISUAL_RIGHT, established the same way (empirically, against
+    synthetic tags at known headings); selfcheck.py fails loudly if it ever
+    changes. None if a corner's ray misses the plane.
+    """
+    pts = [transform.pixel_to_field(float(u), float(v), K) for u, v in detection.corners]
+    if any(p is None for p in pts):
+        return None
+    c = np.asarray(pts)[:, :2]
+    return (c[0] + c[3]) / 2.0 - (c[1] + c[2]) / 2.0
+
+
 def tag_field_pose(
     detection,
     transform: CameraFieldTransform,
     field: Field,
     heading_offset_deg: float = 0.0,
+    K: np.ndarray | None = None,
 ) -> TagFieldPose:
     """Convert one pose-estimated AprilTag detection into field coordinates.
 
@@ -65,17 +81,30 @@ def tag_field_pose(
     from in front of the field. `heading_offset_deg` is added to it, for when the
     tag is mounted on a robot that does not face the same way as the tag's right
     edge -- a robot with the tag rotated 90 degrees on its shell wants -90 here.
+
+    Pass `K` (the matrix the detector's pixels are in -- frames are undistorted
+    before detection, so no distortion here) to take the heading from the tag's
+    corners on the field plane instead of from pose_R. A small or distant tag's
+    pose_R often lands on the wrong one of the two planar-pose solutions: the
+    position stays right, but the tag looks tilted and the heading is off by
+    tens of degrees. The corners have no such ambiguity, and projecting them onto
+    the field plane keeps directions exactly even when the tag rides above it,
+    since the tag lies parallel to the field.
     """
     centre_cam = np.asarray(detection.pose_t, dtype=np.float64).reshape(3)
     x, y, z = transform.camera_to_field(centre_cam)[0]
 
     # Heading: take the direction that points right across the upright tag,
     # express it in the field frame, and measure its angle about the field normal.
-    pose_R = np.asarray(detection.pose_R, dtype=np.float64).reshape(3, 3)
-    forward_cam = pose_R @ TAG_VISUAL_RIGHT
-    # dx, dy are the in-plane components of the direction the tag FACES -- not a
-    # velocity. Nothing here tracks motion between frames.
-    dx, dy, _ = transform.direction_to_field(forward_cam)[0]
+    right = _corner_right_on_field(detection, transform, K) if K is not None else None
+    if right is not None:
+        dx, dy = right
+    else:
+        pose_R = np.asarray(detection.pose_R, dtype=np.float64).reshape(3, 3)
+        forward_cam = pose_R @ TAG_VISUAL_RIGHT
+        # dx, dy are the in-plane components of the direction the tag FACES -- not a
+        # velocity. Nothing here tracks motion between frames.
+        dx, dy, _ = transform.direction_to_field(forward_cam)[0]
     theta = float(np.degrees(np.arctan2(dy, dx)) + heading_offset_deg)
     theta = (theta + 180.0) % 360.0 - 180.0  # wrap to (-180, 180]
 
