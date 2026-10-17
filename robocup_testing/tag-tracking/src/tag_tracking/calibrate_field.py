@@ -31,7 +31,7 @@ or press Enter to keep the first corner as before. The click needs the pose --
 that is what turns a pixel into a field point -- which is why it comes after.
 The choice is saved as `origin` next to R/t; every tracker picks it up.
 
-Saves to calib/field_pose.json, at the repo root (vision_core.paths), same as
+Saves to robocup_testing/calib/field_pose.json (vision_core.paths), same as
 calib/intrinsics.json. track.py loads this automatically once it exists, in
 place of the made-up field.
 """
@@ -740,7 +740,7 @@ def main() -> None:
     )
     ap.add_argument(
         "--out", type=str, default=None,
-        help="where to save (default calib/field_pose.json at the repo root; "
+        help="where to save (default robocup_testing/calib/field_pose.json; "
         "--synthetic saves nowhere unless you pass this)",
     )
     args = ap.parse_args()

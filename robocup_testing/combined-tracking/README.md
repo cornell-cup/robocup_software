@@ -125,7 +125,7 @@ in a commit by accident (roughly 10 MB per ten minutes at 30 fps).
 ### A push socket — `--zmq-pub ENDPOINT`
 
 ```powershell
-uv sync --all-packages --extra zmq     # once: pyzmq is an optional extra
+uv sync                               # at the monorepo root; installs pyzmq too
 uv run track-combined --ball-profile test --tag-size 0.080 --no-window --zmq-pub tcp://*:5556
 ```
 
@@ -160,10 +160,8 @@ starts at whatever frame comes next.
 
 pyzmq is an **optional** dependency — nothing else needs it. Without it,
 `--zmq-pub` exits straight away with the install command, before the camera
-is opened. `uv sync --all-packages --extra zmq` installs it into the shared
-`.venv`. A later plain `uv sync` removes it again, because `uv sync` makes the
-venv match exactly what was asked for. For a one-off without syncing, run
-`uv run --with pyzmq track-combined ...`.
+is opened. The monorepo root's `pyproject.toml` asks for `combined-tracking[zmq]`,
+so a plain `uv sync` there already installs it into the shared `.venv`.
 
 ### Headless — `--no-window`
 

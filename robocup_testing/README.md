@@ -31,8 +31,13 @@ And the floor a skill stands on, which is **not** itself a skill:
 
 ## Quick start
 
+These packages share one environment with the simulator: `.venv/` at the
+monorepo root (`robocup_software/`), defined by the root `pyproject.toml` and
+`uv.lock`. This folder has no `pyproject.toml`, lockfile or venv of its own.
+Python 3.12 (3.13 works, 3.14 does not; see [Not using uv?](#not-using-uv)).
+
 ```powershell
-uv sync                        # one lockfile, one .venv, whole workspace
+uv sync                        # once, and after each git pull (from any folder in the repo)
 
 uv run selfcheck               # prove the geometry, no camera needed
 uv run serve-tag               # put a sized AprilTag on your phone
@@ -60,9 +65,24 @@ step — `uv run calibrate-camera` and `uv run calibrate-field`, or
 `uv run track --calibrate-live` to do both in one session. See
 [`tag-tracking`'s README](tag-tracking/#one-time-calibration-making-it-real).
 
-Every command works from the repo root. Each skill also has its own
-`pyproject.toml`, entry points and README, so it still reads — and installs —
-standalone.
+Every `uv run` command works from any folder in the monorepo; all of them run
+in the root `.venv`. Launch from `robocup_testing/` so relative output paths
+(`runs/...`, `session.jsonl`) land here. `calib/` always resolves to
+`robocup_testing/calib/`, whatever the folder. Each skill also has its own
+`pyproject.toml`, entry points and README, so it still reads standalone.
+
+### uv flags
+
+| Command | What it does |
+| --- | --- |
+| `uv sync` | Make the root `.venv` match `uv.lock` exactly: all four skills, pyzmq (for `--zmq-pub`), and the simulator's packages. Removes anything else. |
+| `uv sync --extra rl` | Same, plus the simulator's RL packages (torch etc.). Only needed for `robocup/decision_making/rl/`; if you use it, pass it every time, or a plain `uv sync` removes them. |
+| `uv run <command>` | Run a command (`track`, `calibrate-ball`, ...) in the root `.venv`, syncing first if the lockfile changed. Never removes packages. |
+
+Not needed any more: `uv sync --all-packages --extra zmq`. pyzmq is always
+installed now, `--extra zmq` errors (`Extra zmq is not defined`), and
+`--all-packages` without `--extra rl` uninstalls the RL packages. Full reference:
+[root README, Setup](../README.md#setup).
 
 ## Command reference
 
@@ -126,7 +146,7 @@ you ask; use one, or several at once. Full JSON shape and details in
 | `uv run track-combined --ball-profile NAME --json-out state.json` | One file, **overwritten** every frame — always "the current state" |
 | `uv run track-combined --ball-profile NAME --serve-http 8000` | The same, over `GET http://localhost:8000/state` — works from another machine or language, no filesystem access needed |
 | `uv run track-combined --ball-profile NAME --json-log session.jsonl` | One JSON line **appended** per frame — a full history, not just "right now". `*.jsonl` and the `--json-out` files are gitignored: they are run output, not source |
-| `uv run track-combined --ball-profile NAME --no-window --zmq-pub tcp://*:5556` | Every frame **pushed** on a ZeroMQ PUB socket as it happens, no window drawn — for a simulator mirroring the field live. Needs the optional extra once: `uv sync --all-packages --extra zmq` |
+| `uv run track-combined --ball-profile NAME --no-window --zmq-pub tcp://*:5556` | Every frame **pushed** on a ZeroMQ PUB socket as it happens, no window drawn — for a simulator mirroring the field live. Needs pyzmq, which `uv sync` at the monorepo root installs |
 
 ### Flags that matter
 
@@ -140,7 +160,7 @@ against the wrong physical size until you correct it.
 | `--field W H` | Real field size, in metres. Saved with the calibration, so after `calibrate-field --field W H` every tracker uses it without being told | the saved size, else `1.2 0.8` | `calibrate-field`, `track` (incl. `--calibrate-live`, `--synthetic-camera`), `track-ball`, `track-combined` |
 | `--tag-size` | Real black-square tag size, in metres | `0.080` | `track` (incl. `--calibrate-live`, `--synthetic-camera`) |
 | `--camera N` | Which webcam index to use | `0` | `calibrate-camera`, `calibrate-field`, `track` |
-| `--out PATH` | Where to save the calibration result | `calib/...` at repo root | `calibrate-camera`, `calibrate-field` |
+| `--out PATH` | Where to save the calibration result | `robocup_testing/calib/...` | `calibrate-camera`, `calibrate-field` |
 | `--field-pose PATH` | Field calibration file to load/save | `calib/field_pose.json` | `track` (incl. `--calibrate-live`) |
 | `--layout ID:X,Y ...` | Custom reference-tag positions, overrides the default 4 corners | corners of `--field` | `calibrate-field` |
 | `--sequential` | One tag moved to each corner in turn (camera fixed), instead of 4 tags at once | off | `calibrate-field`, `track --calibrate-live` |
@@ -178,39 +198,46 @@ an existing setup:
 winget install --id=astral-sh.uv        # or: pip install uv
 ```
 
-If you would rather use pip:
+If you would rather use pip, make one venv at the monorepo root, the same place
+uv would, so the simulator can use it too:
 
 ```powershell
+cd robocup_software                     # the monorepo root, not robocup_testing
 py -3.12 -m venv .venv                  # 3.12 or 3.13, not 3.14 — see below
 .venv\Scripts\activate
-pip install -e ./vision-core            # THIS ORDER MATTERS
-pip install -e ./tag-tracking
-pip install -e ./ball-tracking
-pip install -e ./combined-tracking      # needs the two above already installed
+pip install -e robocup_testing/vision-core            # THIS ORDER MATTERS
+pip install -e robocup_testing/tag-tracking
+pip install -e robocup_testing/ball-tracking
+pip install -e "robocup_testing/combined-tracking[zmq]"  # needs the two above; [zmq] adds pyzmq for --zmq-pub
+pip install -r robocup/python/requirements.txt        # optional: the simulator
 ```
+
+`-e` (editable) is required, not just convenient: `calib/` is found relative to
+the installed `vision_core` source, so a non-editable install cannot find it.
 
 1. **Python 3.12 or 3.13 — not 3.14.** `pupil-apriltags` ships prebuilt wheels
    for cp310-cp313 only. On 3.14 pip compiles it from source and the result is
    missing `apriltag.dll`, so the tag tracker dies at import. `requires-python`
    now caps this, so pip refuses up front instead of building something broken.
-   `.python-version` pins 3.12; uv obeys it automatically, pip does not.
+   The monorepo root's `.python-version` pins 3.12; uv obeys it automatically,
+   pip does not.
 2. **Install `vision-core` first.** The skills depend on it through
    `[tool.uv.sources] workspace = true`, which only uv understands. pip goes
    looking on PyPI instead, finds nothing, and stops with
    `No matching distribution found for vision-core`. (A clean failure, at least —
    there is no package of that name to install by accident.)
-3. **`pip install .` at the repo root does nothing useful.** The root is a uv
-   workspace definition, not a package. Install the members directly.
+3. **There is no `pip install .` here.** This folder has no `pyproject.toml`;
+   the uv workspace is defined at the monorepo root. Install the members directly.
 
-`uv.lock` is committed and pins exact versions for uv users; pip users resolve
+The monorepo root's `uv.lock` is committed and pins exact versions for uv users; pip users resolve
 fresh and may get slightly different ones.
 
 ## Adding a skill
 
 1. `mkdir new-skill/src/new_skill`, give it a `pyproject.toml` depending on
    `vision-core = { workspace = true }`.
-2. Add it to `members` **and** `dependencies` in the root `pyproject.toml`, so
-   `uv run <its-command>` works from the root.
+2. Add it to `members` **and** `dependencies` in the monorepo root's
+   `pyproject.toml`, so `uv run <its-command>` works from anywhere in the repo.
 3. Write a README that reads standalone.
 4. Anything camera- or field-shaped you find yourself writing belongs in
    `vision-core`, not in the skill.

@@ -43,7 +43,7 @@ The pipeline runs four independent processes that communicate over ZMQ sockets:
 | [PyZMQ](https://pyzmq.readthedocs.io/) | ≥ 24.0 | Inter-process messaging (PUB/SUB, PUSH/PULL) |
 | [NumPy](https://numpy.org/) | ≥ 1.21 | Linear algebra for controllers |
 
-Python 3.9+ is supported (uses `from __future__ import annotations` for type hints).
+Python **3.12**, the version the whole repo is pinned to (root `.python-version`). The sim code uses `from __future__ import annotations` and was originally written to run on 3.9+, but only 3.12 is set up and tested, and the tracker needs 3.12 or 3.13.
 
 ## Folder Structure
 
@@ -71,21 +71,31 @@ decision_making/
 
 ## Setup
 
-```bash
-# From the python/ directory
-pip install -r requirements.txt
-```
-
-uv works too, as a local choice. Don't `uv init` / `uv add`: the repo has no `pyproject.toml` on purpose, and `.venv/` is gitignored.
+The sim shares one environment with the tracker: `.venv/` at the repo root
+(`robocup_software/`), built by [uv](https://docs.astral.sh/uv/) from the root
+`pyproject.toml`. There is no separate venv in `robocup/`.
 
 ```powershell
-# From the repo root, once
-uv venv .venv --python 3.12
-uv pip install -p .venv -r python/requirements.txt
+# From the repo root (robocup_software), once and after each git pull
+uv sync                 # sim + tracker + pyzmq
+uv sync --extra rl      # instead, if you use decision_making/rl/ (adds gymnasium, stable-baselines3, torch, tensorboard)
 
-# Then, from python/
-uv run --no-project python run_pipeline.py
+# Then, from robocup/python/
+uv run python run_pipeline.py
 ```
+
+| Flag | Meaning |
+| --- | --- |
+| `uv sync` | Make `.venv` match the lockfile exactly. **Removes the RL packages** if they were installed. |
+| `uv sync --extra rl` | Same, plus the RL packages. Pass it every time you sync if you use RL. |
+| `uv run python X.py` | Run a script in the root `.venv` from any folder. Never removes packages. |
+| `uv run --extra rl python X.py` | Same, installing the RL packages first if missing. |
+
+Not needed any more: `uv run --no-project` (the sim used to have no project of
+its own) and `uv venv` / `uv pip install` into `robocup/.venv`. Full flag
+reference: [root README, Setup](../../README.md#setup).
+
+Without uv: `pip install -r requirements.txt` from this folder, in a Python 3.12 venv.
 
 ## Running
 
@@ -172,16 +182,9 @@ python viz_node.py                                     # # connects to sim, rend
 
 ### Before you start (once)
 
-1. **Folders.** Commands below assume both repos sit side by side:
-   `F:\Cornell\CornellCupRobotics\robocup` and `F:\Cornell\CornellCupRobotics\robocup_testing`. Adjust paths if yours differ.
-2. **Sim environment.** See [Setup](#setup). Every sim command runs **from `robocup\python`**. With uv, prefix it with `uv run --no-project python`; with pip, just `python`.
-3. **Tracker environment** (live only). robocup_testing's `main` has everything (`--zmq-pub`, `--no-window`, `--mjpg`); the old `sim-feed` branch isn't needed.
-   ```powershell
-   cd F:\Cornell\CornellCupRobotics\robocup_testing
-   git checkout main
-   git pull
-   uv sync --all-packages --extra zmq   # --extra zmq pulls in pyzmq for --zmq-pub
-   ```
+1. **Folders.** Both halves live in this monorepo: `F:\Cornell\CornellCupRobotics\robocup_software\robocup` (sim) and `F:\Cornell\CornellCupRobotics\robocup_software\robocup_testing` (tracker). Adjust the path if your clone is elsewhere.
+2. **Environment.** One `uv sync` at the repo root covers the sim **and** the tracker, including pyzmq for `--zmq-pub`; see [Setup](#setup). Every sim command runs **from `robocup\python`**. With uv, prefix it with `uv run python`; with pip, just `python`.
+3. **Stay current.** `git pull` in `robocup_software`, then `uv sync` at the repo root (`uv sync --extra rl` if you use RL).
 4. **Calibration** (live only). Without it tag and ball positions are off, and the sim drops sightings that land outside the field.
    ```powershell
    uv run calibrate-camera                      # lens, writes calib/intrinsics.json
@@ -197,8 +200,8 @@ python viz_node.py                                     # # connects to sim, rend
 ### A. Replay a recording (no camera)
 
 ```powershell
-cd F:\Cornell\CornellCupRobotics\robocup\python
-uv run --no-project python run_pipeline.py --vision ..\..\robocup_testing\session.jsonl
+cd F:\Cornell\CornellCupRobotics\robocup_software\robocup\python
+uv run python run_pipeline.py --vision ..\..\robocup_testing\session.jsonl
 ```
 
 - Add `--replay-speed 3` to fast-forward. The replay loops at the end.
@@ -211,7 +214,7 @@ uv run --no-project python run_pipeline.py --vision ..\..\robocup_testing\sessio
 **Terminal 1, tracker:**
 
 ```powershell
-cd F:\Cornell\CornellCupRobotics\robocup_testing
+cd F:\Cornell\CornellCupRobotics\robocup_software\robocup_testing
 uv run track-combined --ball-profile mine --tag-size 0.080 --mjpg --zmq-pub "tcp://*:5556"
 ```
 
@@ -220,8 +223,8 @@ uv run track-combined --ball-profile mine --tag-size 0.080 --mjpg --zmq-pub "tcp
 **Terminal 2, sim:**
 
 ```powershell
-cd F:\Cornell\CornellCupRobotics\robocup\python
-uv run --no-project python run_pipeline.py --vision tcp://localhost:5556 --ignore-tags 0,1,2,3
+cd F:\Cornell\CornellCupRobotics\robocup_software\robocup\python
+uv run python run_pipeline.py --vision tcp://localhost:5556 --ignore-tags 0,1,2,3
 ```
 
 Each tag the camera sees on the field takes the lowest free robot (robot 0 first) and keeps it for the session; the terminal prints `tag 9 -> robot 0` and the sim window labels the robot `T9`. `--ignore-tags 0,1,2,3` keeps the field-calibration corner tags (ids 0-3 by default) from becoming robots; drop it if they're off the table, or if a robot wears one of those ids. To pin tags to robots instead, pass `--tag-map 9:0,12:1`. Start order doesn't matter; the sim reconnects if the tracker starts later.
@@ -243,7 +246,7 @@ uv run track-combined --ball-profile mine --tag-size 0.080 --mjpg --zmq-pub "tcp
 One JSON line per frame, appended (a second launch adds a new run to the same file). Replay it with A:
 
 ```powershell
-uv run --no-project python run_pipeline.py --vision ..\..\robocup_testing\runs\myrun.jsonl
+uv run python run_pipeline.py --vision ..\..\robocup_testing\runs\myrun.jsonl
 ```
 
 ### D. True-size field
@@ -251,9 +254,9 @@ uv run --no-project python run_pipeline.py --vision ..\..\robocup_testing\runs\m
 By default the sim field is 9 x 6 m and the real table is stretched onto it, so a 1.93 m table plays 4.7x too fast. `--field` makes the sim field the real size instead: camera metres map 1:1 and speeds are real.
 
 ```powershell
-cd F:\Cornell\CornellCupRobotics\robocup\python
-uv run --no-project python run_pipeline.py --vision tcp://localhost:5556 --field ..\..\robocup_testing\calib\field_pose.json
-uv run --no-project python run_pipeline.py --vision ..\..\robocup_testing\test.jsonl --field 1.93 1.32
+cd F:\Cornell\CornellCupRobotics\robocup_software\robocup\python
+uv run python run_pipeline.py --vision tcp://localhost:5556 --field ..\..\robocup_testing\calib\field_pose.json
+uv run python run_pipeline.py --vision ..\..\robocup_testing\test.jsonl --field 1.93 1.32
 ```
 
 - `--field W H` in metres, or the tracker's `calib/field_pose.json` (reads its saved `field` size). Use the same size the tracker was calibrated with; the sim warns if the tracker's `field` differs by more than 5 mm.
@@ -295,8 +298,11 @@ Tracker (`track-combined`):
 |---------|-----|
 | `can't open file ...\robocup\run_pipeline.py` | Run from `robocup\python`, or call `python\run_pipeline.py`. |
 | PowerShell: `The '<' operator is reserved` | A placeholder was pasted literally. Use a real value, e.g. `--ball-profile mine`. |
-| Unknown ball profile | Tracker is on an old branch: `git checkout main` and `git pull`, or run `calibrate-ball`. |
-| `--zmq-pub` unrecognized, or "needs pyzmq" | Tracker is out of date (`git checkout main`, `git pull`), or run `uv sync --all-packages --extra zmq`. |
+| Unknown ball profile | Name not in `robocup_testing/calib/ball_color.json`: `git pull`, or create it with `uv run calibrate-ball --profile NAME`. |
+| `--zmq-pub` unrecognized, or "needs pyzmq" | Out of date, or launched in a different venv: `git pull`, `uv sync` at the repo root, and start it with `uv run`. |
+| `error: Extra zmq is not defined` | Old command. Plain `uv sync` at the repo root already installs pyzmq. |
+| `No module named 'torch'` (or `gymnasium`, `stable_baselines3`) | RL extra missing, or a plain `uv sync` removed it: `uv sync --extra rl`. |
+| A `.venv` folder inside `robocup/` or `robocup_testing/` | Leftover from the old per-folder setup. Delete it; only the root `.venv` is used. |
 | Strip says `DOWN` | Tracker not running, or `--vision` endpoint/port doesn't match `--zmq-pub`. |
 | `Address in use` | Another pipeline or tracker is still running. Close it (check Task Manager for stray `python.exe`). |
 | Robot doesn't follow the tag | Check the terminal for `tag N -> robot R` (auto) or `tag N seen but not in --tag-map`. No line at all means the tag never landed on the field: recalibrate. A robot parked in a corner is a corner reference tag: add `--ignore-tags 0,1,2,3`. |

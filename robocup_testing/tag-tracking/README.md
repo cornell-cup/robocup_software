@@ -9,8 +9,9 @@ located by four reference AprilTags. The camera-to-field transform is isolated i
 one file so that swap costs one subclass and changes nothing downstream.
 
 **Skill 1** of this repo. The geometry it stands on lives in
-[`vision-core`](../vision-core/), ready to be shared with the skills that follow;
-everything below runs from the repo root.
+[`vision-core`](../vision-core/), ready to be shared with the skills that follow.
+Everything below runs with `uv run` from `robocup_testing/`, in the monorepo's
+root `.venv`: see [Quick start](../README.md#quick-start).
 
 Making that real (measuring the camera and the field instead of inventing them)
 is a one-time calibration step — see [One-time calibration](#one-time-calibration-making-it-real)
@@ -166,7 +167,7 @@ Three upgrades, in order of effort:
 1. **Tell it the FOV**: `uv run track --hfov 70` if you know your webcam's spec.
 2. **One-parameter fix, which is most of the benefit.** Hold the phone at a
    tape-measured distance, watch the reported depth, and press `[` / `]` until it
-   matches. Press `s` to save to `calib/intrinsics.json` **at the repo root**,
+   matches. Press `s` to save to `robocup_testing/calib/intrinsics.json`,
    which is loaded automatically next run — and shared with the ball tracker,
    since it describes the camera rather than this skill. This directly calibrates `fx` — the parameter that
    actually matters — usually to within a couple of percent.
@@ -190,7 +191,7 @@ corner reference tags live. That is exactly what `calibrate-camera` and
 ## One-time calibration: making it real
 
 Two independent, one-time steps. Each is its own command, each saves a file
-at the repo root's `calib/` (shared with every skill, via `vision_core.paths`)
+in `robocup_testing/calib/` (shared with every skill, via `vision_core.paths`)
 that `track` picks up automatically from then on. Run neither and nothing
 changes — you get the made-up field exactly as above.
 

@@ -266,7 +266,7 @@ def main() -> None:
                     help="filter process noise for turning, deg/s^2")
     ap.add_argument("--field-pose", type=str, default=None,
                     help="field pose file to load, or to save to with --calibrate-live "
-                         "(default calib/field_pose.json at the repo root -- see calibrate-field)")
+                         "(default robocup_testing/calib/field_pose.json -- see calibrate-field)")
     ap.add_argument("--synthetic-field", action="store_true",
                     help="use the made-up field even if a calibrated one is saved")
     ap.add_argument("--corner-origin", action="store_true",

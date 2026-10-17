@@ -290,7 +290,7 @@ FIELD_POSE_NAME = "field_pose.json"
 
 
 def field_pose_path() -> Path:
-    """calib/field_pose.json at the repo root: where calibrate-field saves the
+    """robocup_testing/calib/field_pose.json: where calibrate-field saves the
     measured pose and where every skill's tracker looks for it."""
     from .paths import calib_path
 

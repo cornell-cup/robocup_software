@@ -6,6 +6,15 @@ resolution-markers = [
     "sys_platform == 'emscripten'",
 ]
 
+[manifest]
+members = [
+    "ball-tracking",
+    "combined-tracking",
+    "robocup-software",
+    "tag-tracking",
+    "vision-core",
+]
+
 [[package]]
 name = "absl-py"
 version = "2.5.1"

@@ -17,6 +17,9 @@ lists, calibration walkthroughs and troubleshooting.
 
 ```
 robocup_software/
+├── pyproject.toml              # the one uv environment for everything (see Setup)
+├── uv.lock                     # exact pinned versions, committed
+├── .python-version             # 3.12
 ├── robocup/
 │   ├── python/                 # the simulator pipeline
 │   │   ├── run_pipeline.py     # launcher: spawns the four nodes below
@@ -32,7 +35,7 @@ robocup_software/
 │   │   ├── skills/             # kick, dribble, rl_kick (plays/, tactics/, BT/ are stubs)
 │   │   └── rl/                 # PPO kick skill: env, reward, train, eval, checkpoints/
 │   └── godot_archive/          # original Godot version of the sim, reference only
-└── robocup_testing/            # uv workspace
+└── robocup_testing/            # vision packages (members of the root uv workspace)
     ├── vision-core/            # field geometry, camera<->field transform, Kalman filter
     ├── tag-tracking/           # AprilTag tracking + camera/field calibration
     ├── ball-tracking/          # color-based ball tracking + ball color calibration
@@ -63,46 +66,84 @@ robocup_software/
 
 ## Setup
 
-The two projects keep separate environments.
+The whole repo uses **one environment**: `.venv/` at the repo root, set up by
+[uv](https://docs.astral.sh/uv/) from the root `pyproject.toml` and `uv.lock`.
+It has the simulator, the four tracking packages, and pyzmq for linking them.
+Python is 3.12 (pinned by `.python-version`; 3.13 also works, 3.14 does not
+because `pupil-apriltags` has no 3.14 wheels). uv downloads it if you don't
+have it.
 
-**Simulator** (Python 3.9+; from `robocup/python/`):
+```powershell
+winget install --id=astral-sh.uv   # once, if you don't have uv (or: pip install uv)
 
-```bash
-pip install -r requirements.txt     # RL packages (gymnasium, stable-baselines3, torch) are listed there too
+cd robocup_software
+uv sync                            # create/update .venv
+uv sync --extra rl                 # instead, if you train or evaluate the RL kick skill
 ```
 
-With uv instead: `uv venv .venv --python 3.12` and `uv pip install -p .venv -r requirements.txt`,
-then prefix commands with `uv run --no-project`. Don't `uv init` here; there is
-no `pyproject.toml` on purpose.
+Then run everything with `uv run ...`, from **any folder** in the repo. There is
+no venv to activate, and no second venv inside `robocup/` or `robocup_testing/`.
 
-**Tracker** (Python 3.12 or 3.13, not 3.14; from `robocup_testing/`):
+### uv commands and flags
 
-```bash
-uv sync --all-packages --extra zmq  # --extra zmq only needed for --zmq-pub
-```
+| Command | What it does | When |
+| --- | --- | --- |
+| `uv sync` | Makes `.venv` match `uv.lock` **exactly**: sim packages + tracking packages + pyzmq. Removes anything else, including the RL packages. | First setup, and after every `git pull` |
+| `uv sync --extra rl` | Same, plus the RL extra: `gymnasium`, `stable-baselines3`, `torch`, `tensorboard` (large download). | Instead of plain `uv sync`, if you use `decision_making/rl/`. Pass it **every** time you sync, or they get removed. |
+| `uv sync --all-extras` | Same as `--extra rl` today (it is the only extra). | Same |
+| `uv sync --locked` | Fails instead of updating `uv.lock` if `pyproject.toml` changed without re-locking. | CI, or to check the lockfile is current |
+| `uv run <command>` | Runs a command in `.venv`, syncing it first if `uv.lock` changed. Never removes packages, so it keeps the RL extra. | Every command: `uv run track`, `uv run python run_pipeline.py` |
+| `uv run --extra rl <command>` | Runs with the RL extra installed (adds it if missing). | RL scripts on a venv synced without `--extra rl` |
+| `uv add <pkg>` | Adds a dependency to the root `pyproject.toml`, re-locks, installs. | New sim dependency (also add it to `robocup/python/requirements.txt` for pip users) |
+| `uv add --optional rl <pkg>` | Same, into the RL extra. | New RL dependency |
+| `uv lock` | Re-resolves `uv.lock` after a hand edit of `pyproject.toml`. | After editing `pyproject.toml` |
 
-pip works too, but the install order matters; see
-[`robocup_testing/README.md`](robocup_testing/README.md#not-using-uv).
+**Old flags you no longer need.** Earlier docs said `uv sync --all-packages --extra zmq`
+(tracker) and `uv run --no-project` (sim). Neither is needed now:
+pyzmq is always installed, and the root project already includes every package.
+`uv sync --extra zmq` now **errors** (`Extra zmq is not defined`), and
+`--all-packages` without `--extra rl` uninstalls the RL packages.
+
+**`Failed to hardlink files` warning.** Harmless: uv's cache (on `C:`) and the
+repo are on different drives, so uv copies instead of linking. To silence it and
+speed installs, keep the cache on the same drive, e.g.
+`[Environment]::SetEnvironmentVariable("UV_CACHE_DIR", "F:\.uv-cache", "User")`,
+or set `UV_LINK_MODE=copy` to just hide the warning.
+
+**VS Code / Pyright:** select `.venv\Scripts\python.exe` at the repo root as the
+interpreter. `robocup/pyrightconfig.json` already points there.
+
+### Without uv (pip)
+
+Possible, but you manage the interpreter and install order yourself:
+
+- **Simulator:** `pip install -r robocup/python/requirements.txt` (includes the RL packages). Use Python 3.12. The sim code avoids newer syntax and was originally written for 3.9+, but the repo is only set up and tested on 3.12.
+- **Tracker:** Python 3.12 or 3.13, and the packages must be installed in order; see
+  [`robocup_testing/README.md`](robocup_testing/README.md#not-using-uv).
+
+Use one venv for both if you want the tracker and sim to talk to each other.
 
 ## Command reference
 
-Run simulator commands from `robocup/python/` and tracker commands from
-`robocup_testing/`.
+Run simulator commands from `robocup/python/` (they use relative paths) and
+tracker commands from `robocup_testing/` (so `runs/...` logs land there). Both
+use the same root `.venv`. Commands below are written for uv; with an activated
+pip venv, drop the `uv run`.
 
 ### Simulator
 
 | Command | What it does |
 | --- | --- |
-| `python run_pipeline.py` | Full game: sim + strategy + robot controller + viewer |
-| `python run_pipeline.py --no-viz` | Headless (CI / SSH) |
-| `python run_pipeline.py --color red` | Strategy controls the red team |
-| `python run_pipeline.py --vision ../../robocup_testing/test.jsonl` | Replay a recorded tracking session into the sim |
-| `python run_pipeline.py --vision tcp://localhost:5556 --ignore-tags 0,1,2,3` | Mirror the live camera into the sim |
-| `python run_pipeline.py --vision tcp://localhost:5556 --field ../../robocup_testing/calib/field_pose.json` | Live, with the sim field at the real table's size |
-| `python simulation_node.py` | Physics node alone |
-| `python ../decision_making/strategy_node.py` | Strategy node alone |
-| `python robot_node.py` | Controller node alone |
-| `python viz_node.py` | Viewer alone |
+| `uv run python run_pipeline.py` | Full game: sim + strategy + robot controller + viewer |
+| `uv run python run_pipeline.py --no-viz` | Headless (CI / SSH) |
+| `uv run python run_pipeline.py --color red` | Strategy controls the red team |
+| `uv run python run_pipeline.py --vision ../../robocup_testing/test.jsonl` | Replay a recorded tracking session into the sim |
+| `uv run python run_pipeline.py --vision tcp://localhost:5556 --ignore-tags 0,1,2,3` | Mirror the live camera into the sim |
+| `uv run python run_pipeline.py --vision tcp://localhost:5556 --field ../../robocup_testing/calib/field_pose.json` | Live, with the sim field at the real table's size |
+| `uv run python simulation_node.py` | Physics node alone |
+| `uv run python ../decision_making/strategy_node.py` | Strategy node alone |
+| `uv run python robot_node.py` | Controller node alone |
+| `uv run python viz_node.py` | Viewer alone |
 
 **`run_pipeline.py` flags** (the vision flags are passed through to `simulation_node.py`):
 
@@ -144,15 +185,16 @@ in the environment (`run_pipeline.py` does this for you).
 
 ### RL kick skill
 
-Run from `robocup/`. A trained policy is committed at
+Run from `robocup/`. Needs the RL extra: `uv sync --extra rl` once, or the
+`--extra rl` in each command below adds it. A trained policy is committed at
 `decision_making/rl/checkpoints/first_final/final.zip`.
 
 | Command | What it does |
 | --- | --- |
-| `python decision_making/rl/env.py --check` | Sanity-check the Gymnasium env (`--episodes N`, default 5) |
-| `python decision_making/rl/train.py --check-only` | 10k-step smoke test, 1 env |
-| `python decision_making/rl/train.py --timesteps 500000` | Full PPO training run |
-| `python decision_making/rl/eval.py --checkpoint PATH` | Evaluate a checkpoint |
+| `uv run --extra rl python decision_making/rl/env.py --check` | Sanity-check the Gymnasium env (`--episodes N`, default 5) |
+| `uv run --extra rl python decision_making/rl/train.py --check-only` | 10k-step smoke test, 1 env |
+| `uv run --extra rl python decision_making/rl/train.py --timesteps 500000` | Full PPO training run |
+| `uv run --extra rl python decision_making/rl/eval.py --checkpoint PATH` | Evaluate a checkpoint |
 
 | Flag | Command | Meaning | Default |
 | --- | --- | --- | --- |
@@ -210,14 +252,14 @@ Full list: [`robocup_testing/README.md`](robocup_testing/README.md#flags-that-ma
 
 ```bash
 cd robocup/python
-python run_pipeline.py
+uv run python run_pipeline.py
 ```
 
 **Replay a recording, no camera:**
 
 ```bash
 cd robocup/python
-python run_pipeline.py --vision ../../robocup_testing/test.jsonl --field 1.93 1.32
+uv run python run_pipeline.py --vision ../../robocup_testing/test.jsonl --field 1.93 1.32
 ```
 
 **Live real robot vs. sim robots** (two terminals):
@@ -229,7 +271,7 @@ uv run track-combined --ball-profile mine --tag-size 0.080 --mjpg --zmq-pub "tcp
 
 # 2. sim
 cd robocup/python
-python run_pipeline.py --vision tcp://localhost:5556 --ignore-tags 0,1,2,3
+uv run python run_pipeline.py --vision tcp://localhost:5556 --ignore-tags 0,1,2,3
 ```
 
 Each tag seen on the field claims the lowest free robot (the terminal prints

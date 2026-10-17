@@ -376,8 +376,8 @@ def import_zmq():
         import zmq
     except ImportError:
         raise SystemExit(
-            "--zmq-pub needs pyzmq, which is an optional extra. Install it with\n"
-            "  uv sync --all-packages --extra zmq\n"
+            "--zmq-pub needs pyzmq. Install it with\n"
+            "  uv sync   (at the monorepo root, robocup_software)\n"
             "or run once with it:  uv run --with pyzmq track-combined ..."
         ) from None
     return zmq
@@ -610,8 +610,8 @@ def main() -> None:
     ap.add_argument("--hfov", type=float, default=None,
                     help="assumed horizontal FOV in degrees, if not calibrated")
     ap.add_argument("--field-pose", type=str, default=None,
-                    help="measured field pose to load (default calib/field_pose.json "
-                         "at the repo root, written by calibrate-field)")
+                    help="measured field pose to load (default robocup_testing/calib/field_pose.json, "
+                         "written by calibrate-field)")
     ap.add_argument("--corner-origin", action="store_true",
                     help="ignore any custom origin saved by calibrate-field and report "
                          "positions from the first field corner, as before")

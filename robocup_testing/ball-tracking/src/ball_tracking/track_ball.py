@@ -263,8 +263,8 @@ def main() -> None:
     ap.add_argument("--hfov", type=float, default=None,
                     help="assumed horizontal FOV in degrees, if not calibrated")
     ap.add_argument("--field-pose", type=str, default=None,
-                    help="measured field pose to load (default calib/field_pose.json "
-                         "at the repo root, written by calibrate-field in tag-tracking)")
+                    help="measured field pose to load (default robocup_testing/calib/field_pose.json, "
+                         "written by calibrate-field in tag-tracking)")
     ap.add_argument("--corner-origin", action="store_true",
                     help="ignore any custom origin saved by calibrate-field and report "
                          "positions from the first field corner, as before")

@@ -27,10 +27,6 @@ ENV/
 Thumbs.db
 
 # NOT ignored, on purpose:
-#   uv.lock                 a lockfile exists to be shared; pip users just
-#                           ignore the file, it costs them nothing
-#   .python-version         pins 3.12 -- and matters MORE for pip users, who do
-#                           not get the interpreter picked for them
 #   calib/intrinsics.json   shared: the team is on one rig. If you end up on
 #                           different webcams, ignore it -- the loader only
 #                           rejects a mismatched RESOLUTION, so two cameras both

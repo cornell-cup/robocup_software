@@ -10,7 +10,8 @@ dependencies = [
     "pygame>=2.0",
     "pyzmq>=24.0",
     "numpy>=1.21",
-    # robocup_testing/ skills, editable, so their CLI entry points land on PATH
+    # robocup_testing/ skills, so their CLI entry points (track, selfcheck, ...)
+    # work via `uv run` from anywhere in the repo
     "vision-core",
     "tag-tracking",
     "ball-tracking",
@@ -30,10 +31,17 @@ rl = [
 # Nothing to build or import here; this file only defines the environment.
 package = false
 
-# Path deps rather than a workspace: robocup_testing/ is already its own uv
-# workspace (and a git subtree), and uv does not nest workspaces.
+# The one uv workspace for the repo: one uv.lock, one .venv, here at the root.
+[tool.uv.workspace]
+members = [
+    "robocup_testing/vision-core",
+    "robocup_testing/tag-tracking",
+    "robocup_testing/ball-tracking",
+    "robocup_testing/combined-tracking",
+]
+
 [tool.uv.sources]
-vision-core = { path = "robocup_testing/vision-core", editable = true }
-tag-tracking = { path = "robocup_testing/tag-tracking", editable = true }
-ball-tracking = { path = "robocup_testing/ball-tracking", editable = true }
-combined-tracking = { path = "robocup_testing/combined-tracking", editable = true }
+vision-core = { workspace = true }
+tag-tracking = { workspace = true }
+ball-tracking = { workspace = true }
+combined-tracking = { workspace = true }

@@ -1,7 +1,7 @@
 # calib
 
 Calibration describing the **camera**, not any one skill. Shared by every skill
-and resolved from the repo root by `vision_core.paths.repo_root()`, so it does
+and resolved from the `robocup_testing` folder by `vision_core.paths.repo_root()`, so it does
 not matter which folder you launch from. Created on first write — nothing to set
 up.
 

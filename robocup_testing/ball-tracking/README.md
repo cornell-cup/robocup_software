@@ -4,7 +4,9 @@ Track a colored ball and report where it is, and **where it is going**, in field
 coordinates — on the same field the [tag tracker](../tag-tracking/) uses.
 
 **Skill 2.** The field geometry it stands on lives in
-[`vision-core`](../vision-core/); everything below runs from the repo root.
+[`vision-core`](../vision-core/). Everything below runs with `uv run` from
+`robocup_testing/` (any folder works; that one keeps output paths local), in the
+monorepo's root `.venv`: see [Quick start](../README.md#quick-start).
 
 ## A ball is not a tag
 
@@ -291,7 +293,7 @@ within seconds.
 | Picture is dark, or green, in every app | A run crashed with the camera locked, and the driver kept the manual exposure. `uv run unlock-camera`, or just start either tool — `open_camera` puts it back on auto first. |
 | `camera lock:` says `REVERTED` | That half of the lock damaged the picture (manual exposure couldn't reach auto's brightness, or manual WB tinted it green), so it was left on auto. Tracking still works; the hue may drift a little if the lighting changes. |
 | Mask fine at first, then drifts over minutes | The camera is on auto (`--no-lock`, or the lock `REVERTED`) and re-exposing as things move through frame. Fix the lock, or widen the spread to absorb it. |
-| `calibrate-ball`/`track-ball` not found | `ball-tracking` isn't in the workspace. Check the root `pyproject.toml`, then `uv sync`. |
+| `calibrate-ball`/`track-ball` not found | Venv not synced, or a stray venv in use: run `uv sync` at the monorepo root and launch with `uv run`. `ball-tracking` must be listed in the root `pyproject.toml` (members and dependencies). |
 
 ## Layout
 

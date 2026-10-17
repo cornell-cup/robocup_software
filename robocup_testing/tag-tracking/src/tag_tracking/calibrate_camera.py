@@ -4,7 +4,7 @@ lens distortion, via a ChArUco board.
     uv run calibrate-camera                  # live webcam, wave a board around
     uv run calibrate-camera --synthetic      # self-test against a digital camera, no hardware
 
-Saves to calib/intrinsics.json at the repo root -- the actual calibration math
+Saves to robocup_testing/calib/intrinsics.json -- the actual calibration math
 (vision_core.charuco) lives in vision-core, since it is camera-only and has
 nothing to do with AprilTags; this is just the CLI wrapper: argparse, the live
 capture window, and wiring the result into vision_core.intrinsics.save() so
@@ -207,7 +207,7 @@ def main() -> None:
     ap.add_argument("--marker-mm", type=float, default=26.0)
     ap.add_argument(
         "--out", type=str, default=None,
-        help="where to save (default calib/intrinsics.json at the repo root; "
+        help="where to save (default robocup_testing/calib/intrinsics.json; "
         "--synthetic saves nowhere unless you pass this)",
     )
     ap.add_argument(

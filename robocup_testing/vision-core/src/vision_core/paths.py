@@ -14,19 +14,21 @@ from __future__ import annotations
 
 from pathlib import Path
 
-#: Only the workspace root has the lockfile; members share it.
-_MARKER = "uv.lock"
-
 
 def repo_root() -> Path:
-    """The workspace root: the directory containing uv.lock and calib/."""
-    for d in Path(__file__).resolve().parents:
-        if (d / _MARKER).exists():
-            return d
-    raise RuntimeError(
-        f"no {_MARKER} above {__file__}; vision_core is not installed from the "
-        f"workspace source tree. Run 'uv sync' from the repo root."
-    )
+    """The robocup_testing folder: the one holding vision-core/ and calib/.
+
+    Fixed by layout, not found by a marker file: this file lives at
+    <root>/vision-core/src/vision_core/paths.py. (It used to search upward for
+    uv.lock, but the lockfile now sits one level higher, at the monorepo root.)
+    """
+    root = Path(__file__).resolve().parents[3]
+    if not (root / "vision-core").is_dir():
+        raise RuntimeError(
+            f"{__file__} is not inside the robocup_testing source tree; "
+            f"vision_core must be installed editable. Run 'uv sync' from the repo root."
+        )
+    return root
 
 
 def calib_dir() -> Path:
