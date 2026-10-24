@@ -60,7 +60,7 @@ from .calibrate_field import (
     solve_sequential,
 )
 from .filter import SPEED_EPS, TagFieldState, TagTracker
-from .pose import TagFieldPose, tag_field_pose
+from .pose import TagFieldPose, auto_tag_decimate, tag_field_pose
 
 TRAIL_LEN = 90
 GHOST_COLOR = (120, 120, 120)  # coasting: not actually seen this frame
@@ -259,6 +259,11 @@ def main() -> None:
                     help="assumed horizontal FOV in degrees, if not calibrated")
     ap.add_argument("--heading-offset", type=float, default=0.0,
                     help="degrees added to theta, if the tag is not mounted upright")
+    ap.add_argument("--tag-decimate", type=float, default=None,
+                    help="detect tag outlines on an image this many times smaller (corners are "
+                         "still refined at full resolution). Default: 2 at 1280 px wide and "
+                         "up (~4x faster, same accuracy), 1 below that, where detection is "
+                         "already fast and every pixel on a small tag counts")
     ap.add_argument("--tag-height", type=float, default=0.0,
                     help="metres the tag sits above the field (0 = lying on it; a robot's "
                          "shell height for a tag on top of a robot)")
@@ -269,7 +274,7 @@ def main() -> None:
     ap.add_argument("--print-poses", action="store_true",
                     help="also stream (id, x, y, theta, vx, vy, speed) to stdout, "
                          "one line per tracked tag per frame")
-    ap.add_argument("--sigma-a", type=float, default=1.0,
+    ap.add_argument("--sigma-a", type=float, default=8.0,
                     help="filter process noise: how hard a robot may accelerate, "
                          "m/s^2. Raise it if the track lags behind a fast robot")
     ap.add_argument("--sigma-alpha", type=float, default=180.0,
@@ -427,8 +432,10 @@ def main() -> None:
         # On screen too, so a custom zero is never a surprise.
         transform.source += f", origin ({transform.origin[0]:g}, {transform.origin[1]:g})"
 
-    detector = pa.Detector(families="tag36h11", nthreads=4, quad_decimate=1.0,
-                           decode_sharpening=0.25)
+    decimate = args.tag_decimate or auto_tag_decimate(w)
+    detector = pa.Detector(families="tag36h11", nthreads=os.cpu_count() or 4,
+                           quad_decimate=decimate, decode_sharpening=0.25)
+    print(f"tag detection: decimate {decimate:g}, {os.cpu_count() or 4} threads")
 
     show_grid, show_trails = True, True
     trails: dict[int, deque] = defaultdict(lambda: deque(maxlen=TRAIL_LEN))

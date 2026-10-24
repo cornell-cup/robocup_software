@@ -32,6 +32,13 @@ from .pose import TagFieldPose
 #: Below this speed the direction of travel is noise, not a direction.
 SPEED_EPS = 0.05
 
+#: Consecutive gated-out measurements before the track restarts on what is seen.
+#: A tag moved harder than sigma_a allows is gated out; the prediction then drifts
+#: further from it, so every later frame is gated too, and the track ran metres
+#: off for its whole max_coast_s before snapping back. Three frames (~0.1 s at
+#: 30 fps) still rides out a single misread.
+RELOCK_AFTER = 3
+
 
 @dataclass(frozen=True)
 class TagFieldState:
@@ -75,6 +82,7 @@ class TagFilter:
         self.sigma = np.array([sigma_a, sigma_a, sigma_alpha], np.float64)
         self.max_coast_s = float(max_coast_s)
         self.age = 0.0
+        self.rejects = 0  # current run of gated-out measurements
         self.off_plane_m = float(pose.off_plane_m)
 
     def predict(self, dt: float) -> None:
@@ -89,6 +97,7 @@ class TagFilter:
         R = np.diag([sigma_xy**2, sigma_xy**2, sigma_theta**2])
         z = [pose.x, pose.y, np.radians(pose.theta_deg)]
         ok = self.kf.update(z, H, R)
+        self.rejects = 0 if ok else self.rejects + 1
         if ok:
             self.age = 0.0
             self.off_plane_m = float(pose.off_plane_m)
@@ -125,7 +134,7 @@ class TagTracker:
     def __init__(
         self,
         field: Field,
-        sigma_a: float = 1.0,
+        sigma_a: float = 8.0,
         sigma_alpha_deg: float = 180.0,
         sigma_xy: float = 0.01,
         sigma_theta_deg: float = 2.0,
@@ -162,10 +171,11 @@ class TagTracker:
                 seen[pose.tag_id] = True
                 continue
             ok = f.update(pose, self.sigma_xy, self.sigma_theta)
-            if not ok and f.lost():
-                # Gated out for longer than a tag could plausibly be hidden:
-                # the track is stale (the robot was picked up and moved), so
-                # restart on what we see rather than coast forever.
+            if not ok and (f.lost() or f.rejects >= RELOCK_AFTER):
+                # Gated out for longer than a tag could plausibly be hidden, or
+                # several frames running: the track is stale (the robot was
+                # moved harder than the filter expects, or picked up), so
+                # restart on what we see rather than coast away from it.
                 self.filters[pose.tag_id] = self._new(pose)
                 ok = True
             seen[pose.tag_id] = ok

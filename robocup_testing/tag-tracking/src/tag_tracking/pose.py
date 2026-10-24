@@ -49,6 +49,20 @@ class TagFieldPose:
 TAG_VISUAL_RIGHT = np.array([-1.0, 0.0, 0.0])
 
 
+#: Frame width from which tag outlines are found on a half-size image.
+DECIMATE_FROM_WIDTH = 1200
+
+
+def auto_tag_decimate(frame_width: int) -> float:
+    """pupil_apriltags quad_decimate for a frame this wide. Halving a 1280-wide
+    frame is ~4x faster with the same accuracy (corners are refined at full
+    resolution either way). Below that detection is already a few ms, and a
+    far tag can be under 20 px, where halving loses it -- an 80 mm tag on a
+    3 m field at 800x600 was missed in a third of frames at decimate 2, none at 1.
+    """
+    return 2.0 if frame_width >= DECIMATE_FROM_WIDTH else 1.0
+
+
 def _corner_right_on_field(detection, transform: CameraFieldTransform, K: np.ndarray):
     """The tag's visual-right direction on the field plane, from its corners.
 

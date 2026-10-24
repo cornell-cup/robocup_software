@@ -46,7 +46,7 @@ from ball_tracking.ball_color import color_file, load_all, load_profile
 from ball_tracking.track_ball import AIR_COLOR, BALL_COLOR, draw_ball_marks
 from ball_tracking.track_ball import GHOST_COLOR as BALL_GHOST_COLOR
 from tag_tracking.filter import SPEED_EPS as TAG_SPEED_EPS, TagFieldState, TagTracker
-from tag_tracking.pose import TagFieldPose, tag_field_pose
+from tag_tracking.pose import TagFieldPose, auto_tag_decimate, tag_field_pose
 from tag_tracking.track import GHOST_COLOR as TAG_GHOST_COLOR
 from tag_tracking.track import VELOCITY_COLOR, draw_tag_marks, suppressed_stderr
 from vision_core import intrinsics as intr
@@ -577,10 +577,15 @@ def main() -> None:
                     help="black-square width in metres (default 0.080)")
     ap.add_argument("--heading-offset", type=float, default=0.0,
                     help="degrees added to tag theta, if not mounted upright")
+    ap.add_argument("--tag-decimate", type=float, default=None,
+                    help="detect tag outlines on an image this many times smaller (corners are "
+                         "still refined at full resolution). Default: 2 at 1280 px wide and "
+                         "up (~4x faster, same accuracy), 1 below that, where detection is "
+                         "already fast and every pixel on a small tag counts")
     ap.add_argument("--tag-height", type=float, default=0.0,
                     help="metres the tag sits above the field (0 = lying on it; a robot's "
                          "shell height for a tag on top of a robot)")
-    ap.add_argument("--tag-sigma-a", type=float, default=1.0,
+    ap.add_argument("--tag-sigma-a", type=float, default=8.0,
                     help="tag filter process noise, m/s^2 (raise for a fast robot)")
     ap.add_argument("--tag-sigma-alpha", type=float, default=180.0,
                     help="tag filter process noise for turning, deg/s^2")
@@ -757,8 +762,10 @@ def main() -> None:
         else:
             K, dist, intr_source = intr.load(w, h)
 
-        tag_detector = pa.Detector(families="tag36h11", nthreads=4, quad_decimate=1.0,
-                                   decode_sharpening=0.25)
+        decimate = args.tag_decimate or auto_tag_decimate(w)
+        tag_detector = pa.Detector(families="tag36h11", nthreads=os.cpu_count() or 4,
+                                   quad_decimate=decimate, decode_sharpening=0.25)
+        print(f"tag detection: decimate {decimate:g}, {os.cpu_count() or 4} threads")
         tag_tracker = TagTracker(field, sigma_a=args.tag_sigma_a,
                                  sigma_alpha_deg=args.tag_sigma_alpha,
                                  max_coast_s=args.tag_coast)

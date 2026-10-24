@@ -29,8 +29,6 @@ from config import (  # noqa: E402
     LINEAR_DAMP,
     MAX_BALL_SPEED,
     NUM_ROBOTS,
-    ROBOT_MAX_ACCEL,
-    ROBOT_MAX_SPEED,
     VISION_BALL_COAST_S,
     VISION_BLEND_TAU,
     VISION_FIELD_MARGIN,
@@ -41,6 +39,8 @@ from config import (  # noqa: E402
     VISION_GATE_RELOCK,
     VISION_REPLAY_GAP_CAP,
     VISION_ROBOT_COAST_S,
+    VISION_ROBOT_MAX_ACCEL,
+    VISION_ROBOT_MAX_SPEED,
     VISION_SNAP_ANGLE,
     VISION_SNAP_DIST,
     VISION_STATS_WINDOW,
@@ -298,7 +298,9 @@ class VisionBridge:
 
     @staticmethod
     def _new_robot_track() -> _Track:
-        return _Track(ROBOT_MAX_SPEED, ROBOT_MAX_ACCEL, LINEAR_DAMP, VISION_ROBOT_COAST_S)
+        return _Track(
+            VISION_ROBOT_MAX_SPEED, VISION_ROBOT_MAX_ACCEL, LINEAR_DAMP, VISION_ROBOT_COAST_S
+        )
 
     def _robot_for_tag(self, tag: dict) -> int | None:
         tid = int(tag.get("id", -1))
