@@ -53,6 +53,13 @@ export interface World {
   vision?: Record<string, any>;
 }
 
+/** What FieldView draws: a sim world, or one made from the tracker's output. */
+export interface FieldScene {
+  field?: FieldInfo;
+  ball: Ball | null;
+  robots: Record<string, Robot>;
+}
+
 export interface Controls {
   strategy: boolean;
   dribble: boolean;
@@ -229,8 +236,18 @@ export interface TrackingDoc {
   ball: { x: number; y: number; z?: number; speed?: number; visible: boolean; grounded?: boolean } | null;
   stats: {
     fps?: number; latency_ms?: number; photon_latency_ms?: number;
-    capture_dropped?: number; ball_dropouts?: number;
+    capture_dropped?: number; photon_skipped?: number; ball_dropouts?: number;
+    /** What the tracker's keys have set (track-combined --control). */
+    view?: { grid: boolean; trails: boolean; mask: boolean; mode: "floor" | "wall"; ball_min_conc: number };
   };
+}
+
+/** The tracker's newest output, as status's "live" and the tracking socket send it. */
+export interface TrackingLive {
+  up: boolean;
+  age_s: number | null;
+  n: number;
+  doc: TrackingDoc | null;
 }
 
 export interface TrackingStatus {
@@ -238,9 +255,11 @@ export interface TrackingStatus {
     running: boolean;
     pid: number | null;
     exit_code: number | null;
-    options: { tag_size?: number; ball_profile?: string; recording?: string | null };
+    options: { tag_size?: number; ball_profile?: string; recording?: string | null; synthetic_field?: boolean };
   };
-  live: { up: boolean; age_s: number | null; doc: TrackingDoc | null };
+  live: TrackingLive;
+  /** Field calibrations in vision/calib the tracker can load. */
+  field_poses: string[];
 }
 
 export interface Recording {

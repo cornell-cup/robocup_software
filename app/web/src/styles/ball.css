@@ -34,23 +34,6 @@
 .sample .btn {
   margin-left: auto;
 }
-.slider {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.slider > span {
-  display: flex;
-  justify-content: space-between;
-  font-size: 15px;
-}
-.slider b {
-  font-weight: 600;
-}
-.slider small {
-  color: var(--dim);
-  font-size: 14px;
-}
 .hues {
   display: block;
   width: 100%;

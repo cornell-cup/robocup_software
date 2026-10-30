@@ -25,3 +25,80 @@ tr.coasting td {
 tr.ball td:first-child {
   color: #ffa21a;
 }
+
+/* camera and field, side by side or one at a time */
+.viewer-head .push {
+  margin-left: auto;
+}
+.track-views {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.track-views > * {
+  flex: 1;
+  min-height: 0;
+}
+.track-views.both > .picture {
+  border-bottom: 1px solid var(--line);
+}
+.field-pane {
+  display: flex;
+  flex-direction: column;
+  min-height: 260px;
+  background: #000;
+}
+.field-pane .field-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+}
+.field-foot {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  height: 36px;
+  padding: 0 14px;
+  border-top: 1px solid var(--line);
+  font-size: 14px;
+  color: var(--muted);
+}
+.field-foot .push {
+  margin-left: auto;
+}
+
+/* the options form: one titled group per kind of flag */
+.opt-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.opt-group h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+.keys {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+kbd {
+  font-family: var(--mono);
+  font-size: 13px;
+  padding: 0 5px;
+  border: 1px solid var(--line-2);
+  border-radius: 4px;
+  color: var(--muted);
+}
+@media (max-width: 1000px) {
+  .track-views > .picture,
+  .field-pane {
+    height: 48vh;
+    flex: none;
+  }
+}

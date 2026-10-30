@@ -16,6 +16,7 @@ import asyncio
 import contextlib
 import json
 import threading
+import time
 import urllib.request
 import webbrowser
 from pathlib import Path
@@ -37,6 +38,7 @@ from .tracking import (
     TrackerProcess,
     TrackingFeed,
     check_vision_source,
+    field_poses,
     recordings,
 )
 
@@ -44,6 +46,8 @@ STATIC = Path(__file__).parent / "static"
 DEFAULT_PORT = 5801  # next to PhotonVision's UI on 5800
 #: Camera stream to the calibration page: enough to aim by, light on the CPU.
 CALIB_STREAM_FPS = 15
+#: Tracker output to the Tracking page's field: about the tracker's own rate.
+TRACKING_WS_HZ = 30
 
 
 def _mjpeg_part(jpeg: bytes) -> bytes:
@@ -333,7 +337,31 @@ def create_app(photonvision_dir: Path | None = None, start_photonvision: bool = 
 
     @app.get("/api/v1/tracking/status")
     def tracking_status() -> dict[str, Any]:
-        return {"process": state.tracker.status(), "live": state.feed.snapshot()}
+        return {"process": state.tracker.status(), "live": state.feed.snapshot(),
+                "field_poses": field_poses()}
+
+    @app.websocket("/api/v1/tracking/ws")
+    async def tracking_ws(ws: WebSocket) -> None:
+        """The tracker's output as it comes, at most TRACKING_WS_HZ times a
+        second; the same {"up", "age_s", "n", "doc"} as status's "live"."""
+        await ws.accept()
+        last_n, last_up, last_sent = -1, None, 0.0
+        try:
+            while True:
+                snap = state.feed.snapshot()
+                now = time.monotonic()
+                # new output, or just "it stopped", or a keep-alive
+                if snap["n"] != last_n or snap["up"] != last_up or now - last_sent > 1.0:
+                    await ws.send_text(json.dumps(snap))
+                    last_n, last_up, last_sent = snap["n"], snap["up"], now
+                await asyncio.sleep(1.0 / TRACKING_WS_HZ)
+        except (WebSocketDisconnect, RuntimeError):
+            pass
+
+    @app.post("/api/v1/tracking/control")
+    async def tracking_control(cmd: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
+        await asyncio.to_thread(state.tracker.control, cmd)
+        return {"ok": True}
 
     @app.post("/api/v1/tracking/start")
     async def tracking_start(opts: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:

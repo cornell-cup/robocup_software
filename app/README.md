@@ -12,8 +12,8 @@ uv run robocup-web --host 0.0.0.0        # reachable from other machines (no log
 ```
 
 **Getting PhotonVision.** It is too big for git (the jar is over GitHub's 100 MB
-file limit), so the app downloads it: *Download PhotonVision* on the Field
-calibration page, or
+file limit), so the app downloads it: *Download* next to PhotonVision in the
+header, on every page, or
 
 ```powershell
 uv run setup-photonvision
@@ -24,9 +24,8 @@ Temurin 21 Java to run it (some other Javas, Oracle's JDK 21 among them, ship an
 MSVC runtime too old for it) into the `photonvision` folder next to the repo,
 about 160 MB. Windows and Linux only: PhotonVision publishes no macOS build.
 
-**PhotonVision** can be started from the app instead of a terminal: the
-Field calibration page has a *Start PhotonVision* button (it connects by itself
-once PhotonVision is up), or pass `--with-photonvision`. The app looks for
+**PhotonVision** can be started from the app instead of a terminal: *Start*
+next to PhotonVision in the header, or pass `--with-photonvision`. The app looks for
 PhotonVision's folder -- the `photonvision-*.jar` plus a Java to run it with,
 e.g. a Temurin 21 JRE unzipped next to it -- in `--photonvision-dir`, else
 `$ROBOCUP_PHOTONVISION_DIR`, else a `photonvision` folder next to the repo. It
@@ -60,9 +59,19 @@ Run the pygame viewer **or** this page, not both: both send on the manual-comman
 
 **Tracking** runs `track-combined` (headless, publishing on ZMQ port 5556 for the sim):
 tag size, ball profile, *record this session* (to `vision/runs/`, for replaying), and under
-*more options* the rest of its flags. The page shows the tracker's own drawn view (camera,
-overlays, top-down plan) and a live table of tag and ball positions; *Show the robots in the
-simulator* sets the Simulator page up to mirror it. Starting the tracker closes the Field
+*more options* every other flag it has, grouped: tags (tag height, heading offset, how long
+lost tags are kept, the Kalman filter's noise), ball (min. match, radius, filter noise,
+airborne), field (calibration file, size, origin, a made-up field), PhotonVision (camera,
+NetworkTables server, stream, resolution) and output (poses/states in the log, a live-state
+file, an HTTP port, the camera view's size).
+
+While it runs the page shows the camera (the tracker's own drawn view: overlays and its
+top-down plan) and the field drawn live as the Simulator draws it, together or one at a
+time; point at the field for coordinates. *While tracking* has the tracker window's keys:
+grid (`G`), trails (`T`), ball mask (`M`), the ball's min. match (slider, `-` / `=`),
+wall/floor for a made-up field (`W`) and reset (`R`); the keys work on the page too. The
+header strip counts frames dropped, PhotonVision results skipped and ball dropouts. *Show the
+robots in the simulator* sets the Simulator page up to mirror it. Starting the tracker closes the Field
 calibration page's PhotonVision connection, since both need it, and calibration refuses to
 connect while tracking.
 
@@ -120,7 +129,9 @@ HTTP 400 with `{"error": "..."}`.
 | POST | `/calib/capture/start` | `{"tag_size", "field_w", "field_h", "min_frames"?, "layout"?: {"0": [x, y], ...}}` |
 | POST | `/calib/origin` | `{"mode": "corner" \| "center"}`, `{"mode": "field", "x", "y"}` or `{"mode": "pixel", "u", "v"}` |
 | GET | `/tracking/status` | tracker process and its newest output (tags, ball, stats) |
-| POST | `/tracking/start` | `{"tag_size", "ball_profile", "record"?, "heading_offset"?, "tag_coast"?, "ball_min_conc"?, "ball_radius_mm"?, "ball_airborne"?, "corner_origin"?, "synthetic_field"?, "photon_camera"?, "nt_server"?, "stream"?, "photon_res"?}`; `/tracking/stop` |
+| POST | `/tracking/start` | `{"tag_size", "ball_profile", "record"?, "tag_height"?, "heading_offset"?, "tag_coast"?, "tag_sigma_a"?, "tag_sigma_alpha"?, "ball_min_conc"?, "ball_radius_mm"?, "ball_sigma_a"?, "ball_sigma_a_air"?, "ball_sigma_px"?, "ball_airborne"?, "corner_origin"?, "field_pose"?, "field"?: [w, h], "synthetic_field"?, "mode"?, "cam_height"?, "pitch"?, "distance"?, "yaw"?, "pitch_wall"?, "photon_camera"?, "nt_server"?, "stream"?, "photon_res"?, "print_poses"?, "print_states"?, "json_out"?, "serve_http"?, "display_width"?}`; `/tracking/stop` |
+| POST | `/tracking/control` | `{"key": "g" \| "t" \| "m" \| "w" \| "r"}` or `{"ball_min_conc": N}`: the tracker window's keys |
+| WS | `/tracking/ws` | the tracker's output as it comes, `{"up", "age_s", "n", "doc"}` |
 | GET | `/tracking/log?after=N`, `/tracking/stream.mjpg` | tracker output; its drawn view |
 | GET | `/recordings` | recorded sessions, newest first |
 | GET | `/ball/status` | stream, the profile being edited, mask stats, saved profiles |
@@ -162,9 +173,9 @@ the pages, a React 19 + TypeScript app built with Vite into
 `server/src/robocup_web/static/`, which the server serves. The built files are
 committed, so running the app needs no Node; changing the pages does (Node 20+).
 
-`web/src/`: `App.tsx` (header and routing), `pages/` (Simulator, Calibration,
-Ball), `components/` (FieldView canvas, Card, Toggle, ...), `lib/` (API client,
-the live sim socket, small stores), `styles/` (one global theme file plus one
+`web/src/`: `App.tsx` (header and routing), `pages/` (Simulator, Tracking,
+Calibration, Ball), `components/` (FieldView canvas, Card, Toggle, ...), `lib/` (API client,
+the live sim and tracking sockets, small stores), `styles/` (one global theme file plus one
 per page).
 
 ```powershell

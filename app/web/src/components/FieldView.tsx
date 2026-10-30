@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { FieldInfo, Pin, World } from "../lib/types";
+import type { FieldInfo, FieldScene, Pin } from "../lib/types";
 
 const WHEELS = [0, (2 * Math.PI) / 3, (4 * Math.PI) / 3];
 const FALLBACK: FieldInfo = {
@@ -31,7 +31,7 @@ export function FieldView({
   onPick,
   onHover,
 }: {
-  world: World | null;
+  world: FieldScene | null;
   attackers?: string[];
   selected?: number;
   pin?: Pin | null;
@@ -93,7 +93,7 @@ export function FieldView({
 // ── drawing ──────────────────────────────────────────────────────────────
 
 function draw(
-  g: CanvasRenderingContext2D, v: View, w: World | null, attackers: string[],
+  g: CanvasRenderingContext2D, v: View, w: FieldScene | null, attackers: string[],
   selected: number, pin: Pin | null, trail: { x: number; y: number }[],
 ) {
   const sx = (x: number) => v.ox + x * v.s;

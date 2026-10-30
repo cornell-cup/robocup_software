@@ -28,12 +28,15 @@ class ManagedProcess:
         self._log: deque[tuple[int, str]] = deque(maxlen=log_lines)
         self._log_n = 0
         self._log_lock = threading.Lock()
+        self._stdin_lock = threading.Lock()
 
     @property
     def running(self) -> bool:
         return self._proc is not None and self._proc.poll() is None
 
-    def launch(self, cmd: list[str], cwd: Path, env: dict[str, str] | None = None) -> None:
+    def launch(self, cmd: list[str], cwd: Path, env: dict[str, str] | None = None,
+               stdin: bool = False) -> None:
+        """Starts cmd; with stdin, send_line() can write to it."""
         if self.running:
             raise CommandError(f"{self.name} is already running")
         # Unbuffered, so lines arrive as they are printed; UTF-8, since the
@@ -44,10 +47,23 @@ class ManagedProcess:
             else {"start_new_session": True}
         )
         self._proc = subprocess.Popen(
-            cmd, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            cmd, cwd=cwd, env=env, stdin=subprocess.PIPE if stdin else subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", **kw)
         self._add_log(f"$ {' '.join(cmd)}")
         threading.Thread(target=self._read, args=(self._proc,), daemon=True).start()
+
+    def send_line(self, line: str) -> None:
+        """One line to the process's stdin (launched with stdin=True)."""
+        p = self._proc
+        if p is None or p.poll() is not None or p.stdin is None:
+            raise CommandError(f"{self.name} isn't running")
+        try:
+            with self._stdin_lock:
+                p.stdin.write(line + "\n")
+                p.stdin.flush()
+        except OSError:
+            raise CommandError(f"{self.name} isn't listening") from None
 
     def on_line(self, line: str) -> None:
         """Called for each line of output, for subclasses that watch it."""
