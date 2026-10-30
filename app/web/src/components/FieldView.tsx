@@ -108,7 +108,7 @@ function draw(
     if (!last || Math.hypot(last.x - b.x, last.y - b.y) > 0.01) trail.push({ x: b.x, y: b.y });
     if (trail.length > TRAIL) trail.shift();
     for (let i = 1; i < trail.length; i++) {
-      g.strokeStyle = `rgba(255, 162, 26, ${(i / trail.length) * 0.45})`;
+      g.strokeStyle = `rgba(230, 120, 0, ${(i / trail.length) * 0.5})`;
       g.lineWidth = 2;
       g.beginPath();
       g.moveTo(sx(trail[i - 1].x), sy(trail[i - 1].y));
@@ -124,56 +124,73 @@ function draw(
 
   if (b) {
     const stale = b.stale && b.source === "vision";
-    g.fillStyle = stale ? "#8a8a94" : "#ffa21a";
+    g.fillStyle = stale ? STALE : BALL;
     g.beginPath();
-    g.arc(sx(b.x), sy(b.y), Math.max(v.field.ball_radius * v.s, 3.5), 0, Math.PI * 2);
+    g.arc(sx(b.x), sy(b.y), Math.max(v.field.ball_radius * v.s, 5), 0, Math.PI * 2);
     g.fill();
   }
 }
 
+// Drawn as the pygame window (sim/viz_node.py) drew it, scaled from its
+// 900 px-wide field: turf green, white border and halfway line, centre circle,
+// goal posts on the side lines, robots with red wheel dots.
+const FIELD_GREEN = "rgb(0,100,0)";
+const LINE = "rgb(255,255,255)";
+const POST_LEFT = "rgb(0,255,255)";
+const POST_RIGHT = "rgb(255,110,110)";
+const ROBOT_BLUE = "rgb(30,144,255)";
+const ROBOT_RED = "rgb(255,80,80)";
+const STALE = "rgb(130,130,130)";
+const WHEEL = "rgb(200,0,0)";
+const ATTACKER = "rgb(255,215,0)";
+const BALL = "rgb(230,120,0)";
+
+/** pygame pixels -> canvas pixels: its field was always 900 px wide. */
+const px = (v: View, n: number) => Math.max(1, (n * v.field.width * v.s) / 900);
+
 function drawField(g: CanvasRenderingContext2D, v: View, sx: (x: number) => number, sy: (y: number) => number) {
   const f = v.field;
   const x0 = sx(0), y0 = sy(f.height), fw = f.width * v.s, fh = f.height * v.s;
-  g.fillStyle = "#0d0d0d";
-  g.fillRect(x0, y0, fw, fh);
+  // pygame filled the whole window green; here the field and a strip around it
+  const m = Math.max(f.width, f.height) * 0.045 * v.s;
+  g.fillStyle = FIELD_GREEN;
+  g.fillRect(x0 - m, y0 - m, fw + 2 * m, fh + 2 * m);
 
-  // goals, outside the line
-  const gy0 = sy(f.goal_y_max), gy1 = sy(f.goal_y_min);
-  const depth = Math.max(f.width * 0.025 * v.s, 6);
-  goal(g, x0 - depth, gy0, depth, gy1 - gy0, "61,139,255");
-  goal(g, x0 + fw, gy0, depth, gy1 - gy0, "255,90,95");
-
-  g.strokeStyle = "rgba(255,255,255,0.75)";
-  g.lineWidth = 2;
+  g.strokeStyle = LINE;
+  g.lineWidth = px(v, 3);
   g.strokeRect(x0, y0, fw, fh);
-  g.strokeStyle = "rgba(255,255,255,0.35)";
-  g.lineWidth = 1.5;
+  g.lineWidth = px(v, 2);
   g.beginPath();
   g.moveTo(x0 + fw / 2, y0);
   g.lineTo(x0 + fw / 2, y0 + fh);
   g.stroke();
   g.beginPath();
-  g.arc(x0 + fw / 2, y0 + fh / 2, (f.width / 18) * v.s, 0, Math.PI * 2);
+  g.arc(x0 + fw / 2, y0 + fh / 2, fw / 18, 0, Math.PI * 2);
   g.stroke();
-  g.fillStyle = "rgba(255,255,255,0.5)";
-  g.beginPath();
-  g.arc(x0 + fw / 2, y0 + fh / 2, 2.5, 0, Math.PI * 2);
-  g.fill();
+
+  // goal posts on the side lines; the left one has a white underlay to stand
+  // out against the grass
+  const gy0 = sy(f.goal_y_max), gy1 = sy(f.goal_y_min);
+  post(g, x0, gy0, gy1, LINE, px(v, 8));
+  post(g, x0, gy0, gy1, POST_LEFT, px(v, 5));
+  post(g, x0 + fw, gy0, gy1, POST_RIGHT, px(v, 6));
 }
 
-function goal(g: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, rgb: string) {
-  g.fillStyle = `rgba(${rgb},0.14)`;
-  g.fillRect(x, y, w, h);
-  g.strokeStyle = `rgb(${rgb})`;
-  g.lineWidth = 2;
-  g.strokeRect(x, y, w, h);
+function post(g: CanvasRenderingContext2D, x: number, y0: number, y1: number, color: string, width: number) {
+  g.strokeStyle = color;
+  g.lineWidth = width;
+  g.lineCap = "butt";
+  g.beginPath();
+  g.moveTo(x, y0);
+  g.lineTo(x, y1);
+  g.stroke();
 }
 
 function drawRobot(
   g: CanvasRenderingContext2D, v: View, cx: number, cy: number, id: number, a: number,
   stale: boolean, attacker: boolean, isSel: boolean, tag?: number | null,
 ) {
-  const r = Math.max(v.field.robot_radius * v.s, 7);
+  const r = Math.max(v.field.robot_radius * v.s, 4);
   const blue = id < v.field.team_blue_size;
   if (isSel) {
     g.strokeStyle = "#e0261a";
@@ -184,65 +201,69 @@ function drawRobot(
     g.stroke();
     g.setLineDash([]);
   }
-  g.fillStyle = stale ? "#6c6c77" : blue ? "#3d8bff" : "#ff5a5f";
+  g.fillStyle = stale ? STALE : blue ? ROBOT_BLUE : ROBOT_RED;
   g.beginPath();
   g.arc(cx, cy, r, 0, Math.PI * 2);
   g.fill();
-  g.strokeStyle = attacker ? "#ffd400" : "rgba(0,0,0,0.6)";
-  g.lineWidth = attacker ? 2.5 : 1;
+  const outline = attacker ? ATTACKER : LINE;
+  g.strokeStyle = outline;
+  g.lineWidth = attacker ? 3 : 2;
   g.stroke();
 
-  // heading: a notch from the rim outwards, clear of the id in the middle
-  g.strokeStyle = "white";
-  g.lineWidth = 2.5;
+  // heading, in the outline colour. pygame drew it from the centre; it starts
+  // a little out here so the robot's number stays readable.
+  g.lineWidth = 3;
   g.lineCap = "round";
   g.beginPath();
-  g.moveTo(cx + Math.cos(a) * r * 0.62, cy - Math.sin(a) * r * 0.62);
-  g.lineTo(cx + Math.cos(a) * r * 1.45, cy - Math.sin(a) * r * 1.45);
+  g.moveTo(cx + Math.cos(a) * r * 0.5, cy - Math.sin(a) * r * 0.5);
+  g.lineTo(cx + Math.cos(a) * r * 1.4, cy - Math.sin(a) * r * 1.4);
   g.stroke();
-  g.fillStyle = "#111";
+
+  g.fillStyle = WHEEL;
   for (const wa of WHEELS) {
     g.beginPath();
-    g.arc(cx + Math.cos(a + wa) * r * 0.82, cy - Math.sin(a + wa) * r * 0.82, Math.max(r * 0.16, 2), 0, Math.PI * 2);
+    g.arc(cx + Math.cos(a + wa) * r, cy - Math.sin(a + wa) * r, Math.max(r * 0.28, 2.5), 0, Math.PI * 2);
     g.fill();
   }
   if (r >= 9) {
     g.fillStyle = "white";
-    g.font = `700 ${Math.min(r * 0.95, 15)}px "Exo 2 Variable", system-ui, sans-serif`;
+    g.font = `700 ${Math.min(r * 0.9, 15)}px "Exo 2 Variable", system-ui, sans-serif`;
     g.textAlign = "center";
     g.textBaseline = "middle";
     g.fillText(String(id), cx, cy + 0.5);
   }
   if (tag !== undefined && tag !== null) {
     g.font = "600 13px ui-monospace, Consolas, monospace";
-    g.fillStyle = "rgba(255,255,255,0.8)";
+    g.fillStyle = LINE;
     g.textAlign = "center";
-    g.fillText(`T${tag}`, cx, cy - r - 10);
+    g.textBaseline = "alphabetic";
+    g.fillText(`T${tag}`, cx, cy - r - 8);
   }
 }
 
+/** The pygame target: a dotted path from where the robot was, and a map pin. */
 function drawPin(g: CanvasRenderingContext2D, p: Pin, sx: (x: number) => number, sy: (y: number) => number) {
-  const px = sx(p.x), py = sy(p.y);
+  const tx = sx(p.x), ty = sy(p.y);
+  g.fillStyle = p.color;
   if (p.fromX !== null && p.fromY !== null) {
-    g.strokeStyle = "rgba(224,38,26,0.8)";
-    g.lineWidth = 2;
-    g.setLineDash([2, 7]);
-    g.lineCap = "round";
-    g.beginPath();
-    g.moveTo(sx(p.fromX), sy(p.fromY));
-    g.lineTo(px, py);
-    g.stroke();
-    g.setLineDash([]);
+    const fx = sx(p.fromX), fy = sy(p.fromY);
+    const steps = Math.max(1, Math.floor(Math.hypot(tx - fx, ty - fy) / 12));
+    for (let i = 0; i <= steps; i++) {
+      g.beginPath();
+      g.arc(fx + ((tx - fx) * i) / steps, fy + ((ty - fy) * i) / steps, 2, 0, Math.PI * 2);
+      g.fill();
+    }
   }
-  g.strokeStyle = "#e0261a";
+  g.strokeStyle = p.color;
   g.lineWidth = 2;
   g.beginPath();
-  g.arc(px, py, 9, 0, Math.PI * 2);
+  g.moveTo(tx, ty);
+  g.lineTo(tx, ty - 15);
   g.stroke();
   g.beginPath();
-  g.moveTo(px - 14, py); g.lineTo(px - 4, py);
-  g.moveTo(px + 4, py); g.lineTo(px + 14, py);
-  g.moveTo(px, py - 14); g.lineTo(px, py - 4);
-  g.moveTo(px, py + 4); g.lineTo(px, py + 14);
+  g.arc(tx, ty - 22, 7, 0, Math.PI * 2);
+  g.fill();
+  g.strokeStyle = "white";
+  g.lineWidth = 1;
   g.stroke();
 }

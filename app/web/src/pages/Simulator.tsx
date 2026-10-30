@@ -13,6 +13,8 @@ import "../styles/simulator.css";
 
 type DriveMode = Mode | "keys";
 const MAX_OMEGA = 5;
+// The pygame window's controller colours, for the target pin.
+const MODE_COLORS: Record<Mode, string> = { pd: "#00ff80", time: "#dc50ff", mpc: "#00c8ff" };
 
 export function Simulator() {
   const sim = useSim();
@@ -122,7 +124,7 @@ export function Simulator() {
   function pick(x: number, y: number) {
     if (mode === "keys") return;
     const r = world?.robots?.[String(robot)];
-    setPin({ robot, x, y, fromX: r?.x ?? null, fromY: r?.y ?? null });
+    setPin({ robot, x, y, fromX: r?.x ?? null, fromY: r?.y ?? null, color: MODE_COLORS[mode] });
     sendSim({ type: "target", robot, x, y, mode });
   }
   const kick = () => sendSim({ type: "kick", robot });

@@ -77,6 +77,8 @@ export interface Pin {
   y: number;
   fromX: number | null;
   fromY: number | null;
+  /** The controller's colour, as the pygame window drew its pin. */
+  color: string;
 }
 
 export type SimCommand =
