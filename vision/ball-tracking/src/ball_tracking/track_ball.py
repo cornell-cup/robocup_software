@@ -279,13 +279,17 @@ def main() -> None:
                     help="mean color likelihood (0-255) a blob needs to count as "
                          "the ball; below it the tracker reports no ball. Each "
                          "blob's value is drawn on the video; tune live with - / =")
+    ap.add_argument("--ground-only", action="store_true",
+                    help="never flag the ball airborne. Use when the ball is only "
+                         "a few pixels across (camera far away): its apparent size "
+                         "is then too unreliable to tell height")
     ap.add_argument("--camera", type=int, default=0, help="camera index")
     ap.add_argument("--width", type=int, default=1280)
     ap.add_argument("--height", type=int, default=720)
     ap.add_argument("--hfov", type=float, default=None,
                     help="assumed horizontal FOV in degrees, if not calibrated")
     ap.add_argument("--field-pose", type=str, default=None,
-                    help="measured field pose to load (default robocup_testing/calib/field_pose.json, "
+                    help="measured field pose to load (default vision/calib/field_pose.json, "
                          "written by calibrate-field in tag-tracking)")
     ap.add_argument("--corner-origin", action="store_true",
                     help="ignore any custom origin saved by calibrate-field and report "
@@ -364,7 +368,7 @@ def main() -> None:
 
         tracker = BallTracker(color, transform, K, dist, sigma_px=args.sigma_px,
                               sigma_a=args.sigma_a, sigma_a_air=args.sigma_a_air, field=field,
-                              min_concentration=args.min_conc)
+                              min_concentration=args.min_conc, ground_only=args.ground_only)
         plan = PlanView(field, height=h, mode=mode)
         trail: deque = deque(maxlen=TRAIL_LEN)
 
@@ -444,7 +448,7 @@ def main() -> None:
                 # stale track is usually what 'r' is pressed to get rid of.
                 tracker = BallTracker(color, transform, K, dist, sigma_px=args.sigma_px,
                                       sigma_a=args.sigma_a, sigma_a_air=args.sigma_a_air, field=field,
-                                      min_concentration=args.min_conc)
+                                      min_concentration=args.min_conc, ground_only=args.ground_only)
                 state = None
             elif key in (ord("["), ord("]")):
                 K = K.copy()
@@ -453,7 +457,7 @@ def main() -> None:
                 intr_source = "hand-tuned"
                 tracker = BallTracker(color, transform, K, dist, sigma_px=args.sigma_px,
                                       sigma_a=args.sigma_a, sigma_a_air=args.sigma_a_air, field=field,
-                                      min_concentration=args.min_conc)
+                                      min_concentration=args.min_conc, ground_only=args.ground_only)
                 trail.clear()
                 print(f"fx {K[0, 0]:.1f}  -> {intr.hfov_of(K, w):.1f} deg HFOV")
             elif key == ord("w") and using_calibrated:
@@ -465,7 +469,7 @@ def main() -> None:
                 plan = PlanView(field, height=h, mode=mode)
                 tracker = BallTracker(color, transform, K, dist, sigma_px=args.sigma_px,
                                       sigma_a=args.sigma_a, sigma_a_air=args.sigma_a_air, field=field,
-                                      min_concentration=args.min_conc)
+                                      min_concentration=args.min_conc, ground_only=args.ground_only)
                 trail.clear()
                 print(f"transform: {transform.source}")
             elif key in (ord("-"), ord("=")):

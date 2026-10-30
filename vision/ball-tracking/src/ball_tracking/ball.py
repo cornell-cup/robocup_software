@@ -601,6 +601,7 @@ class BallTracker:
         field_margin: float = 0.10,
         max_z: float = 1.0,
         min_concentration: float = 80.0,
+        ground_only: bool = False,
     ) -> None:
         self.color = color
         self.detector = BallDetector(color, min_concentration=min_concentration)
@@ -618,6 +619,12 @@ class BallTracker:
         self.air_sigmas = float(air_sigmas)
         self.air_min_margin = float(air_min_margin)
         self.air_hold = int(air_hold)
+        #: Never call the ball airborne. For a rig where the ball is a handful
+        #: of pixels across: there the radius ranger is too weak to see a real
+        #: lift, and a radius inflated by a pixel or two of color bleed (MJPG
+        #: chroma, the mask blur) reads as one, swapping in the noisy radius
+        #: position for a ball that is sitting on the table.
+        self.ground_only = bool(ground_only)
 
         #: Where a ball can plausibly be. None makes every track plausible, and
         #: the output is simply the healthiest.
@@ -684,7 +691,9 @@ class BallTracker:
         gap = ground_depth - radius_depth
         enter = max(self.air_sigmas * sigma_z, self.air_min_margin)
         exit_ = 0.4 * enter
-        if np.isfinite(ground_depth) and np.isfinite(radius_depth):
+        if self.ground_only:
+            disagrees = False
+        elif np.isfinite(ground_depth) and np.isfinite(radius_depth):
             disagrees = gap > (exit_ if h.airborne else enter)
         else:
             disagrees = False
