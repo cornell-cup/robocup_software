@@ -1,10 +1,9 @@
 """A digital field with reference AprilTags on it, for exercising field-pose
-calibration and `track --synthetic-camera` with no hardware attached.
+calibration, `track --synthetic-camera` and photon-sim with no hardware attached.
 
 This is the AprilTag-shaped counterpart to vision_core.charuco's
-SyntheticChArucoCamera: it needs pupil_apriltags to render and matters only to
-this skill, so it lives here rather than in vision-core, same reasoning as
-pose.py.
+SyntheticChArucoCamera: it matters only to this skill, so it lives here rather
+than in vision-core, same reasoning as pose.py.
 """
 
 from __future__ import annotations
@@ -27,7 +26,7 @@ def _tag_bitmap(tag_id: int, px_per_module: int = 24) -> np.ndarray:
     frame, and regenerating each bitmap from the dictionary is not free.
     """
     d = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36H11)
-    return cv2.aruco.generateImageMarker(d, tag_id, MODULES * px_per_module, 1)
+    return cv2.aruco.generateImageMarker(d, tag_id, MODULES * px_per_module, borderBits=1)
 
 
 def _warp_tag(
@@ -95,15 +94,17 @@ class SyntheticFieldCamera:
         self._t0 = time.perf_counter()
 
     def read(self) -> np.ndarray:
+        K = self.K
+        assert K is not None  # filled in by __post_init__
         frame = np.full(self.shape, 210, np.uint8)
         rvec, tvec = self.truth_transform.rvec_tvec()
         for tid, (x, y) in self.layout.items():
-            _warp_tag(frame, tid, x, y, 0.0, self.tag_size, rvec, tvec, self.K)
+            _warp_tag(frame, tid, x, y, 0.0, self.tag_size, rvec, tvec, K)
         for tid, x, y, th in self.extra_tags:
-            _warp_tag(frame, tid, x, y, th, self.tag_size, rvec, tvec, self.K)
+            _warp_tag(frame, tid, x, y, th, self.tag_size, rvec, tvec, K)
         if self.trajectory is not None:
             tid, x, y, th = self.trajectory(time.perf_counter() - self._t0)
-            _warp_tag(frame, tid, x, y, th, self.tag_size, rvec, tvec, self.K)
+            _warp_tag(frame, tid, x, y, th, self.tag_size, rvec, tvec, K)
         if self.noise_std:
             noise = np.random.normal(0, self.noise_std, frame.shape)
             frame = np.clip(frame.astype(np.float64) + noise, 0, 255).astype(np.uint8)

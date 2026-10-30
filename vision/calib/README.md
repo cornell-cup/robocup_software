@@ -1,14 +1,14 @@
 # calib
 
 Calibration describing the **camera**, not any one skill. Shared by every skill
-and resolved from the `robocup_testing` folder by `vision_core.paths.repo_root()`, so it does
+and resolved from the `vision` folder by `vision_core.paths.repo_root()`, so it does
 not matter which folder you launch from. Created on first write — nothing to set
 up.
 
 | File | Made by | What it is |
 | --- | --- | --- |
-| `intrinsics.json` | `s` in `track`, or `calibrate-camera` | The camera matrix: how zoomed-in the lens is, and (from `calibrate-camera`) real lens distortion coefficients. Stores the resolution it was measured at. Loaded as-is at that size, rescaled at another size with the same aspect ratio (e.g. 1280x960 from 640x480), and ignored for a different aspect ratio (4:3 vs 16:9), which needs its own `calibrate-camera` run. |
-| `field_pose.json` | `calibrate-field`, or `track --calibrate-live` | Where the field is, relative to the camera -- an `R`/`t` solved from four reference AprilTags. Both `track` and `track-ball` load it automatically in place of the made-up field. It also records the `field` size it was solved for, which every tracker uses as its `--field` default. An optional `origin: [x, y]` (metres from the first corner, set by `calibrate-field`'s picker or `--origin`) moves `(0,0)` there; delete the key to go back to the corner. |
+| `intrinsics.json` | `s` in `track-ball`, or `calibrate-camera` | A local webcam's camera matrix: how zoomed-in the lens is, and (from `calibrate-camera`) real lens distortion coefficients. Read by `track-ball` only: the tag tools (`track`, `calibrate-field`, `track-combined`) use the lens calibration done in PhotonVision's UI instead, which lives in PhotonVision, not here. Stores the resolution it was measured at. Loaded as-is at that size, rescaled at another size with the same aspect ratio (e.g. 1280x960 from 640x480), and ignored for a different aspect ratio (4:3 vs 16:9), which needs its own `calibrate-camera` run. |
+| `field_pose.json` | `calibrate-field`, or `track --calibrate-live` | Where the field is, relative to the camera -- an `R`/`t` solved from four reference AprilTags, seen through PhotonVision's camera and solved with its lens calibration. `track`, `track-ball` and `track-combined` load it automatically in place of the made-up field (for `track-ball` on a local webcam, it only holds if that is the same camera, in the same place). It also records the `field` size it was solved for, which every tracker uses as its `--field` default. An optional `origin: [x, y]` (metres from the first corner, set by `calibrate-field`'s picker or `--origin`) moves `(0,0)` there; delete the key to go back to the corner. |
 | `ball_color.json` | `calibrate-ball` | Named ball profiles: a measured hue/saturation histogram plus each ball's radius. Pick one with `--ball-profile`. |
 
 Committed, because this team shares one rig.

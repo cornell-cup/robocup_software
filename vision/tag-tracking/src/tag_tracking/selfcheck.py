@@ -1,7 +1,9 @@
 """Prove the field maths without a camera.
 
 Renders synthetic images of a tag at known field positions, runs them through
-the real detector and the real vision_core/field.py code, and checks the numbers come back.
+the real detector (PhotonVision's, run locally) and the real vision_core/field.py
+code, and checks the numbers come back. Section 4 sends a frame through a
+stand-in PhotonVision over real NetworkTables, to prove the live path too.
 If this passes, any error you see later is in the camera, the intrinsics, or the
 tag on the phone -- not in the geometry.
 
@@ -14,10 +16,10 @@ notices.
 
 from __future__ import annotations
 
+import time
+
 import cv2
 import numpy as np
-import pupil_apriltags as pa
-
 from vision_core.field import (
     Field,
     ReferenceTagFieldTransform,
@@ -25,9 +27,9 @@ from vision_core.field import (
 )
 from vision_core.intrinsics import from_fov
 
+from .detect import LocalTagDetector, for_tracking
 from .pose import tag_field_pose
 
-TAG_FAMILY = "tag36h11"
 MODULES = 8  # tag36h11 is 8x8 modules edge-to-edge of the black square
 
 # Tolerances. These are not arbitrary: an 80 mm tag seen at 1.5 m by a 1280-wide
@@ -48,7 +50,7 @@ intrinsics = from_fov
 def tag_image(tag_id: int, px_per_module: int = 24) -> np.ndarray:
     """The 8x8-module black square, no quiet zone."""
     d = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36H11)
-    return cv2.aruco.generateImageMarker(d, tag_id, MODULES * px_per_module, 1)
+    return cv2.aruco.generateImageMarker(d, tag_id, MODULES * px_per_module, borderBits=1)
 
 
 def tag_corners_in_field(
@@ -117,8 +119,7 @@ def check_round_trip() -> list[str]:
     shape = (720, 1280)
     K = intrinsics(shape[1], shape[0], 60.0)
     tag_size = 0.08  # 80 mm black square, a realistic phone-screen tag
-    det = pa.Detector(families=TAG_FAMILY, nthreads=2, quad_decimate=1.0)
-    cam = (K[0, 0], K[1, 1], K[0, 2], K[1, 2])
+    det = LocalTagDetector()
 
     cases = [
         ("wall", SyntheticFieldTransform.wall(field, distance=1.5)),
@@ -134,9 +135,7 @@ def check_round_trip() -> list[str]:
     for name, transform in cases:
         for want in truth:
             frame = render(7, [want], transform, tag_size, K, shape)
-            found = det.detect(
-                frame, estimate_tag_pose=True, camera_params=cam, tag_size=tag_size
-            )
+            found = for_tracking(det.detect(frame), K, None, tag_size)
             if not found:
                 failures.append(f"{name}: no detection for pose {want}")
                 continue
@@ -179,10 +178,9 @@ def check_bounds() -> list[str]:
     # And the geometry agrees with Field.contains via a real detection.
     shape = (720, 1280)
     K = intrinsics(shape[1], shape[0], 60.0)
-    det = pa.Detector(families=TAG_FAMILY, nthreads=2, quad_decimate=1.0)
-    cam = (K[0, 0], K[1, 1], K[0, 2], K[1, 2])
+    det = LocalTagDetector()
     frame = render(7, [(1.35, 0.40, 0.0)], transform, 0.08, K, shape)
-    found = det.detect(frame, estimate_tag_pose=True, camera_params=cam, tag_size=0.08)
+    found = for_tracking(det.detect(frame), K, None, 0.08)
     if not found:
         failures.append("out-of-bounds tag was not detected at all")
     else:
@@ -207,14 +205,13 @@ def check_transform_swap() -> list[str]:
     field = Field(1.2, 0.8)
     shape = (720, 1280)
     K = intrinsics(shape[1], shape[0], 60.0)
-    det = pa.Detector(families=TAG_FAMILY, nthreads=2, quad_decimate=1.0)
-    cam = (K[0, 0], K[1, 1], K[0, 2], K[1, 2])
+    det = LocalTagDetector()
 
     truth_transform = SyntheticFieldTransform.floor(field, height=1.1, pitch_deg=40.0)
     layout = {0: (0.0, 0.0), 1: (1.2, 0.0), 2: (1.2, 0.8), 3: (0.0, 0.8)}
 
     # Render the four reference tags plus a moving tag, all into one frame. Every
-    # tag here is the same physical size, because detect() is told a single
+    # tag here is the same physical size, because poses are solved with a single
     # tag_size for the whole frame -- mixing sizes scales poses along the view ray.
     tag_size = 0.08
     frame = np.full(shape, 210, np.uint8)
@@ -223,9 +220,7 @@ def check_transform_swap() -> list[str]:
     moving_truth = (0.75, 0.55, 30.0)
     render(7, [moving_truth], truth_transform, tag_size, K, shape, into=frame)
 
-    found = det.detect(
-        frame, estimate_tag_pose=True, camera_params=cam, tag_size=tag_size
-    )
+    found = for_tracking(det.detect(frame), K, None, tag_size)
     ids = sorted(d.tag_id for d in found)
     print(f"  detected ids {ids} (want [0, 1, 2, 3, 7])")
     if not set(layout).issubset(ids):
@@ -257,6 +252,101 @@ def check_transform_swap() -> list[str]:
     return failures
 
 
+def check_photon_round_trip() -> list[str]:
+    """The live path: one frame's tags through a stand-in PhotonVision over real
+    NetworkTables -- its message format, corner order and lens calibration --
+    then calibrated and tracked the way calibrate-field and track do it.
+
+    The frame is rendered through a distorted lens, as a real camera would
+    see it, so the undistortion on the receiving end has to be right too.
+    """
+    import threading
+
+    import ntcore
+
+    from .photon import PhotonTags
+    from .photon_sim import FakePhotonVision, distortion_maps
+
+    failures = []
+    field = Field(1.2, 0.8)
+    shape = (720, 1280)
+    K = intrinsics(shape[1], shape[0], 60.0)
+    dist = np.array([-0.12, 0.0, 0.0, 0.0, 0.0])
+    tag_size = 0.08
+    truth_transform = SyntheticFieldTransform.floor(field, height=1.1, pitch_deg=40.0)
+    layout = {0: (0.0, 0.0), 1: (1.2, 0.0), 2: (1.2, 0.8), 3: (0.0, 0.8)}
+    frame = np.full(shape, 210, np.uint8)
+    for tid, (x, y) in layout.items():
+        render(tid, [(x, y, 0.0)], truth_transform, tag_size, K, shape, into=frame)
+    moving_truth = (0.75, 0.55, 30.0)
+    render(7, [moving_truth], truth_transform, tag_size, K, shape, into=frame)
+    frame = cv2.remap(frame, *distortion_maps(K, dist, shape[1], shape[0]),
+                      cv2.INTER_LINEAR, borderValue=210)
+    raw = LocalTagDetector().detect(frame)
+
+    sim = ntcore.NetworkTableInstance.create()
+    sim.setServer("127.0.0.1")
+    sim.startClient4("selfcheck-photon")
+    fake = FakePhotonVision(sim, "selfcheck", K, dist)
+    stop = threading.Event()
+
+    def pump() -> None:
+        while not stop.is_set():
+            fake.publish(raw, int(time.monotonic() * 1e6))
+            time.sleep(0.02)
+
+    threading.Thread(target=pump, daemon=True).start()
+    try:
+        tags = PhotonTags("selfcheck", None, (shape[1], shape[0]), timeout_s=10.0)
+    except SystemExit as e:
+        stop.set()
+        sim.stopClient()
+        return [f"PhotonVision round trip: {e}"]
+    try:
+        result = tags.wait(5.0)
+    finally:
+        stop.set()
+        sim.stopClient()
+        tags.close()
+    if result is None:
+        return [("PhotonVision round trip: no result arrived over NetworkTables "
+                 "(is a tracker already running the server on this machine?)")]
+
+    if not (np.allclose(tags.K, K) and np.allclose(tags.dist[:5], dist)):
+        failures.append("lens calibration changed on the way over NetworkTables")
+    ids = sorted(d.tag_id for d in result.detections)
+    print(f"  received ids {ids} over NetworkTables (want [0, 1, 2, 3, 7]), "
+          f"k1 {tags.dist[0]:+.2f}")
+    if not set(layout).issubset(ids) or 7 not in ids:
+        return failures + [f"tags missing after the round trip, got {ids}"]
+
+    measured = ReferenceTagFieldTransform.from_detections(
+        result.detections, layout, tags.K, tags.dist, tag_size)
+    dR = np.degrees(
+        np.arccos(np.clip((np.trace(measured.R.T @ truth_transform.R) - 1) / 2, -1, 1))
+    )
+    dt = float(np.linalg.norm(measured.t - truth_transform.t))
+    print(f"  field pose from the received corners: rotation off {dR:.2f} deg, "
+          f"origin off {dt:.4f} m")
+    if dR > 1.0 or dt > 0.02:
+        failures.append(f"field pose via PhotonVision off by {dR:.2f} deg / {dt:.4f} m")
+
+    moving = for_tracking([d for d in result.detections if d.tag_id == 7],
+                          tags.K, tags.dist, tag_size)[0]
+    got = tag_field_pose(moving, measured, field, K=tags.K)
+    dx, dy = abs(got.x - moving_truth[0]), abs(got.y - moving_truth[1])
+    dth = abs((got.theta_deg - moving_truth[2] + 180) % 360 - 180)
+    ok = dx < TOL_XY_M and dy < TOL_XY_M and dth < TOL_THETA_DEG
+    print(f"  [{'ok ' if ok else 'FAIL'}] moving tag want x={moving_truth[0]:.2f} "
+          f"y={moving_truth[1]:.2f} th={moving_truth[2]:+.1f}  got x={got.x:.3f} "
+          f"y={got.y:.3f} th={got.theta_deg:+.1f}  err {max(dx, dy) * 1000:.1f} mm / "
+          f"{dth:.1f} deg")
+    if not ok:
+        failures.append(f"moving tag via PhotonVision -> ({got.x:.3f}, {got.y:.3f}, "
+                        f"{got.theta_deg:.1f}), want {moving_truth}")
+    return failures
+
+
 def main() -> None:
     print("Field maths self-check -- synthetic images, no camera involved.\n")
     failures: list[str] = []
@@ -269,6 +359,9 @@ def main() -> None:
 
     print("\n3. swapping the invented transform for one measured from 4 ref tags:")
     failures += check_transform_swap()
+
+    print("\n4. the live path: tags through a stand-in PhotonVision over NetworkTables:")
+    failures += check_photon_round_trip()
 
     print()
     if failures:

@@ -36,7 +36,7 @@ MODULES = 8  # tag36h11: 6 data bits + a 1-module black border ring
 def tag_png_base64(tag_id: int, px_per_module: int = 64) -> str:
     """The 8x8-module black square as a base64 PNG, no quiet zone baked in."""
     d = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36H11)
-    img = cv2.aruco.generateImageMarker(d, tag_id, MODULES * px_per_module, 1)
+    img = cv2.aruco.generateImageMarker(d, tag_id, MODULES * px_per_module, borderBits=1)
     ok, buf = cv2.imencode(".png", img)
     if not ok:
         raise RuntimeError("failed to encode tag PNG")
@@ -96,7 +96,7 @@ def generate_field_sheet(
     tag_px = int(round(tag_mm * px_per_mm))
     half = tag_px // 2
     for tag_id, (x_mm, y_mm) in zip(tag_ids, corners_mm):
-        tag_img = cv2.aruco.generateImageMarker(d, tag_id, tag_px, 1)
+        tag_img = cv2.aruco.generateImageMarker(d, tag_id, tag_px, borderBits=1)
         cx, cy = to_px(x_mm, y_mm)
         x0, y0 = cx - half, cy - half
         canvas[y0:y0 + tag_px, x0:x0 + tag_px] = tag_img
@@ -339,7 +339,7 @@ def main() -> None:
 
     if args.save_png:
         d = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_APRILTAG_36H11)
-        img = cv2.aruco.generateImageMarker(d, args.tag_id, MODULES * 64, 1)
+        img = cv2.aruco.generateImageMarker(d, args.tag_id, MODULES * 64, borderBits=1)
         pad = 2 * 64  # 2 modules of quiet zone
         img = cv2.copyMakeBorder(
             img, pad, pad, pad, pad, cv2.BORDER_CONSTANT, value=255

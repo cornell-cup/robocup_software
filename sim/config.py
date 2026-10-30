@@ -27,7 +27,7 @@ MANUAL_PORT = 9093  # VizNode   → RobotNode            (manual click targets)
 # ── Field geometry (meters) ──────────────────────────────────────────────────
 # Default 9 x 6. ROBOCUP_FIELD overrides it for every node that imports this
 # file (run_pipeline.py --field sets it for its children): "W H" in metres, or
-# a path to robocup_testing's calib/field_pose.json, whose "field" block holds
+# a path to vision's calib/field_pose.json, whose "field" block holds
 # the measured size. With the sim field equal to the real table, vision_bridge
 # maps camera metres 1:1 instead of stretching the table onto 9 x 6.
 DEFAULT_FIELD_W = 9.0
@@ -51,7 +51,7 @@ def parse_field(spec: str) -> tuple[float, float]:
         except (OSError, ValueError, KeyError, TypeError) as e:
             raise ValueError(
                 f"{FIELD_ENV}: no field width/height in {spec!r} ({e!r}). Re-run "
-                + "robocup_testing's `calibrate-field --field W H`, or pass the numbers."
+                + "vision's `calibrate-field --field W H`, or pass the numbers."
             )
     if w <= 0 or h <= 0:
         raise ValueError(f"{FIELD_ENV}: field size must be positive, got {w} x {h}")
@@ -185,6 +185,13 @@ VISION_FIELD_MARGIN = 0.05  # meters outside the real field before a sighting is
 # Ride the tracker's Kalman coast (visible: false) through short dropouts instead
 # of handing the body to sim physics. Bounded by the reach circle.
 VISION_TRACKER_COAST = True
+
+# Rest circle, real-world units: a camera ball that stays slower than REST_SPEED
+# and inside REST_RADIUS of where it settled is held exactly there, velocity 0,
+# so detection jitter does not shake the sim ball. Leaving the circle, or
+# speeding up, moves the anchor with it. 0 radius turns it off.
+VISION_BALL_REST_RADIUS = 0.03  # meters
+VISION_BALL_REST_SPEED = 0.15  # m/s
 
 # Gaps longer than this in a replayed log are squashed to VISION_REPLAY_GAP_CAP.
 VISION_REPLAY_GAP_CAP = 1.0  # seconds

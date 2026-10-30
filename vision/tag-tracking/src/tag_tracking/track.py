@@ -1,44 +1,48 @@
 """Live AprilTag tracking against a virtual field.
 
-    uv run track --tag-size 0.080
-    uv run track --synthetic-camera      # no webcam: watch it work on a fully simulated field
-    uv run track --calibrate-live        # real webcam: calibrate from reference tags, then track
+    uv run track --tag-size 0.080        # tags from PhotonVision (photon.py)
+    uv run track --synthetic-camera      # no camera: watch it work on a fully simulated field
+    uv run track --calibrate-live        # calibrate from reference tags, then track
+    uv run photon-sim                    # no hardware, but the real PhotonVision path:
+                                         # run this, then `track` in another terminal
 
 Shows the camera feed with the virtual field drawn on it, a top-down plan view,
 and each tag's position, heading and velocity in field coordinates. Velocity
 comes from a per-tag Kalman filter (filter.py); the plan view draws the raw
 per-frame reading as a small hollow ring and the filtered track as the solid
 dot, with a white arrow showing where it will be in half a second, so the two
-can be compared live. The field is not real: it is
-whatever vision_core/field.py says it is -- and with --synthetic-camera, neither
-is the camera feed; a fake, moving tag on a fake field is calibrated and
-tracked live, with no hardware at all, through this exact same window.
---calibrate-live is the real-camera counterpart: point a real webcam at real
-reference tags (e.g. 4 printed AprilTags on a paper field) and it solves the
-field pose live, in this same window, before tracking begins -- no separate
-calibrate-field run or saved calib/field_pose.json required first.
+can be compared live.
+
+The tags come from PhotonVision, which owns the camera and its lens
+calibration; the picture behind the overlay is its camera stream, or a blank
+canvas with --no-stream. The filter steps by PhotonVision's capture times, so
+fps on screen is the rate its results arrive at.
+
+The field is not real until calibrate-field has measured it: it is whatever
+vision_core/field.py says it is -- and with --synthetic-camera, neither is the
+camera feed; a fake, moving tag on a fake field is calibrated and tracked live,
+with no hardware at all, through this exact same window. --calibrate-live is
+the real-camera counterpart: point the camera at real reference tags (e.g. 4
+printed AprilTags on a paper field) and it solves the field pose live, in this
+same window, before tracking begins -- no separate calibrate-field run or saved
+calib/field_pose.json required first.
 
 Keys:
     q / Esc  quit           g  grid on/off          t  trails on/off
-    [ / ]    fx -/+ 2%      w  wall / floor         r  reset trails and tracks
-    s        save intrinsics to calib/intrinsics.json
+    w        wall / floor   r  reset trails and tracks
 """
 
 from __future__ import annotations
 
 import argparse
-import contextlib
-import os
-import sys
 import time
 from collections import defaultdict, deque
 from pathlib import Path
 
 import cv2
 import numpy as np
-import pupil_apriltags as pa
 from vision_core import intrinsics as intr
-from vision_core.camera import list_cameras, open_camera, read_frame, read_key
+from vision_core.camera import read_key
 from vision_core.field import (
     CameraFieldTransform,
     Field,
@@ -51,50 +55,27 @@ from vision_core.planview import OUT_COLOR, PlanView, color_for, draw_field, sid
 from .calibrate_field import (
     FRAMES_PER_CORNER,
     MIN_FRAMES as CALIB_MIN_FRAMES,
+    LiveSource,
     calibrate_field,
-    capture_reference_frames,
+    capture_reference_views,
     capture_sequential_corners,
     default_field_layout,
     field_pose_path,
     saved_origin,
     solve_sequential,
 )
+from .detect import LocalTagDetector, for_tracking
 from .filter import SPEED_EPS, TagFieldState, TagTracker
+from .photon import add_photon_args
 from .pose import TagFieldPose, tag_field_pose
 
 TRAIL_LEN = 90
 GHOST_COLOR = (120, 120, 120)  # coasting: not actually seen this frame
 VELOCITY_COLOR = (255, 255, 255)
 HEADER_H = 38  # px, the band above the camera image
-
-
-@contextlib.contextmanager
-def suppressed_stderr():
-    """Silence warnings pupil_apriltags prints straight to the C-level stderr
-    file descriptor ("more than one new minima found", "Matrix is singular")
-    -- benign notices from its per-tag pose solver when a flat tag is viewed
-    close to head-on, where two tilts explain the image almost equally well.
-    It picks the better one either way and keeps going; there is no real
-    hardware issue underneath to want to see. Happens with real cameras too
-    (a tag held flat-on is the same ambiguous geometry, camera or not), so
-    this wraps every detect() call, not just --synthetic-camera. Python
-    exceptions are unaffected -- this only hides that library's own fprintf
-    output.
-    """
-    try:
-        fd = sys.stderr.fileno()
-    except (AttributeError, OSError, ValueError):
-        yield  # stderr is not a real file (captured / IDE console): nothing to silence
-        return
-    saved = os.dup(fd)
-    devnull = os.open(os.devnull, os.O_WRONLY)
-    try:
-        os.dup2(devnull, fd)
-        yield
-    finally:
-        os.dup2(saved, fd)
-        os.close(devnull)
-        os.close(saved)
+#: No PhotonVision result for this long and the tracks coast without it, so
+#: the window stays live while its settings are being changed.
+PHOTON_QUIET_S = 0.25
 
 
 # --------------------------------------------------------------------------
@@ -221,7 +202,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(
         description=__doc__.splitlines()[0],
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="Keys: q quit, g grid, t trails, [ ] fx, w wall/floor, r reset, s save",
+        epilog="Keys: q quit, g grid, t trails, w wall/floor, r reset",
     )
     ap.add_argument("--tag-size", type=float, default=0.080,
                     help="black-square width in metres (default 0.080)")
@@ -252,14 +233,12 @@ def main() -> None:
                          "degrees. 90 is straight down, directly over the field "
                          "centre, which is the rig this is built for. Lower it "
                          "only if your camera really is off to one side")
-    ap.add_argument("--camera", type=int, default=0, help="camera index")
-    ap.add_argument("--width", type=int, default=1280)
-    ap.add_argument("--height", type=int, default=720)
-    ap.add_argument("--hfov", type=float, default=None,
-                    help="assumed horizontal FOV in degrees, if not calibrated")
+    ap.add_argument("--width", type=int, default=1280,
+                    help="--synthetic-camera: image width")
+    ap.add_argument("--height", type=int, default=720,
+                    help="--synthetic-camera: image height")
     ap.add_argument("--heading-offset", type=float, default=0.0,
                     help="degrees added to theta, if the tag is not mounted upright")
-    ap.add_argument("--list-cameras", action="store_true")
     ap.add_argument("--display-width", type=int, default=1600,
                     help="scale the window to this width in pixels; "
                          "enlarges as well as shrinks")
@@ -273,17 +252,17 @@ def main() -> None:
                     help="filter process noise for turning, deg/s^2")
     ap.add_argument("--field-pose", type=str, default=None,
                     help="field pose file to load, or to save to with --calibrate-live "
-                         "(default robocup_testing/calib/field_pose.json -- see calibrate-field)")
+                         "(default vision/calib/field_pose.json -- see calibrate-field)")
     ap.add_argument("--synthetic-field", action="store_true",
                     help="use the made-up field even if a calibrated one is saved")
     ap.add_argument("--corner-origin", action="store_true",
                     help="ignore any custom origin saved by calibrate-field and report "
                          "positions from the first field corner, as before")
     ap.add_argument("--synthetic-camera", action="store_true",
-                    help="no webcam: track an animated tag on a simulated field instead, "
+                    help="no PhotonVision: track an animated tag on a simulated field instead, "
                          "calibrating live from simulated reference tags")
     ap.add_argument("--calibrate-live", action="store_true",
-                    help="real webcam: calibrate the field pose live from reference tags "
+                    help="calibrate the field pose live from reference tags "
                          "(e.g. 4 printed AprilTags on a paper field) before tracking, "
                          "instead of loading a previously saved calib/field_pose.json")
     ap.add_argument("--sequential", action="store_true",
@@ -293,24 +272,21 @@ def main() -> None:
     ap.add_argument("--frames-per-corner", type=int, default=FRAMES_PER_CORNER,
                     help=f"--sequential: samples to average at each corner "
                          f"(default {FRAMES_PER_CORNER})")
+    add_photon_args(ap)
     args = ap.parse_args()
-
-    if args.list_cameras:
-        list_cameras()
-        return
 
     pose_path = Path(args.field_pose) if args.field_pose else field_pose_path()
     field = resolve_field(
         args.field, None if (args.synthetic_camera or args.synthetic_field) else pose_path)
     mode = args.mode or ("floor" if args.synthetic_camera else "wall")
-    cap = None
+    live = None
     sim_cam = None
     calibrated_note = ""
 
     if args.synthetic_camera:
         from .synthetic import SyntheticFieldCamera, orbit_trajectory
 
-        print("SIMULATED CAMERA -- no webcam opened. The field, the camera, and the")
+        print("SIMULATED CAMERA -- no PhotonVision. The field, the camera, and the")
         print("tracked tag are all synthetic; everything else on screen -- overlay,")
         print("plan view, readout -- is exactly what a real run would show.\n")
 
@@ -325,8 +301,9 @@ def main() -> None:
         )
 
         print(f"calibrating field pose from {len(layout)} simulated reference tags...")
-        calib_frames = [sim_cam.read() for _ in range(20)]
-        result = calibrate_field(calib_frames, layout, K, min_frames=10,
+        local = LocalTagDetector()
+        calib_views = [local.detect(sim_cam.read()) for _ in range(20)]
+        result = calibrate_field(calib_views, layout, K, min_frames=10,
                                  tag_size=args.tag_size)
         print(f"  {result.transform.source}")
         print(f"  agreement across frames: rotation spread "
@@ -339,26 +316,12 @@ def main() -> None:
             print("note: --calibrate-live is ignored with --synthetic-camera "
                   "(the field pose is already solved live, from simulated tags)\n")
     else:
-        cap = open_camera(args.camera, args.width, args.height)
-        ok, frame = read_frame(cap)
-        if not ok:
-            raise SystemExit("camera opened but the first frame failed")
-        h, w = frame.shape[:2]
-
-        if args.hfov is not None:
-            K = intr.from_fov(w, h, args.hfov)
-            dist, intr_source = np.zeros(5), f"assumed {args.hfov:g} deg HFOV"
-        else:
-            K, dist, intr_source = intr.load(w, h)
+        live = LiveSource(args)
+        w, h = live.tags.size
+        K, dist, intr_source = live.K, live.dist, live.tags.source
 
         if args.calibrate_live:
             layout = default_field_layout(field)
-
-            def _read_bgr() -> np.ndarray:
-                ok2, frm = read_frame(cap)
-                if not ok2:
-                    raise RuntimeError("camera stopped returning frames")
-                return frm
 
             if args.sequential:
                 print(f"calibrating live: move ONE tag to each of {len(layout)} corners of "
@@ -368,7 +331,7 @@ def main() -> None:
                       "('r' retries the current one), Esc aborts.\n")
 
                 averaged = capture_sequential_corners(
-                    _read_bgr, layout, args.frames_per_corner,
+                    live.read, layout, args.frames_per_corner,
                     window_name="calibrate-field (one tag, live)",
                 )
                 result = solve_sequential(averaged, layout, K, dist, tag_size=args.tag_size)
@@ -382,11 +345,11 @@ def main() -> None:
                 print(f"hold steady; capturing until {CALIB_MIN_FRAMES}+ good frames, "
                       "'q' to finish, Esc to abort.\n")
 
-                calib_frames = capture_reference_frames(
-                    _read_bgr, layout, min_frames=CALIB_MIN_FRAMES,
+                calib_views = capture_reference_views(
+                    live.read, layout, min_frames=CALIB_MIN_FRAMES,
                     window_name="calibrate-field (live)",
                 )
-                result = calibrate_field(calib_frames, layout, K, dist, min_frames=CALIB_MIN_FRAMES,
+                result = calibrate_field(calib_views, layout, K, dist, min_frames=CALIB_MIN_FRAMES,
                                          tag_size=args.tag_size)
                 print(f"\n{result.transform.source}")
                 print(f"agreement across frames: rotation spread "
@@ -424,15 +387,15 @@ def main() -> None:
         # On screen too, so a custom zero is never a surprise.
         transform.source += f", origin ({transform.origin[0]:g}, {transform.origin[1]:g})"
 
-    detector = pa.Detector(families="tag36h11", nthreads=4, quad_decimate=1.0,
-                           decode_sharpening=0.25)
+    local = LocalTagDetector() if sim_cam is not None else None
 
     show_grid, show_trails = True, True
     trails: dict[int, deque] = defaultdict(lambda: deque(maxlen=TRAIL_LEN))
     tracker = TagTracker(field, sigma_a=args.sigma_a, sigma_alpha_deg=args.sigma_alpha)
     plan = PlanView(field, height=h, mode=mode)
     readout_rows = 1  # most tag lines shown so far; the bottom band only grows
-    fps, last_t = 0.0, time.perf_counter()
+    fps, last_t = 0.0, None
+    last_perf, quiet = time.perf_counter(), False
 
     print(f"\nfield {field.width:g} x {field.height:g} m, {transform.source}")
     print(f"tag size {args.tag_size * 1000:.1f} mm, intrinsics: {intr_source}")
@@ -441,34 +404,52 @@ def main() -> None:
     win = "virtual field tracking"
     cv2.namedWindow(win, cv2.WINDOW_AUTOSIZE)
 
-    # Undistort the whole frame, not just the grey copy the detector sees:
-    # the overlay is drawn on `frame`, so both must live in the same (pinhole)
-    # pixel space or the outlines drift off the tags towards the edges.
-    # Maps are built once; cv2.undistort rebuilds them every call (~8x slower).
-    undistort_maps = intr.undistort_maps(K, dist, w, h)
+    # Undistort the whole picture, not just the tag corners: the overlay is
+    # drawn on `frame`, so both must live in the same (pinhole) pixel space or
+    # the outlines drift off the tags towards the edges. Maps are built once;
+    # cv2.undistort rebuilds them every call (~8x slower). A blank canvas has
+    # nothing to undistort.
+    has_picture = live is None or live.stream is not None
+    undistort_maps = intr.undistort_maps(K, dist, w, h) if has_picture else None
 
     while True:
         if sim_cam is not None:
-            frame = cv2.cvtColor(sim_cam.read(), cv2.COLOR_GRAY2BGR)
+            grey = sim_cam.read()
+            frame = cv2.cvtColor(grey, cv2.COLOR_GRAY2BGR)
+            raw = local.detect(grey)
+            now = time.perf_counter()
+            dt = 0.0 if last_t is None else now - last_t
+            last_t = now
         else:
-            ok, frame = read_frame(cap)
-            if not ok:
-                print("camera stopped returning frames")
-                break
-        # dt is measured, not assumed: the filter scales every velocity by it,
-        # and a webcam's real frame time is neither 1/30 nor steady.
-        now = time.perf_counter()
-        dt = now - last_t
-        last_t = now
-        fps = 0.9 * fps + 0.1 / max(dt, 1e-6)
+            result = live.tags.wait(PHOTON_QUIET_S)
+            frame = live.frame()
+            now = time.perf_counter()
+            if result is not None:
+                if quiet:
+                    print("PhotonVision is back")
+                    quiet = False
+                # PhotonVision's capture time, not ours: the filter scales every
+                # velocity by dt, and results reach us neither on time nor steadily.
+                raw = result.detections
+                dt = 0.0 if last_t is None else max(0.0, result.t - last_t)
+                last_t = result.t
+            else:
+                if not quiet:
+                    print("no results from PhotonVision -- tracks coasting until it is back")
+                    quiet = True
+                # Step on as if it saw nothing. Its clock moves by our gap too,
+                # which keeps the next result's dt right.
+                raw = []
+                dt = now - last_perf
+                if last_t is not None:
+                    last_t += dt
+            last_perf = now
+        if dt > 0:
+            fps = 0.9 * fps + 0.1 / dt
 
         if undistort_maps is not None:
             frame = cv2.remap(frame, *undistort_maps, cv2.INTER_LINEAR)
-        grey = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        cam_params = (K[0, 0], K[1, 1], K[0, 2], K[1, 2])
-        with suppressed_stderr():
-            dets = detector.detect(grey, estimate_tag_pose=True,
-                                   camera_params=cam_params, tag_size=args.tag_size)
+        dets = for_tracking(raw, K, dist, args.tag_size)
 
         poses = [
             tag_field_pose(d, transform, field, args.heading_offset, K=K) for d in dets
@@ -511,13 +492,6 @@ def main() -> None:
         elif key == ord("r"):
             trails.clear()
             tracker.reset()
-        elif key in (ord("["), ord("]")):
-            K = K.copy()
-            K[0, 0] *= 0.98 if key == ord("[") else 1.02
-            K[1, 1] = K[0, 0]
-            intr_source = "hand-tuned"
-            undistort_maps = intr.undistort_maps(K, dist, w, h)
-            print(f"fx {K[0, 0]:.1f}  -> {intr.hfov_of(K, w):.1f} deg HFOV")
         elif key == ord("w"):
             if using_calibrated:
                 extra = ("restart without --synthetic-camera for a movable wall/floor demo"
@@ -531,19 +505,9 @@ def main() -> None:
                 trails.clear()
                 tracker.reset()  # positions jump with the transform; old velocities are junk
                 print(f"transform: {transform.source}")
-        elif key == ord("s"):
-            if sim_cam is not None:
-                print("no real camera to calibrate in --synthetic-camera mode")
-            else:
-                # Keep whatever distortion was loaded: saving K alone would
-                # silently zero a calibrate-camera result.
-                path = intr.save(K, w, h, intr_source, dist=dist)
-                print(f"saved {path}")
-                if not np.any(dist):
-                    print("(fx only, no lens distortion -- run calibrate-camera for that)")
 
-    if cap is not None:
-        cap.release()
+    if live is not None:
+        live.close()
     cv2.destroyAllWindows()
 
 

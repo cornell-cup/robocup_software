@@ -12,16 +12,32 @@ up here automatically.
 independently** — this does not touch either of them. Use this one when you
 actually need both at once; use the other two when you only need one.
 
+The camera is PhotonVision's (see
+[tag-tracking's PhotonVision setup](../tag-tracking/#photonvision-setup)). The
+tags come from PhotonVision itself, over NetworkTables; the ball is found in
+PhotonVision's raw camera stream, undistorted with the lens calibration done in
+PhotonVision. Same field, same lens, same window.
+
 ## Run it
 
-You need both a field calibration (or the made-up field, which works fine
-too) and a ball color profile first — this doesn't calibrate either one
-itself:
+You need PhotonVision set up, a field calibration (or the made-up field, which
+works fine too) and a ball color profile first — this doesn't calibrate any of
+them itself:
 
 ```powershell
 uv run calibrate-ball --profile test --radius-mm 20   # if you have not already
 uv run track-combined --ball-profile test --tag-size 0.080
 ```
+
+Exposure and white balance are PhotonVision's camera settings now: lock both
+there, or the ball's colour drifts out from under its profile. The profile
+itself should be measured on the same camera at those same settings, since a
+histogram taken under others won't match the stream. **Known gap:**
+`calibrate-ball` still opens a local webcam by index, not PhotonVision's
+stream, so it cannot yet sample the picture `track-combined` actually sees.
+
+With no hardware, [`photon-sim`](../tag-tracking/#no-hardware-photon-sim)
+stands in for PhotonVision: the tags work end to end, but it renders no ball.
 
 You'll see one window: camera feed on the left with the field overlay, every
 detected tag outlined, and the ball circled and cross-marked; one combined
@@ -32,22 +48,23 @@ line per tag, then the ball's line, at the bottom.
 
 Keys are the union of both trackers': `q`/Esc quit, `g` grid, `t` trails,
 `m` mask overlay, `w` wall/floor (only when the field is not calibrated),
-`[`/`]` nudge fx, `r` reset trails and tracks, `s` save intrinsics.
+`r` reset trails and tracks, `-`/`=` lower/raise `--ball-min-conc`.
 
 ## Flags
 
-Shared flags (`--field`, `--mode`, `--camera`, `--field-pose`, ...) are named
+Shared flags (`--field`, `--mode`, `--field-pose`, ...) are named
 the same as in `track`/`track-ball`. Tag- and ball-specific tuning flags are
 prefixed to keep them unambiguous when both are in play at once, since e.g.
 each tracker has its own independent `sigma_a`:
 
 | Flag | For |
 | --- | --- |
-| `--tag-size`, `--heading-offset`, `--tag-sigma-a`, `--tag-sigma-alpha` | the tag tracker |
-| `--ball-profile`, `--ball-radius`, `--ball-sigma-a`, `--ball-sigma-a-air`, `--ball-sigma-px`, `--ball-min-conc` | the ball tracker (`--ball-min-conc`: mean color likelihood 0-255 a blob needs to count as the ball, default 80; below it no ball is published) |
+| `--tag-size`, `--heading-offset`, `--tag-sigma-a`, `--tag-sigma-alpha`, `--tag-coast` | the tag tracker (`--tag-coast`: seconds a tag is reported on its predicted motion after it was last seen, default 0.5). AprilTag decimation is a PhotonVision pipeline setting now, not a flag |
+| `--ball-profile`, `--ball-radius`, `--ball-sigma-a`, `--ball-sigma-a-air`, `--ball-sigma-px`, `--ball-min-conc`, `--ball-airborne` | the ball tracker (`--ball-min-conc`: mean color likelihood 0-255 a blob needs to count as the ball, default 80; below it no ball is published. The ball is kept on the table unless `--ball-airborne` is given: with the camera ~3 m up its apparent size is too unreliable to tell height) |
 | `--json-out`, `--serve-http`, `--json-log`, `--zmq-pub`, `--no-window` | publishing to another program — see [Feeding another program](#feeding-another-program) |
-| `--mjpg` | ask the camera for MJPG, which most USB webcams need to reach 720p at full frame rate — see [Latency](#latency-capture-thread-and---mjpg) |
-| everything else | shared: field, camera, calibration |
+| `--mjpeg PORT` | also serve what the window shows as MJPEG at `http://<host>:PORT/stream.mjpg`, even with `--no-window` (the web app's Tracking page uses it) |
+| `--photon-camera`, `--nt-server`, `--stream`, `--photon-res` | PhotonVision: which camera, where NetworkTables is, the stream URL, the pipeline resolution — see [tag-tracking's PhotonVision setup](../tag-tracking/#photonvision-setup). There is no `--no-stream` here: the ball needs the picture |
+| everything else | shared: field, calibration |
 
 `--mode` defaults to `floor` here (not `wall`, unlike plain `track`) — this
 skill exists for the real robot+ball rig, where `floor` is the physically
@@ -159,8 +176,8 @@ shows up in `seq`. As with any `PUB`, a subscriber that connects mid-run
 starts at whatever frame comes next.
 
 pyzmq is an **optional** dependency — nothing else needs it. Without it,
-`--zmq-pub` exits straight away with the install command, before the camera
-is opened. The monorepo root's `pyproject.toml` asks for `combined-tracking[zmq]`,
+`--zmq-pub` exits straight away with the install command, before PhotonVision
+is connected to. The monorepo root's `pyproject.toml` asks for `combined-tracking[zmq]`,
 so a plain `uv sync` there already installs it into the shared `.venv`.
 
 ### Headless — `--no-window`
@@ -173,8 +190,8 @@ No window, no overlay, no plan view: **nothing is drawn at all**, and
 `cv2.imshow` is never called. Use it when the only consumer is another
 program, which then gets the frames that drawing would have cost (on a
 laptop, about 30 fps headless against 24 with the window). There are no keys
-without a window, so **Ctrl+C quits**, and still shuts down cleanly — camera
-unlocked, log closed, sockets released. Ctrl+C works the same with the window
+without a window, so **Ctrl+C quits**, and still shuts down cleanly — stream
+closed, log closed, sockets released. Ctrl+C works the same with the window
 open too.
 
 ### Shape
@@ -189,6 +206,7 @@ message:
   "seq": 1842,
   "timestamp": 1790437358.3149,
   "t_capture": 1790437358.2909,
+  "t_tags": 1790437358.2618,
   "t_publish": 1790437358.3149,
   "field": { "width": 1.2, "height": 0.8, "x0": 0.0, "y0": 0.0 },
   "tags": [
@@ -205,7 +223,8 @@ message:
   },
   "stats": {
     "fps": 29.98, "tag_ms": 14.87, "ball_ms": 8.86, "latency_ms": 23.96,
-    "capture_dropped": 4, "ball_dropouts": 57
+    "capture_dropped": 4, "photon_latency_ms": 18.2, "photon_skipped": 0,
+    "ball_dropouts": 57
   }
 }
 ```
@@ -227,8 +246,9 @@ seconds, on the tracker's clock.
 
 | Key | Meaning |
 | --- | --- |
-| `seq` | Frame counter, `+1` for every frame processed, from 0 at startup. Never repeats or goes backwards within a run. A gap is a frame *this reader* missed (a slow `--zmq-pub` subscriber, an HTTP poll that skipped one), never one the tracker skipped — those are in `stats.capture_dropped`. It restarts at 0 when the tracker restarts. |
-| `t_capture` | Taken immediately after the camera read returned the frame. Anything before that — exposure, USB transfer, the driver — is not included, and can't be seen from here. |
+| `seq` | Frame counter, `+1` for every stream frame processed, from 0 at startup. Never repeats or goes backwards within a run. A gap is a frame *this reader* missed (a slow `--zmq-pub` subscriber, an HTTP poll that skipped one), never one the tracker skipped — those are in `stats.capture_dropped`. It restarts at 0 when the tracker restarts. |
+| `t_capture` | Taken immediately after the frame arrived from PhotonVision's stream. Anything before that — exposure, PhotonVision, JPEG encoding, the network — is not included, and can't be seen from here. |
+| `t_tags` | When PhotonVision captured the frame `tags` were measured in, on the same clock as `t_capture`: the result's arrival time minus the capture-to-publish latency PhotonVision reports. PhotonVision sends tags on its own schedule, not with the stream frames, so this is usually a little before `t_capture`. While PhotonVision is silent and the tracks coast, it moves forward with them. `null` until the first result arrives. The vision bridge uses it, not `t_capture`, to time tag sightings. |
 | `t_publish` | When this doc was built, after detection and filtering. |
 | `timestamp` | Kept for existing readers. Same value as `t_publish`: it has always been the publish time, not the capture time. New readers should use `t_capture` for "when was this true" and `t_publish` for "when was this sent". |
 
@@ -240,7 +260,7 @@ not just one.
 | `x`, `y`, `theta_deg` | Filtered position, and heading read off the tag |
 | `vx`, `vy`, `speed`, `direction_deg`, `omega_deg` | From the filter. `direction_deg` is direction of *travel*, 0 below 0.05 m/s. `omega_deg` is turn rate in deg/s, CCW positive |
 | `inside` | Within the field rectangle |
-| `visible` | Detected this frame. `false` while coasting on the last velocity through a short dropout |
+| `visible` | Detected in PhotonVision's latest result. `false` while coasting on the last velocity through a short dropout, including when PhotonVision sends nothing for more than 0.25 s |
 | `off_plane_m` | Last measured height off the field plane, a diagnostic. A tag on the field reads within ~1 cm of 0; see [Off-plane readings](#off-plane-readings) |
 | `age` | Seconds since last detected; 0 while visible |
 | `lost` | `true` once `age` exceeds the tag tracker's coast limit (0.5 s). A lost tag is **dropped from the list** that same frame, so every tag in the list has `lost: false`. The key is there so a reader can handle tags and the ball with the same code. |
@@ -282,32 +302,38 @@ A ball goes through three states:
 
 | Key | Meaning |
 | --- | --- |
-| `fps` | Frames processed per second, smoothed. This is not the camera's rate: when processing is slower than the camera, frames are dropped (next row) |
-| `tag_ms` | AprilTag detection, field pose and tag filter, this frame |
+| `fps` | Stream frames processed per second, smoothed. This is not the stream's rate: when processing is slower than the stream, frames are dropped (`capture_dropped`) |
+| `tag_ms` | Reading PhotonVision's latest result, field pose and tag filter, this frame. The detection itself happens in PhotonVision and is not in here |
 | `ball_ms` | Ball mask, blob detection and ball filter, this frame |
-| `latency_ms` | `t_publish − t_capture`: how old the frame was by the time this doc went out |
-| `capture_dropped` | Cumulative. Frames the camera delivered that were overwritten by a newer one before the tracker got to them. This means the tracker is slower than the camera. It is not a detection failure |
+| `latency_ms` | `t_publish − t_capture`: how old the stream frame was by the time this doc went out |
+| `photon_latency_ms` | PhotonVision's own latency for its latest result, as it reports it |
+| `photon_skipped` | Cumulative. PhotonVision results that arrived between two frames and were passed over for the newest one. The tag filter steps by PhotonVision's capture times, so a skipped result costs a measurement, not accuracy |
+| `capture_dropped` | Cumulative. Stream frames that were overwritten by a newer one before the tracker got to them. This means the tracker is slower than the stream. It is not a detection failure |
 | `ball_dropouts` | Cumulative. Frames processed while a ball track existed but the ball wasn't detected (coasting or lost). This is a detection failure, and is counted separately from the above |
 
-### Latency: capture thread and `--mjpg`
+### Latency: two clocks, newest-only
 
-The camera is read on its own thread, which keeps **only the newest frame**.
-In a single read-then-process loop, frames that arrive while the previous one
-is being processed queue up in the driver. Each read then returns an older
-frame than the one the camera just took, and the lag grows to the depth of
-that queue. Here a frame the tracker was too slow to take is overwritten and
-counted in `stats.capture_dropped`, so the tracker always works on the most
-recent picture. The filters are given the real time between the frames they
-did process, so a dropped frame does not distort velocity.
+The tags and the ball run on their own clocks. The ball steps once per stream
+frame; the tags step once per PhotonVision result, by PhotonVision's capture
+times, since results arrive on their own schedule rather than with the frames.
+If PhotonVision goes quiet for more than 0.25 s, the tag tracks are stepped
+on as if it saw nothing, so they coast and drop instead of freezing in place.
 
-The driver is also asked to queue at most one frame (`CAP_PROP_BUFFERSIZE=1`).
-Many Windows webcams ignore this, and the startup lines say whether it was
-honoured. The capture thread drains the queue either way.
+PhotonVision's stream is read on its own thread, which keeps **only the newest
+frame**. In a single read-then-process loop, frames that arrive while the
+previous one is being processed queue up. Each read then returns an older
+frame than the newest one sent, and the lag grows to the depth of that queue.
+Here a frame the tracker was too slow to take is overwritten and counted in
+`stats.capture_dropped`, so the tracker always works on the most recent
+picture. Likewise only the newest PhotonVision result is used, the others
+counted in `stats.photon_skipped`. The filters are given the real time
+between the frames or results they did process, so a dropped one does not
+distort velocity.
 
-`--mjpg` asks the camera for MJPG instead of its default uncompressed format.
-Many USB webcams can't send 1280×720 uncompressed at 30 fps and quietly drop
-to 10–15 fps; MJPG fixes that. Some drivers don't report the format they
-ended up in, so check the `fps` stat to see whether it helped.
+Capture format, resolution and frame rate are PhotonVision camera settings
+now (there is no `--mjpg`). If the stream is sent at a different resolution
+from the pipeline's, frames are scaled to match the tag corners and the lens
+calibration, and the startup lines say so.
 
 ### Off-plane readings
 
@@ -321,7 +347,7 @@ A large **negative** value is not a tag held in the air. It means the tag
 looks *further away* than the plane it is lying on, which is physically
 impossible, so the plane or the tag's range is wrong. The usual cause is
 running without `calib/field_pose.json`, on the made-up field: camera
-`--cam-height 1.5` m straight down, 60° HFOV unless `intrinsics.json` exists.
+`--cam-height 1.5` m straight down.
 In that case tag and ball positions are measured on **different scales**:
 
 - A tag's `x`/`y` come from its own 3D pose, which is ranged from the tag's
@@ -335,8 +361,8 @@ In that case tag and ball positions are measured on **different scales**:
 In one recorded session, tags read `-0.66` m (tag 0) and `-1.4` m (tag 4).
 If those tags were lying flat, the ball's offsets from the field centre came
 out about 0.5–0.7× their true size: 20–30 cm of disagreement with the tags
-at the field edge. The fix is `uv run calibrate-field` (and
-`calibrate-camera`), not a code change.
+at the field edge. The fix is `uv run calibrate-field` (and PhotonVision's
+lens calibration), not a code change.
 
 ## Why a separate skill, not a flag on `track` or `track-ball`
 
@@ -351,13 +377,14 @@ run standalone.
 
 ```
 src/combined_tracking/
-  track_combined.py   opens the camera once, runs both detectors on every frame
+  track_combined.py   PhotonVision's tags + the ball from its stream, one loop
 ```
 
 Everything else it uses lives in `tag-tracking`, `ball-tracking`, or
 `vision-core` — this file is deliberately thin: argument parsing, one shared
-camera/frame loop fed by a newest-frame-only capture thread
-(`LatestFrameGrabber`), drawing functions that combine both trackers' output
+frame loop fed by PhotonVision's stream on a newest-frame-only thread and its
+tags over NetworkTables (`PhotonStream`, `PhotonTags` in
+`tag_tracking.photon`), drawing functions that combine both trackers' output
 onto one readout strip and one plan-view panel (since neither existing
 `draw_readout`/`draw_plan` can be called twice without their fixed-size
 screen regions colliding), and the four `--json-out`/`--serve-http`/

@@ -12,8 +12,8 @@ any one skill's target, only with the camera itself, same as intrinsics.py.
 Also holds SyntheticChArucoCamera, a digital stand-in for a webcam waving a
 board around -- so this module's own math can be exercised and trusted with
 no hardware attached. See tag_tracking.synthetic for the AprilTag-specific
-counterpart (a digital field with reference tags), which does need pupil_apriltags
-and so cannot live here.
+counterpart (a digital field with reference tags), which matters only to that
+skill and so does not live here.
 
 The board's physical size barely matters for calibration itself: plane-based
 calibration (Zhang's method, what cv2.calibrateCamera runs) cannot observe

@@ -1,7 +1,7 @@
 """One-time field-pose calibration: point a calibrated camera at the fixed
 reference AprilTags and solve where the field is, once.
 
-    uv run calibrate-field                                    # live camera, default 4-corner layout
+    uv run calibrate-field                                    # live, from PhotonVision, default 4-corner layout
     uv run calibrate-field --field 1.2 0.8                    # a different field size
     uv run calibrate-field --layout 0:0,0 1:1.2,0 2:1.2,0.8 3:0,0.8
     uv run calibrate-field --synthetic                        # self-test, no hardware
@@ -31,9 +31,13 @@ or press Enter to keep the first corner as before. The click needs the pose --
 that is what turns a pixel into a field point -- which is why it comes after.
 The choice is saved as `origin` next to R/t; every tracker picks it up.
 
-Saves to robocup_testing/calib/field_pose.json (vision_core.paths), same as
-calib/intrinsics.json. track.py loads this automatically once it exists, in
-place of the made-up field.
+Live, the tags and the lens calibration come from PhotonVision (photon.py),
+which owns the camera; calibrate the lens in its UI first. The picture, for
+the preview and the origin picker, is its camera stream -- or a blank canvas
+with --no-stream, since the solve only needs the tags.
+
+Saves to vision/calib/field_pose.json (vision_core.paths). track.py
+loads this automatically once it exists, in place of the made-up field.
 """
 
 from __future__ import annotations
@@ -45,8 +49,7 @@ from typing import Callable, Iterable
 
 import cv2
 import numpy as np
-import pupil_apriltags as pa
-from vision_core.camera import open_camera, read_frame, read_key
+from vision_core.camera import read_key
 from vision_core.field import (
     Field,
     ReferenceTagFieldTransform,
@@ -57,7 +60,13 @@ from vision_core.field import (
 )
 from vision_core.planview import draw_field
 
+from .detect import LocalTagDetector, TagDetection, for_tracking
+from .photon import add_photon_args, blank_frame, open_photon
 from .pose import tag_field_pose
+
+#: What the live capture loops read: the picture to show, and the tags in it,
+#: both in raw (distorted) pixels.
+Reader = Callable[[], tuple[np.ndarray, list[TagDetection]]]
 
 MIN_FRAMES = 10
 MAX_LIVE_FRAMES = 40
@@ -103,7 +112,7 @@ class FieldCalibrationResult:
 
 
 def calibrate_field(
-    frames: Iterable[np.ndarray],
+    views: Iterable[list[TagDetection]],
     layout: dict[int, tuple[float, float]],
     K: np.ndarray,
     dist: np.ndarray | None = None,
@@ -111,24 +120,22 @@ def calibrate_field(
     max_frames: int = MAX_LIVE_FRAMES,
     tag_size: float | None = None,
 ) -> FieldCalibrationResult:
-    """Solve the field pose from several frames of the reference tags and
-    average, instead of trusting one noisy solvePnP call.
+    """Solve the field pose from several views of the reference tags -- one
+    list of detections per frame -- and average, instead of trusting one noisy
+    solvePnP call.
 
     Pass `tag_size` (metres) so each solve uses all four corners of every tag
     rather than just the centres. solvePnP inside
     ReferenceTagFieldTransform.from_detections applies `dist` itself, so the
-    frames do not need to be undistorted first.
+    detections stay in raw pixels.
     """
-    detector = pa.Detector(families="tag36h11", nthreads=2, quad_decimate=1.0)
     Rs: list[np.ndarray] = []
     ts: list[np.ndarray] = []
     seen = 0
-    for frame in frames:
+    for dets in views:
         seen += 1
         if len(Rs) >= max_frames:
             break
-        grey = frame if frame.ndim == 2 else cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        dets = detector.detect(grey)
         try:
             t = ReferenceTagFieldTransform.from_detections(dets, layout, K, dist, tag_size)
         except LookupError:
@@ -161,32 +168,27 @@ def parse_layout(spec: list[str]) -> dict[int, tuple[float, float]]:
     return layout
 
 
-def capture_reference_frames(
-    read_bgr: Callable[[], np.ndarray],
+def capture_reference_views(
+    read: Reader,
     layout: dict[int, tuple[float, float]],
     min_frames: int = MIN_FRAMES,
     max_frames: int = MAX_LIVE_FRAMES,
     window_name: str = "calibrate-field",
-) -> list[np.ndarray]:
-    """Show a live preview and collect grayscale frames until all reference
-    tags have been seen `min_frames`+ times. 'q' to finish once enough are
-    captured, Esc to abort (raises SystemExit).
+) -> list[list[TagDetection]]:
+    """Show a live preview and collect each frame's detections until all
+    reference tags have been seen `min_frames`+ times. 'q' to finish once
+    enough are captured, Esc to abort (raises SystemExit).
 
-    Takes a plain `read_bgr()` callable rather than a specific camera type, so
-    both this module's own live capture and track.py's already-open
-    cv2.VideoCapture can drive this identically -- this is the interactive
-    half of what --calibrate-live on track re-uses directly, instead of
-    duplicating the capture loop there.
+    Takes a plain `read()` callable rather than a specific source, so both
+    this module's own live capture and track.py's --calibrate-live drive this
+    identically, instead of duplicating the capture loop there.
     """
-    detector = pa.Detector(families="tag36h11", nthreads=2, quad_decimate=1.0)
     win = window_name
     cv2.namedWindow(win, cv2.WINDOW_AUTOSIZE)
-    frames: list[np.ndarray] = []
+    frames: list[list[TagDetection]] = []
     try:
         while True:
-            bgr = read_bgr()
-            grey = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-            dets = detector.detect(grey)
+            bgr, dets = read()
             seen_ids = {d.tag_id for d in dets}
             good = set(layout).issubset(seen_ids)
             disp = bgr.copy()
@@ -198,7 +200,7 @@ def capture_reference_frames(
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, colour, 2, cv2.LINE_AA,
                 )
             if good and len(frames) < max_frames:
-                frames.append(grey)
+                frames.append(dets)
             status_colour = (0, 255, 0) if good else (0, 0, 255)
             cv2.rectangle(disp, (0, 0), (disp.shape[1], 84), (0, 0, 0), -1)
             cv2.putText(
@@ -229,19 +231,13 @@ def capture_reference_frames(
 # --------------------------------------------------------------------------
 
 
-class _AveragedDetection:
-    """A fake pupil_apriltags detection standing in for one corner's averaged
-    pixel centre and corners, so the averaged result can be solved through the
-    exact same ReferenceTagFieldTransform.from_detections() the simultaneous
-    path uses, instead of duplicating the solvePnP call-site.
+def _averaged(tag_id: int, center, corners) -> TagDetection:
+    """One corner's averaged pixel centre and corners, as a detection, so it
+    is solved through the exact same ReferenceTagFieldTransform.from_detections()
+    the simultaneous path uses, instead of duplicating the solvePnP call-site.
     """
-
-    __slots__ = ("tag_id", "center", "corners")
-
-    def __init__(self, tag_id: int, center, corners) -> None:
-        self.tag_id = tag_id
-        self.center = np.asarray(center, np.float64).reshape(2)
-        self.corners = np.asarray(corners, np.float64).reshape(4, 2)
+    return TagDetection(tag_id, np.asarray(center, np.float64).reshape(2),
+                        np.asarray(corners, np.float64).reshape(4, 2))
 
 
 @dataclass
@@ -253,7 +249,7 @@ class SequentialCalibrationResult:
 
 
 def solve_sequential(
-    averaged: dict[int, _AveragedDetection],
+    averaged: dict[int, TagDetection],
     layout: dict[int, tuple[float, float]],
     K: np.ndarray,
     dist: np.ndarray | None = None,
@@ -273,10 +269,8 @@ def solve_sequential(
     for planar PnP, and fits them near-exactly whatever the pose, so without it
     the reprojection error below says little.
     """
-    fake_dets = [
-        _AveragedDetection(tid, det.center, det.corners) for tid, det in averaged.items()
-    ]
-    transform = ReferenceTagFieldTransform.from_detections(fake_dets, layout, K, dist, tag_size)
+    dets = [_averaged(tid, det.center, det.corners) for tid, det in averaged.items()]
+    transform = ReferenceTagFieldTransform.from_detections(dets, layout, K, dist, tag_size)
     transform.source = f"measured, one tag moved to {len(averaged)} corners in turn"
 
     obj = np.array([[*layout[tid], 0.0] for tid in averaged], np.float64)
@@ -294,11 +288,11 @@ def solve_sequential(
 
 
 def capture_sequential_corners(
-    read_bgr: Callable[[], np.ndarray],
+    read: Reader,
     layout: dict[int, tuple[float, float]],
     frames_per_corner: int = FRAMES_PER_CORNER,
     window_name: str = "calibrate-field (one tag)",
-) -> dict[int, np.ndarray]:
+) -> dict[int, TagDetection]:
     """Interactively capture one tag's pixel centre at each field position in
     `layout`, in turn -- for a single tag (e.g. mounted on a robot) driven to
     each corner while the camera stays fixed, instead of several tags visible
@@ -318,19 +312,16 @@ def capture_sequential_corners(
     the physical tag's id at capture time does not have to match; only the
     order you visit `layout`'s positions in does.
     """
-    detector = pa.Detector(families="tag36h11", nthreads=2, quad_decimate=1.0)
     win = window_name
     cv2.namedWindow(win, cv2.WINDOW_AUTOSIZE)
-    results: dict[int, _AveragedDetection] = {}
+    results: dict[int, TagDetection] = {}
     items = list(layout.items())
     try:
         for i, (label_id, (fx, fy)) in enumerate(items):
             samples: list[np.ndarray] = []
             corner_samples: list[np.ndarray] = []
             while True:
-                bgr = read_bgr()
-                grey = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-                dets = detector.detect(grey)
+                bgr, dets = read()
                 disp = bgr.copy()
                 for d in dets:
                     cv2.polylines(disp, [np.asarray(d.corners, np.int32)], True,
@@ -386,9 +377,7 @@ def capture_sequential_corners(
                     break
             avg = np.mean(samples, axis=0)
             px_std = float(np.std(np.linalg.norm(np.array(samples) - avg, axis=1)))
-            results[label_id] = _AveragedDetection(
-                label_id, avg, np.mean(corner_samples, axis=0)
-            )
+            results[label_id] = _averaged(label_id, avg, np.mean(corner_samples, axis=0))
             print(
                 f"  corner {i + 1}/{len(items)} at ({fx:g}, {fy:g}): "
                 f"averaged {len(samples)} samples, pixel ({avg[0]:.1f}, {avg[1]:.1f}), "
@@ -520,8 +509,9 @@ def _run_synthetic(args, field: Field, layout: dict[int, tuple[float, float]]):
     )
     print(f"Synthetic field -- ground truth: {truth.source}\n")
 
-    frames = (cam.read() for _ in range(20))
-    result = calibrate_field(frames, layout, K, min_frames=args.min_frames,
+    detector = LocalTagDetector()
+    views = (detector.detect(cam.read()) for _ in range(20))
+    result = calibrate_field(views, layout, K, min_frames=args.min_frames,
                              tag_size=args.tag_size)
     print(f"{result.transform.source}")
     print(
@@ -532,12 +522,7 @@ def _run_synthetic(args, field: Field, layout: dict[int, tuple[float, float]]):
     dt = float(np.linalg.norm(result.transform.t - truth.t))
     print(f"vs ground truth: rotation off {dR:.2f} deg, origin off {dt * 1000:.1f} mm")
 
-    detector = pa.Detector(families="tag36h11", nthreads=2, quad_decimate=1.0)
-    check_frame = cam.read()
-    dets = detector.detect(
-        check_frame, estimate_tag_pose=True,
-        camera_params=(K[0, 0], K[1, 1], K[0, 2], K[1, 2]), tag_size=args.tag_size,
-    )
+    dets = for_tracking(detector.detect(cam.read()), K, None, args.tag_size)
     moving = next((d for d in dets if d.tag_id == 7), None)
     if moving is not None:
         pose = tag_field_pose(moving, result.transform, field, K=K)
@@ -550,63 +535,59 @@ def _run_synthetic(args, field: Field, layout: dict[int, tuple[float, float]]):
     return result, args.out
 
 
-def _open_live(args):
-    """Open the camera and load intrinsics for the size it ACTUALLY delivers.
+class LiveSource:
+    """PhotonVision's tags and lens, plus its picture when there is one."""
 
-    Not args.width/height: a camera that ignores the request (640x480 when
-    asked for 1280x720) would otherwise miss the real calibration, fall back to
-    a guessed lens for the wrong image size, and solve the field ~2x too far
-    away -- with no error, just a field that lines up at one corner only.
-    """
-    from vision_core.intrinsics import load as load_intrinsics
+    def __init__(self, args) -> None:
+        self.tags, self.stream = open_photon(args, need_stream=False)
+        self.K, self.dist = self.tags.K, self.tags.dist
+        w, h = self.tags.size
+        self.lens_note = f"{w}x{h}, {self.tags.source}"
 
-    cap = open_camera(args.camera, args.width, args.height)
-    ok, frm = read_frame(cap)
-    if not ok:
-        cap.release()
-        raise RuntimeError("camera opened but returned no frame")
-    h, w = frm.shape[:2]
-    K, dist, intr_source = load_intrinsics(w, h)
-    print(f"intrinsics: {intr_source}")
-    if not intr_source.startswith("charuco"):
-        print(f"\nWARNING: no measured lens calibration for {w}x{h}. The field pose will "
-              f"be solved with a guessed lens and every distance can be off by tens of %.\n"
-              f"Run 'uv run calibrate-camera --camera {args.camera} --width {w} --height {h}' "
-              f"first unless this is only a rough test.\n")
+    def frame(self) -> np.ndarray:
+        if self.stream is None:
+            return blank_frame(self.tags.size)
+        return self.stream.latest().copy()
 
-    def _read_bgr() -> np.ndarray:
-        ok, frm = read_frame(cap)
-        if not ok:
-            raise RuntimeError("camera stopped returning frames")
-        return frm
+    def read(self) -> tuple[np.ndarray, list[TagDetection]]:
+        """The next PhotonVision result's tags, and the newest picture to show
+        them on."""
+        r = self.tags.wait(2.0)
+        if r is None:
+            raise SystemExit(f"PhotonVision camera '{self.tags.name}' stopped sending "
+                             f"results -- is it still running, on its AprilTag pipeline?")
+        return self.frame(), r.detections
 
-    return cap, _read_bgr, K, dist, f"{w}x{h}, {intr_source}"
+    def close(self) -> None:
+        if self.stream is not None:
+            self.stream.stop()
+        cv2.destroyAllWindows()
 
 
 def _run_live(args, field: Field, layout: dict[int, tuple[float, float]]):
-    cap, _read_bgr, K, dist, lens_note = _open_live(args)
+    live = LiveSource(args)
+    K, dist = live.K, live.dist
     print(f"looking for reference tags {sorted(layout)} at {layout}")
     print(f"hold the camera steady on the field; capturing until {args.min_frames}+ good frames")
     print("'q' to finish once enough are captured, Esc to abort.\n")
 
     out = args.out or str(field_pose_path())
     try:
-        frames = capture_reference_frames(
-            _read_bgr, layout, args.min_frames, MAX_LIVE_FRAMES, "calibrate-field"
+        views = capture_reference_views(
+            live.read, layout, args.min_frames, MAX_LIVE_FRAMES, "calibrate-field"
         )
-        result = calibrate_field(frames, layout, K, dist, min_frames=args.min_frames,
+        result = calibrate_field(views, layout, K, dist, min_frames=args.min_frames,
                                  tag_size=args.tag_size)
         print(f"\n{result.transform.source}")
         print(
             f"agreement across frames: rotation spread {result.rotation_spread_deg:.3f} deg, "
             f"translation spread {result.translation_spread_m * 1000:.2f} mm"
         )
-        result.transform.source += f" ({lens_note})"
-        origin = _choose_origin(args, _read_bgr, result.transform, field, K, dist, out)
+        result.transform.source += f" ({live.lens_note})"
+        origin = _choose_origin(args, live.frame, result.transform, field, K, dist, out)
         result.transform = result.transform.with_origin(origin)
     finally:
-        cap.release()
-        cv2.destroyAllWindows()
+        live.close()
     return result, out
 
 
@@ -621,8 +602,8 @@ def _run_synthetic_sequential(args, field: Field, layout: dict[int, tuple[float,
     print(f"Synthetic field -- ground truth: {truth.source}")
     print("simulating one tag carried to each corner in turn...\n")
 
-    detector = pa.Detector(families="tag36h11", nthreads=2, quad_decimate=1.0)
-    averaged: dict[int, _AveragedDetection] = {}
+    detector = LocalTagDetector()
+    averaged: dict[int, TagDetection] = {}
     for tag_id, (cx, cy) in layout.items():
         cam = SyntheticFieldCamera(
             {}, truth, tag_size=args.tag_size, shape=shape, K=K,
@@ -643,7 +624,7 @@ def _run_synthetic_sequential(args, field: Field, layout: dict[int, tuple[float,
                 f"{len(samples)}/{args.frames_per_corner} frames -- out of view or too small"
             )
         avg = np.mean(samples, axis=0)
-        averaged[tag_id] = _AveragedDetection(tag_id, avg, np.mean(corner_samples, axis=0))
+        averaged[tag_id] = _averaged(tag_id, avg, np.mean(corner_samples, axis=0))
         print(f"  corner id {tag_id} at ({cx:g}, {cy:g}): "
               f"averaged {len(samples)} synthetic samples, pixel ({avg[0]:.1f}, {avg[1]:.1f})")
 
@@ -660,7 +641,8 @@ def _run_synthetic_sequential(args, field: Field, layout: dict[int, tuple[float,
 
 
 def _run_live_sequential(args, field: Field, layout: dict[int, tuple[float, float]]):
-    cap, _read_bgr, K, dist, lens_note = _open_live(args)
+    live = LiveSource(args)
+    K, dist = live.K, live.dist
     print(f"one tag, moved to {len(layout)} positions in turn: {list(layout.values())}")
     print("camera stays fixed. At each position: hold the tag steady, then")
     print("'q' confirms and moves to the next corner ('r' retries this one), Esc aborts.\n")
@@ -668,18 +650,17 @@ def _run_live_sequential(args, field: Field, layout: dict[int, tuple[float, floa
     out = args.out or str(field_pose_path())
     try:
         averaged = capture_sequential_corners(
-            _read_bgr, layout, args.frames_per_corner, "calibrate-field (one tag)"
+            live.read, layout, args.frames_per_corner, "calibrate-field (one tag)"
         )
         result = solve_sequential(averaged, layout, K, dist, tag_size=args.tag_size)
         print(f"\n{result.transform.source}")
         print(f"reprojection error: {result.reproj_error_px:.3f} px rms, "
               f"{result.max_reproj_error_px:.3f} px max")
-        result.transform.source += f" ({lens_note})"
-        origin = _choose_origin(args, _read_bgr, result.transform, field, K, dist, out)
+        result.transform.source += f" ({live.lens_note})"
+        origin = _choose_origin(args, live.frame, result.transform, field, K, dist, out)
         result.transform = result.transform.with_origin(origin)
     finally:
-        cap.release()
-        cv2.destroyAllWindows()
+        live.close()
     return result, out
 
 
@@ -695,12 +676,11 @@ def _run_pick_origin(args, field: Field) -> None:
     if args.origin is not None or args.no_origin:
         origin = _choose_origin(args, None, transform, field, None, None, None)
     else:
-        cap, _read_bgr, K, dist, _ = _open_live(args)
+        live = LiveSource(args)
         try:
-            origin = _choose_origin(args, _read_bgr, transform, field, K, dist, out)
+            origin = _choose_origin(args, live.frame, transform, field, live.K, live.dist, out)
         finally:
-            cap.release()
-            cv2.destroyAllWindows()
+            live.close()
     transform = transform.with_origin(origin)
     transform.field_size = (field.width, field.height)
     transform.save(out)
@@ -744,9 +724,8 @@ def main() -> None:
         help="don't recalibrate: load the saved pose and only (re)pick the origin",
     )
     ap.add_argument("--tag-size", type=float, default=0.080)
-    ap.add_argument("--camera", type=int, default=0)
-    ap.add_argument("--width", type=int, default=1280)
-    ap.add_argument("--height", type=int, default=720)
+    ap.add_argument("--width", type=int, default=1280, help="--synthetic: image width")
+    ap.add_argument("--height", type=int, default=720, help="--synthetic: image height")
     ap.add_argument("--min-frames", type=int, default=MIN_FRAMES)
     ap.add_argument(
         "--frames-per-corner", type=int, default=FRAMES_PER_CORNER,
@@ -754,9 +733,10 @@ def main() -> None:
     )
     ap.add_argument(
         "--out", type=str, default=None,
-        help="where to save (default robocup_testing/calib/field_pose.json; "
+        help="where to save (default vision/calib/field_pose.json; "
         "--synthetic saves nowhere unless you pass this)",
     )
+    add_photon_args(ap)
     args = ap.parse_args()
 
     # A re-run (or --pick-origin) defaults to the size already saved, so the

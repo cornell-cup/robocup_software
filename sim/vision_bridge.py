@@ -1,4 +1,4 @@
-"""Live camera state from robocup_testing's track-combined, in sim coordinates.
+"""Live camera state from vision's track-combined, in sim coordinates.
 
 A background thread keeps only the newest tracker doc. Each tracked object is
 fresh / coast / lost by the age of its last accepted sighting; apply_to_world()
@@ -32,6 +32,8 @@ from config import (  # noqa: E402
     ROBOT_MAX_ACCEL,
     ROBOT_MAX_SPEED,
     VISION_BALL_COAST_S,
+    VISION_BALL_REST_RADIUS,
+    VISION_BALL_REST_SPEED,
     VISION_BLEND_TAU,
     VISION_FIELD_MARGIN,
     VISION_FLIP_X,
@@ -87,6 +89,7 @@ class _Track:
     pred: tuple[float, ...] | None = None
     t_pred: float | None = None
     predicted: int = 0  # total coasted entries used
+    rest: tuple[float, float] | None = None  # ball only: where it is held while settled
     rejects: int = 0  # current streak
     rejected: int = 0  # total
     seen: deque = field(default_factory=lambda: deque(maxlen=VISION_STATS_WINDOW))
@@ -129,6 +132,26 @@ class _Track:
 def _cap(vx: float, vy: float, vmax: float) -> tuple[float, float]:
     s = math.hypot(vx, vy)
     return (vx, vy) if s <= vmax else (vx * vmax / s, vy * vmax / s)
+
+
+def _settle(
+    tr: _Track, x: float, y: float, vx: float, vy: float
+) -> tuple[float, float, float, float]:
+    """Hold a resting ball at its anchor, still, while it stays slow and near it.
+
+    The tracker's position of a still ball wanders by millimetres and its
+    Kalman velocity by ~0.1 m/s; drive_ball turns both straight into motion.
+    The anchor moves only when the ball leaves VISION_BALL_REST_RADIUS or goes
+    faster than VISION_BALL_REST_SPEED, so a real roll passes through untouched.
+    """
+    if (
+        tr.rest is not None
+        and math.hypot(vx, vy) < VISION_BALL_REST_SPEED
+        and math.hypot(x - tr.rest[0], y - tr.rest[1]) <= VISION_BALL_REST_RADIUS
+    ):
+        return tr.rest[0], tr.rest[1], 0.0, 0.0
+    tr.rest = (x, y)
+    return x, y, vx, vy
 
 
 def parse_tag_map(s: str) -> dict[int, int] | None:
@@ -218,6 +241,9 @@ def _replay_source(
                 delay = 0.0
                 if "t_capture" in doc and "t_publish" in doc:
                     delay = doc["t_publish"] - doc["t_capture"]
+                if doc.get("t_tags") is not None and "t_capture" in doc:
+                    # And how far the tags trail the frame.
+                    doc["t_tags"] = now - delay + (doc["t_tags"] - doc["t_capture"])
                 doc["timestamp"] = doc["t_publish"] = now
                 doc["t_capture"] = now - delay
                 emit(doc)
@@ -348,7 +374,7 @@ class VisionBridge:
             if restarted:
                 for tr in (self.ball, *self.robots.values()):
                     tr.t_meas, tr.rejects = None, 0
-                    tr.pred = tr.t_pred = None
+                    tr.pred = tr.t_pred = tr.rest = None
             if restarted or run_id != self._run_id:
                 self._run_id = run_id
                 self._last_seq = None
@@ -359,10 +385,17 @@ class VisionBridge:
             if isinstance(doc.get("stats"), dict):
                 self.tracker_stats = doc["stats"]
 
-            t_cap = doc.get("t_capture", doc.get("timestamp", t_recv))
+            t_cap = t_cap_sent = doc.get("t_capture", doc.get("timestamp", t_recv))
             lat = t_recv - t_cap
             if lat < -0.05 or lat > _MAX_PLAUSIBLE_LATENCY:
                 t_cap, lat = t_recv, 0.0  # clocks disagree, trust arrival time
+            # PhotonVision measures the tags on its own schedule, so they can be
+            # older than the frame the ball came from; t_tags says when. Moved
+            # along with t_cap if that was overridden.
+            t_tags = doc.get("t_tags")
+            t_tags = t_cap if t_tags is None else t_tags + (t_cap - t_cap_sent)
+            if abs(t_tags - t_cap) > _MAX_PLAUSIBLE_LATENCY:
+                t_tags = t_cap
             self.latency_ms = 0.9 * self.latency_ms + 0.1 * lat * 1000.0
             if self._last_cap is not None and t_cap > self._last_cap:
                 self.fps = 0.9 * self.fps + 0.1 / (t_cap - self._last_cap)
@@ -400,7 +433,7 @@ class VisionBridge:
                 if rid is None or rid in seen_rids:
                     continue
                 seen_rids.add(rid)
-                self._ingest(self.robots[rid], tag, t_cap, heading=True)
+                self._ingest(self.robots[rid], tag, t_tags, heading=True)
             for rid, tr in self.robots.items():
                 if rid not in seen_rids:
                     tr.seen.append(False)
@@ -432,6 +465,8 @@ class VisionBridge:
         ok = real and tr.gate(x, y, t_cap)
         tr.seen.append(bool(ok))
         if ok:
+            if not heading:
+                x, y, vx, vy = _settle(tr, x, y, vx, vy)
             tr.x, tr.y = x, y
             tr.vx, tr.vy = _cap(vx, vy, tr.vmax)
             if heading:

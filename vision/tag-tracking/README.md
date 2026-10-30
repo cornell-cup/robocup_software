@@ -2,7 +2,7 @@
 
 Track an AprilTag held on a phone, and report where it is on a **field that does
 not physically exist** — a rectangle defined purely in software as sitting some
-distance in front of the webcam.
+distance in front of the camera.
 
 Built as a proof of concept for a RoboCup setup where the field will be real and
 located by four reference AprilTags. The camera-to-field transform is isolated in
@@ -10,12 +10,77 @@ one file so that swap costs one subclass and changes nothing downstream.
 
 **Skill 1** of this repo. The geometry it stands on lives in
 [`vision-core`](../vision-core/), ready to be shared with the skills that follow.
-Everything below runs with `uv run` from `robocup_testing/`, in the monorepo's
+Everything below runs with `uv run` from `vision/`, in the monorepo's
 root `.venv`: see [Quick start](../README.md#quick-start).
 
 Making that real (measuring the camera and the field instead of inventing them)
 is a one-time calibration step — see [One-time calibration](#one-time-calibration-making-it-real)
 once you have been through steps 0-2 below.
+
+The camera itself belongs to [PhotonVision](https://photonvision.org): it
+captures, finds the tags, and sends each one's id and corners over
+NetworkTables. Everything from the pose onwards is still worked out here. The
+live tools (`track`, `calibrate-field`, `track-combined`) need it set up once —
+see [PhotonVision setup](#photonvision-setup) — or, with no hardware,
+[`photon-sim`](#no-hardware-photon-sim) stands in for it.
+
+## PhotonVision setup
+
+Once per camera:
+
+1. **Run PhotonVision**, on a coprocessor or on this machine, and add the
+   camera in its UI at `http://<host>:5800`.
+2. **Pipeline**: type AprilTag, family **36h11**.
+3. **Calibrate the lens in PhotonVision** (Cameras > Calibration), at the
+   resolution the AprilTag pipeline runs at. The tag tools use this
+   calibration, not `calib/intrinsics.json`, for the field pose and every tag
+   position; with none, they stop and say so.
+4. **NetworkTables**: Settings > Networking > NetworkTables Server Address =
+   the machine running the trackers (`127.0.0.1` if it is this one). By
+   default each tracker runs the NetworkTables server itself, the way a
+   roboRIO would; `--nt-server HOST` connects to an existing server instead.
+
+Exposure, white balance and decimation are PhotonVision camera/pipeline
+settings now, set in its UI. Lock exposure and white balance there if you use
+`track-combined`, or the ball's colour drifts out from under its profile.
+
+`photonlibpy`'s version must match the PhotonVision build — it refuses to talk
+to any other. It is pinned to `>=2026.3.4,<2027` in `pyproject.toml`; if
+PhotonVision is a different release, change one to match the other.
+
+Flags, on `track`, `calibrate-field` and `track-combined`:
+
+| Flag | Meaning | Default |
+| --- | --- | --- |
+| `--photon-camera NAME` | Camera nickname in PhotonVision's UI | the only camera PhotonVision publishes (with several, it stops and asks) |
+| `--nt-server HOST` | Connect to the NetworkTables server at `HOST` instead of running one here | run it here |
+| `--stream URL` | PhotonVision's raw camera stream: the picture behind the overlay, and what `track-combined` finds the ball in | `http://<photonvision>:1181/stream.mjpg` |
+| `--photon-res W H` | The resolution the pipeline runs at. PhotonVision does not publish it, so it is guessed from the calibration; set it if the startup line shows the wrong size | guessed |
+| `--no-stream` | Don't open the stream: tags only, drawn on a blank canvas (`track`, `calibrate-field`) | off |
+
+### No hardware: `photon-sim`
+
+```powershell
+uv run photon-sim                                # a stand-in PhotonVision, then in another terminal:
+uv run track --synthetic-field --mode floor      # or calibrate-field, track-combined
+```
+
+Renders the synthetic field (four reference tags on the corners, one tag
+driving around), bends it through a distorted lens, finds the tags with
+PhotonVision's own detector, and publishes them the way PhotonVision does:
+same NetworkTables topics, same lens-calibration topics, and the picture as an
+MJPEG stream on port 1181. It does not imitate PhotonVision's UI or camera
+settings, and has no ball. Start order doesn't matter; it connects once the
+tracker's server is up.
+
+`--synthetic-field --mode floor` matches its default rig (1.2 × 0.8 m field,
+camera 1.5 m up, straight down); without it, `track` loads your real
+`calib/field_pose.json`, which says nothing about the simulated camera. For
+the same reason, `calibrate-field` against it saves over the real file unless
+you pass `--out`. Flags: `--name` (camera nickname, default `overhead`),
+`--nt-server`, `--tag-size`, `--field W H`, `--cam-height`, `--pitch`,
+`--width`, `--height`, `--hfov`, `--k1` (lens distortion, `0` for a pinhole),
+`--fps`, `--stream-port`, `--stream-scale`.
 
 ## Run it in order
 
@@ -26,10 +91,10 @@ uv run selfcheck
 ```
 
 Renders synthetic pictures of a tag at known field positions, pushes them through
-the real detector and the real `vision_core/field.py`, and checks the numbers come
-back.
+the real detector (PhotonVision's, run locally) and the real
+`vision_core/field.py`, and checks the numbers come back.
 
-You should see three sections, all `[ok ]`, ending in *"All checks passed."*
+You should see four sections, all `[ok ]`, ending in *"All checks passed."*
 Section 3 is the one that matters for RoboCup: it puts a tag at a known spot,
 recovers the field pose from four reference tags, and prints the same tag under
 both transforms:
@@ -42,8 +107,14 @@ same tag, measured transform: x=0.749 y=0.546 th=+29.8
 Same numbers, same format, two completely different ways of deciding where the
 field is. That is the property this project exists to protect.
 
+Section 4 is the live path: a frame rendered through a distorted lens, its
+tags sent through a stand-in PhotonVision over real NetworkTables, then the
+field pose and a tag's position checked at the other end. It runs its own
+NetworkTables server, so close any tracker running on this machine first.
+
 If this fails, the problem is in the geometry. If it passes and the live view
-looks wrong, the problem is the camera, the intrinsics, or the tag size.
+looks wrong, the problem is the camera, PhotonVision's lens calibration, or the
+tag size.
 
 ### 1 · Put a tag on the phone at a known size
 
@@ -75,13 +146,15 @@ brightness up and auto-rotate off. Tap the top-right corner to get back.
 
 ### 2 · Track it
 
-Leave the server running, open a second terminal:
+With PhotonVision [set up](#photonvision-setup) and its camera pointed at the phone,
+leave the server running and open a second terminal:
 
 ```powershell
 uv run track --tag-size 0.080
 ```
 
-You should see one window, camera on the left and a plan view on the right:
+You should see one window, PhotonVision's camera stream on the left and a plan
+view on the right:
 
 - a **green rectangle** floating in the scene — the virtual field, with corners
   labelled `(0,0) (W,0) (W,H) (0,H)`, a 20 cm grid, and red/green arrows for
@@ -107,17 +180,18 @@ still and watch the hollow ring jitter around the solid dot: that jitter,
 divided by the frame time, is what frame-to-frame differencing would call
 velocity. Cover the tag briefly and the dot turns grey and keeps moving on its
 last velocity, marked `coasting`; after half a second unseen it is dropped.
+The filter steps by PhotonVision's capture times, so the fps on screen is the
+rate its results arrive at.
 
-Keys: `q` quit · `g` grid · `t` trails · `r` reset trails and tracks · `w` wall/floor ·
-`[` `]` nudge fx · `s` save intrinsics.
+Keys: `q` quit · `g` grid · `t` trails · `r` reset trails and tracks · `w` wall/floor.
 
 Useful flags:
 
 ```powershell
 uv run track --field 1.2 0.8 --distance 1.8      # field size, and how far out it floats
 uv run track --mode floor                        # field flat, camera overhead 1.5 m up
-uv run track --list-cameras                      # if it grabs the wrong one
-uv run track --camera 2 --display-width 1300     # pick a camera, shrink the window
+uv run track --photon-camera overhead            # PhotonVision has several cameras: pick one by nickname
+uv run track --no-stream --display-width 1300    # tags only on a blank canvas, shrink the window
 uv run track --print-poses                       # stream id/x/y/theta/vx/vy/speed to stdout
 uv run track --sigma-a 3                         # filter lags a fast robot? allow harder acceleration (m/s^2)
 ```
@@ -139,89 +213,76 @@ If you want the phone to physically sweep the plane, use
 `--distance 0.6 --field 0.5 0.3`: a smaller field close enough to reach. A
 1.2 × 0.8 m field simply does not fit in a 60° view at arm's length.
 
-## Does webcam calibration matter yet?
+## Does lens calibration matter?
 
-**Not yet. Fake the intrinsics for now.** But it is worth knowing exactly what
-you are buying and what you are deferring.
+**It is not optional any more:** the live tools take the lens from
+PhotonVision's calibration ([setup](#photonvision-setup), step 3) and stop if
+there is none. There is no guessed lens to fall back on. It is still worth
+knowing what a sloppy calibration costs.
 
 `fx` converts apparent tag size in pixels into metric distance. Get it wrong by
 20% and every reported *distance from the camera* is wrong by 20%.
 
-The reason that is survivable today: **the virtual field is defined in the same
-made-up camera frame the tag is measured in.** The field plane is at 1.8 m in the
-fake camera's units; the tag's depth is computed in those same units. The error
+On the made-up field that is survivable: **the virtual field is defined in the
+same camera frame the tag is measured in.** The field plane is at 1.8 m in the
+camera's units; the tag's depth is computed in those same units. The error
 is common to both, so "where is the tag on the field" and "is it inside the
 bounds" stay self-consistent even with a sloppy `fx`. The demo is internally
 honest; it is just not metrically true.
 
-What does *not* cancel, even now:
+What does *not* cancel:
 
-- **Lens distortion.** Assumed zero here. On a cheap wide webcam this bends
-  straight lines by a few percent near the frame edges, so the tag drifts when you
-  move it to the corners of view.
+- **Lens distortion.** On a cheap wide webcam this bends straight lines by a
+  few percent near the frame edges. PhotonVision's calibration measures it, and
+  the tag corners and the picture are undistorted with it before anything
+  else — provided it was done at the pipeline's resolution.
 - **Absolute scale.** If you tape-measure the phone at 50 cm and the numbers
-  disagree, that gap is your `fx` error.
-
-Three upgrades, in order of effort:
-
-1. **Tell it the FOV**: `uv run track --hfov 70` if you know your webcam's spec.
-2. **One-parameter fix, which is most of the benefit.** Hold the phone at a
-   tape-measured distance, watch the reported depth, and press `[` / `]` until it
-   matches. Press `s` to save to `robocup_testing/calib/intrinsics.json`,
-   which is loaded automatically next run — and shared with the ball tracker,
-   since it describes the camera rather than this skill. This directly calibrates `fx` — the parameter that
-   actually matters — usually to within a couple of percent.
-3. **A real calibration**, with real lens distortion coefficients, not just
-   `fx` — see the next section.
+  disagree, that gap is your `fx` error (or your tag size, below).
 
 > One catch worth knowing: **tag-size error and `fx` error are the same error.**
 > Only their product sets the depth. You cannot separate them by looking at one
-> tag, so measure the tag size independently (step 1's card trick) and *then*
-> tune `fx`. Tuning `fx` to compensate for a mis-measured tag will silently break
-> the moment you use a differently sized tag.
+> tag, so measure the tag size independently (step 1's card trick); if distances
+> are still off after that, redo the calibration in PhotonVision rather than
+> fudging `--tag-size`, which will silently break the moment you use a
+> differently sized tag.
 
-**When it stops being optional: the real RoboCup field.** With four reference
+**Where it matters most: the real RoboCup field.** With four reference
 tags, the camera pose is solved from their measured image positions against real
 surveyed field coordinates. There is no longer a shared fiction for errors to
 cancel into — intrinsic error becomes real position error, and distortion becomes
 a position-dependent bias that is worst at the frame edges, which is exactly where
-corner reference tags live. That is exactly what `calibrate-camera` and
+corner reference tags live. That is what PhotonVision's calibration and
 `calibrate-field`, below, are for.
 
 ## One-time calibration: making it real
 
-Two independent, one-time steps. Each is its own command, each saves a file
-in `robocup_testing/calib/` (shared with every skill, via `vision_core.paths`)
-that `track` picks up automatically from then on. Run neither and nothing
+Two independent, one-time steps: the lens, in PhotonVision, and the field,
+with `calibrate-field`. The field step saves `calib/field_pose.json` in
+`vision/calib/` (shared with every skill, via `vision_core.paths`),
+which `track` picks up automatically from then on. Skip it and nothing
 changes — you get the made-up field exactly as above.
 
-### Camera intrinsics — `calibrate-camera`
+### Camera intrinsics — in PhotonVision
 
-Real focal length, principal point, and lens distortion, from a ChArUco board
-(a checkerboard with AprilTag-style markers baked into it, so the same corner
-detector that already ships with OpenCV can find it precisely). The math lives
-in `vision_core.charuco` — it is camera-only and has nothing to do with
-AprilTags, so it belongs in vision-core, same as `intrinsics.py`; this skill
-just supplies the CLI.
+Real focal length, principal point, and lens distortion, measured in
+PhotonVision's UI (Cameras > Calibration) — see
+[PhotonVision setup](#photonvision-setup). It travels to the trackers over
+NetworkTables with the tags, so there is nothing to save here. Calibrate at the
+resolution the AprilTag pipeline runs at, and move the board through a range
+of distances and tilts, and into the corners of the frame, not just the
+centre — distortion is only visible away from the image centre, so a lazy
+session that only shows the board dead-centre will recover a fine `fx` and a
+useless distortion estimate.
+
+`calibrate-camera` (ChArUco, math in `vision_core.charuco`) still exists and
+writes `calib/intrinsics.json`, but the tag tools no longer read that file;
+only `track-ball`, which opens its own local webcam, does:
 
 ```powershell
 uv run calibrate-camera --synthetic          # try it first: a digital board, no camera or board needed
 uv run calibrate-camera --save-board-png board.png   # print this
-uv run calibrate-camera                      # then: live camera, wave the printed board around
+uv run calibrate-camera                      # then: local webcam, wave the printed board around
 ```
-
-Move the board through a range of distances and tilts, and into the corners of
-the frame, not just the centre — distortion is only visible away from the
-image centre, so a lazy session that only shows the board dead-centre will
-recover a fine `fx` and a useless distortion estimate. The window shows how
-many good views have been captured; press `q` once you have 12+ (more is
-better), Esc to abort. It saves to `calib/intrinsics.json` — same file `s`
-already wrote from `track`, but now with real distortion coefficients instead
-of zeros, which `track` uses to undistort every frame before detection.
-
-The board's physical size barely matters here — unlike the AprilTag, whose
-size sets absolute scale, plane-based calibration cannot see the board's scale
-independent of distance, so print it at whatever size is convenient.
 
 ### Field pose — `calibrate-field`
 
@@ -231,7 +292,11 @@ and solve for where the field actually is — this wraps
 underlying `solvePnP` math (see the next section). Running it as its own
 command adds what raw `solvePnP` doesn't: several frames instead of one noisy
 shot, averaged, with a report on how well they agree. This one lives in the
-skill, not vision-core, because it needs pupil_apriltags to see the tags at all.
+skill, not vision-core, because it needs the tag detector (PhotonVision, or
+`detect.py`'s local one for `--synthetic`) to see the tags at all. Live, the
+tags and the lens come from PhotonVision; the picture for the preview and the
+origin picker is its camera stream, or a blank canvas with `--no-stream`,
+since the solve only needs the tags.
 
 ```powershell
 uv run calibrate-field --synthetic                        # try it first: a digital field, no hardware needed
@@ -280,9 +345,8 @@ unless you pick a new one — it's a point on the field, not on the camera.
 > `uv run serve-tag --field-sheet field.png` to lay all 4 out on one A4-sized
 > sheet already positioned at a field rectangle's corners. Measure whatever
 > comes out of the printer with a ruler, then
-> `uv run calibrate-field --field <measured W> <measured H>`. You don't need
-> `calibrate-camera` first — it falls back to a guessed lens automatically,
-> fine for a first end-to-end check.
+> `uv run calibrate-field --field <measured W> <measured H>`. You do need
+> PhotonVision's lens calibration first; there is no guessed-lens fallback.
 
 #### One tag instead of four — `--sequential`
 
@@ -340,19 +404,21 @@ Opens the exact same window as step 2, but nothing is plugged in: the field,
 the camera, and the tracked tag are all simulated (`tag_tracking.synthetic`).
 On startup it prints a live calibration — solving the field pose from 4
 simulated reference tags, the same math `calibrate-field --synthetic` uses —
-and then the main loop runs exactly as it would against a real webcam, except
-the frames come from a digital camera instead of `cv2.VideoCapture`. One tag
+and then the main loop runs exactly as it would against PhotonVision, except
+the frames come from a digital camera and the tags from the local detector
+(`detect.py`: WPILib's `AprilTagDetector`, the one PhotonVision runs). One tag
 orbits the field on its own, swinging outside the boundary on the flat sides
 of its path so you also see the red `OUT` state without carrying anything past
 the edge yourself.
 
 It is a flag on `track`, not a separate command, on purpose: the overlay, plan
 view, readout, and every key are all the *same code* `track` always runs —
-only the source of frames changes. `w` (wall/floor) and `s` (save intrinsics)
-print an explanation instead of acting, since there is no real camera pose to
-toggle or lens to save here.
+only the source of frames changes. `w` (wall/floor) prints an explanation
+instead of acting, since there is no real camera pose to toggle here. To run
+the real PhotonVision path with no hardware instead, see
+[`photon-sim`](#no-hardware-photon-sim).
 
-### What changes once both exist
+### What changes once `field_pose.json` exists
 
 Nothing, until you run `track`. Then:
 
@@ -435,9 +501,14 @@ overlay lands on the phone exactly, and the plan view agrees with the video.
 | No detection at all | Screen too dim, or glare. Max brightness, tilt away from windows. |
 | Detection flickers | Phone auto-dimming, or motion blur — move slower, add light. |
 | Detected but position jumps | Tag too small in frame. Use `--size-mm 100`, or move closer. |
-| Distances feel wrong | `fx` and/or tag size. See the calibration section. |
-| Wrong camera opens | `uv run track --list-cameras`, then `--camera N`. |
-| Camera opens but no frames | Another app has it (Teams, Zoom), or Windows camera privacy settings. |
+| Distances feel wrong | Tag size, or PhotonVision's lens calibration. See [Does lens calibration matter?](#does-lens-calibration-matter) |
+| `no PhotonVision camera appeared on NetworkTables` | PhotonVision not running, no camera enabled, or its NetworkTables Server Address doesn't point at this machine (`127.0.0.1` if same machine). A firewall on this machine can block it too. |
+| `publishes several cameras` | Pick one with `--photon-camera NAME`. |
+| `publishes no lens calibration` | Calibrate in PhotonVision's UI (Cameras > Calibration), at the pipeline's resolution. |
+| `sending targets that are not AprilTags` | The PhotonVision pipeline isn't AprilTag / 36h11. |
+| `could not open PhotonVision's stream` | `track` and `calibrate-field` carry on with a blank canvas; `track-combined` stops. Check the URL in PhotonVision's camera view and pass `--stream URL`. |
+| Overlay doesn't line up with the tags | The resolution guess is wrong: pass `--photon-res W H` with the pipeline's resolution. |
+| `selfcheck` section 4 fails, no result over NetworkTables | A tracker on this machine is already running the server. Close it and re-run. |
 | Keys do nothing, mouse works | Click the video window first. If letters are still ignored, an input method is swallowing them — switch to English, or press `Esc`, which no IME intercepts. |
 | `q` does nothing in a calibrate tool | By design until enough frames are captured. The window's counter shows how many; `Esc` always aborts. |
 | Window too big for the screen | `--display-width 1300` |
@@ -447,6 +518,9 @@ overlay lands on the phone exactly, and the plan view agrees with the video.
 
 ```
 src/tag_tracking/
+  photon.py           PhotonTags, PhotonStream -- tags, lens and picture from PhotonVision
+  photon_sim.py       photon-sim: a stand-in PhotonVision for testing with no hardware
+  detect.py           TagDetection, LocalTagDetector (WPILib's), pose solved from the corners
   pose.py             TagFieldPose, tag_field_pose, TAG_VISUAL_RIGHT -- the tag-shaped bits
   filter.py           TagFieldState, TagTracker -- one Kalman filter per tag: velocity, coasting
   track.py            live tracking, overlay, plan view
@@ -468,12 +542,12 @@ and, from the shared floor one level up:
   kalman.py      the linear Kalman filter both trackers build on: gate, Joseph update, angle wrap
   charuco.py     *measure* the camera matrix -- ChArUco board calibration + its digital self-test
   planview.py    draw_field on the video, PlanView beside it
-../calib/        intrinsics.json (press 's', or calibrate-camera) and
-                 field_pose.json (calibrate-field) land here
+../calib/        field_pose.json (calibrate-field) and intrinsics.json
+                 (calibrate-camera; read by track-ball, not here) land here
 ```
 
 `pose.py` holds what is *about AprilTags*; `field.py` holds what is *about the
 field*. The line matters: when reference tags get mounted, `field.py` changes and
 nothing in this folder does. `charuco.py` is camera-only calibration math and
-lives in vision-core for the same reason; `calibrate_field.py` needs
-pupil_apriltags to see the reference tags at all, so it stays here.
+lives in vision-core for the same reason; `calibrate_field.py` needs a tag
+detector to see the reference tags at all, so it stays here.

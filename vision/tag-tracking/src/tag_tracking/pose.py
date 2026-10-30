@@ -41,11 +41,12 @@ class TagFieldPose:
 #: Which axis of the detector's tag frame points to the tag's visual right --
 #: the direction that runs left-to-right across an upright tag as you look at it.
 #:
-#: pupil_apriltags reports pose_R with the tag's +X axis pointing to the tag's
-#: visual LEFT, +Y up and +Z into the tag (away from the viewer). That is a 180
-#: degree rotation about the tag normal from the convention you might expect, so
-#: visual-right is -X. Established empirically; selfcheck.py fails loudly if it
-#: ever changes.
+#: detect.with_pose() reports pose_R with the tag's +X axis pointing to the
+#: tag's visual LEFT, +Y up and +Z into the tag (away from the viewer) -- the
+#: frame pupil_apriltags used, kept when the detector moved to PhotonVision's.
+#: That is a 180 degree rotation about the tag normal from the convention you
+#: might expect, so visual-right is -X. Established empirically; selfcheck.py
+#: fails loudly if it ever changes.
 TAG_VISUAL_RIGHT = np.array([-1.0, 0.0, 0.0])
 
 
@@ -73,9 +74,9 @@ def tag_field_pose(
 ) -> TagFieldPose:
     """Convert one pose-estimated AprilTag detection into field coordinates.
 
-    `detection` must come from Detector.detect(..., estimate_tag_pose=True), so
-    that it carries pose_R (tag->camera rotation) and pose_t (the tag centre in
-    camera coords, metres).
+    `detection` must have been through detect.with_pose() (or for_tracking()),
+    so that it carries pose_R (tag->camera rotation) and pose_t (the tag centre
+    in camera coords, metres).
 
     theta is 0 when the tag is upright, and increases counter-clockwise as seen
     from in front of the field. `heading_offset_deg` is added to it, for when the

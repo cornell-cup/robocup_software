@@ -5,7 +5,7 @@ coordinates — on the same field the [tag tracker](../tag-tracking/) uses.
 
 **Skill 2.** The field geometry it stands on lives in
 [`vision-core`](../vision-core/). Everything below runs with `uv run` from
-`robocup_testing/` (any folder works; that one keeps output paths local), in the
+`vision/` (any folder works; that one keeps output paths local), in the
 monorepo's root `.venv`: see [Quick start](../README.md#quick-start).
 
 ## A ball is not a tag

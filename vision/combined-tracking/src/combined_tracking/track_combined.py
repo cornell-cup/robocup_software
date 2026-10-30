@@ -2,11 +2,17 @@
 
     uv run track-combined --ball-profile test --tag-size 0.080
 
-Opens the camera once and runs both detectors against the same frame: the
-AprilTag detector + per-tag Kalman filter from tag-tracking, and the
-color-based ball detector + Kalman filter from ball-tracking. Same field,
-same camera, same window -- one plan view with both the robot and the ball
-on it, one combined readout strip.
+One camera, owned by PhotonVision. The tags come from PhotonVision itself
+(tag_tracking.photon) into the per-tag Kalman filter from tag-tracking; the
+ball is found in PhotonVision's camera stream by the color-based detector +
+Kalman filter from ball-tracking. Same field, same lens calibration (the one
+done in PhotonVision), same window -- one plan view with both the robot and
+the ball on it, one combined readout strip.
+
+The two run on their own clocks. The ball steps once per stream frame; the
+tags step once per PhotonVision result, by PhotonVision's capture times. The
+camera's exposure and white balance are PhotonVision's too: lock them in its
+camera settings, or the ball's colour drifts out from under its profile.
 
 This does not replace `uv run track` or `uv run track-ball` -- both still
 work exactly as before, independently, for whichever one thing you actually
@@ -18,7 +24,7 @@ to either tracker show up here too, automatically.
 Keys:
     q / Esc  quit            g  grid on/off           t  trails on/off
     m        mask overlay    w  wall / floor          r  reset trails/tracks
-    [ / ]    fx -/+ 2%       s  save intrinsics       - / =  min ball concentration
+    - / =    min ball concentration
 
 With --no-window there is no window and no keys: nothing is drawn at all, and
 Ctrl+C quits. That is the mode for when the only reader is another program
@@ -40,17 +46,19 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-import pupil_apriltags as pa
 from ball_tracking.ball import BallFieldState, BallTracker
 from ball_tracking.ball_color import color_file, load_all, load_profile
 from ball_tracking.track_ball import AIR_COLOR, BALL_COLOR, draw_ball_marks
 from ball_tracking.track_ball import GHOST_COLOR as BALL_GHOST_COLOR
-from tag_tracking.filter import SPEED_EPS as TAG_SPEED_EPS, TagFieldState, TagTracker
+from tag_tracking.detect import for_tracking
+from tag_tracking.filter import SPEED_EPS as TAG_SPEED_EPS
+from tag_tracking.filter import TagFieldState, TagTracker
+from tag_tracking.photon import add_photon_args, open_photon
 from tag_tracking.pose import TagFieldPose, tag_field_pose
 from tag_tracking.track import GHOST_COLOR as TAG_GHOST_COLOR
-from tag_tracking.track import VELOCITY_COLOR, draw_tag_marks, suppressed_stderr
+from tag_tracking.track import VELOCITY_COLOR, draw_tag_marks
 from vision_core import intrinsics as intr
-from vision_core.camera import list_cameras, lock_camera, open_camera, read_frame, read_key, unlock_camera
+from vision_core.camera import read_key
 from vision_core.field import (
     CameraFieldTransform,
     Field,
@@ -59,7 +67,14 @@ from vision_core.field import (
     field_pose_path,
     resolve_field,
 )
-from vision_core.planview import OUT_COLOR, PlanView, color_for, draw_field, side_by_side
+from vision_core.mjpeg import MjpegServer
+from vision_core.planview import (
+    OUT_COLOR,
+    PlanView,
+    color_for,
+    draw_field,
+    side_by_side,
+)
 
 TAG_TRAIL_LEN = 90
 BALL_TRAIL_LEN = 120
@@ -70,6 +85,13 @@ HEADER_H = 38  # px, the band above the camera image
 #: over OFF_PLANE_WINDOW sightings, is not jitter -- see OffPlaneWatch.
 OFF_PLANE_WARN_M = 0.05
 OFF_PLANE_WINDOW = 60
+
+#: No PhotonVision result for this long (s) and the tag tracks are stepped on
+#: as if it saw nothing, so they coast and drop instead of freezing in place.
+TAG_STALE_S = 0.25
+#: --mjpeg: frames a second sent to a viewer. Encoding every frame costs more
+#: than drawing it, and a person watching needs far fewer.
+VIDEO_FPS = 15
 
 
 # --------------------------------------------------------------------------
@@ -267,6 +289,7 @@ def build_state_doc(
     *,
     seq: int,
     t_capture: float,
+    t_tags: float | None,
     tag_max_coast_s: float,
     stats: dict,
     run_id: str,
@@ -286,6 +309,11 @@ def build_state_doc(
     `run_id` is fixed for one launch and `frame` counts up by one per camera
     frame, so a reader can split an appended --json-log into runs and tell a
     stalled loop (timestamp jumps, frame +1) from missing lines (frame skips).
+
+    `t_capture` is when this camera frame arrived, which the ball comes from.
+    The tags come from PhotonVision's latest result instead, measured on its
+    own schedule: `t_tags` is when that was captured, on the same clock. Null
+    until PhotonVision's first result.
     """
     t_publish = time.time()
     return {
@@ -294,6 +322,7 @@ def build_state_doc(
         "frame": frame,
         "timestamp": t_publish,
         "t_capture": t_capture,
+        "t_tags": t_tags,
         "t_publish": t_publish,
         "field": {"width": field.width, "height": field.height,
                   "x0": field.x0, "y0": field.y0},
@@ -436,68 +465,6 @@ class ZmqStatePublisher:
 # --------------------------------------------------------------------------
 
 
-class LatestFrameGrabber:
-    """Reads the camera continuously on a background thread and keeps only
-    the newest frame.
-
-    Read and process in one loop, and every frame that arrives while the
-    last one is still being processed queues in the driver; each cap.read()
-    then hands back an older frame than the one the camera just took, and
-    the lag builds up to however deep the driver's queue is. Here the queue
-    is emptied as fast as it fills, and a frame nobody took before the next
-    one arrived is overwritten and counted in `dropped` -- the tracker
-    falling behind the camera, which is a different thing from a detector
-    looking at a frame and not finding anything in it.
-    """
-
-    def __init__(self, cap: cv2.VideoCapture) -> None:
-        self._cap = cap
-        self._cond = threading.Condition()
-        self._frame: np.ndarray | None = None
-        self._t_capture = 0.0  # time.time() right after the read, for readers
-        self._t_perf = 0.0  # perf_counter() at the same moment, for dt
-        self._failed = False
-        self._stopping = False
-        #: Frames overwritten before the main loop took them. Cumulative.
-        self.dropped = 0
-        self._thread = threading.Thread(target=self._run, daemon=True)
-        self._thread.start()
-
-    def _run(self) -> None:
-        while not self._stopping:
-            ok, frame = read_frame(self._cap)
-            t_capture, t_perf = time.time(), time.perf_counter()
-            with self._cond:
-                if not ok:
-                    self._failed = True
-                    self._cond.notify_all()
-                    return
-                if self._frame is not None:
-                    self.dropped += 1
-                self._frame = frame
-                self._t_capture, self._t_perf = t_capture, t_perf
-                self._cond.notify_all()
-
-    def read(self) -> tuple[np.ndarray, float, float] | None:
-        """The newest frame not yet handed out, as (frame, t_capture, t_perf).
-        Waits for one if need be. None once the camera stops delivering."""
-        with self._cond:
-            while self._frame is None and not self._failed:
-                # Short waits, not one long one: on Windows a blocked wait is
-                # not interrupted by Ctrl+C until it returns.
-                self._cond.wait(0.1)
-            if self._frame is None:
-                return None
-            frame, self._frame = self._frame, None
-            return frame, self._t_capture, self._t_perf
-
-    def stop(self) -> None:
-        """Stop reading. Call before touching the camera from any other thread
-        (unlock, release) -- VideoCapture is not safe to share."""
-        self._stopping = True
-        self._thread.join(timeout=2.0)
-
-
 class OffPlaneWatch:
     """Says so, once per tag, when a tag keeps reading well off the field plane.
 
@@ -530,9 +497,9 @@ class OffPlaneWatch:
                   f"(median of its last {OFF_PLANE_WINDOW} sightings; on the field "
                   f"it should be within ~1 cm)")
             if self.synthetic:
-                print("  the field pose is the made-up one (--cam-height/--pitch/--hfov "
+                print("  the field pose is the made-up one (--cam-height/--pitch "
                       "guesses), so tag x/y and ball x/y are on different scales; "
-                      "run `uv run calibrate-field` (and calibrate-camera)")
+                      "run `uv run calibrate-field`")
             else:
                 print("  check --tag-size against the printed tag's black square, and "
                       "that the tag lies flat on the field")
@@ -561,7 +528,7 @@ def _new_ball_tracker(args, color, transform, K, field) -> BallTracker:
     return BallTracker(
         color, transform, K, None, sigma_px=args.ball_sigma_px,
         sigma_a=args.ball_sigma_a, sigma_a_air=args.ball_sigma_a_air, field=field,
-        min_concentration=args.ball_min_conc,
+        min_concentration=args.ball_min_conc, ground_only=not args.ball_airborne,
     )
 
 
@@ -569,7 +536,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(
         description=__doc__.splitlines()[0],
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="Keys: q quit, g grid, t trails, m mask, w wall/floor, [ ] fx, r reset, s save, - = min ball conc "
+        epilog="Keys: q quit, g grid, t trails, m mask, w wall/floor, r reset, - = min ball conc "
                "(with --no-window: none, Ctrl+C quits)",
     )
     # -- tag-specific --------------------------------------------------
@@ -604,6 +571,12 @@ def main() -> None:
                     help="mean color likelihood (0-255) a blob needs to count as "
                          "the ball; below it no ball is published. Each blob's "
                          "value is drawn on the video; tune live with - / =")
+    ap.add_argument("--ball-airborne", action="store_true",
+                    help="let the ball be flagged airborne from its apparent size. "
+                         "Off by default: with the camera ~3 m up the ball is ~7 px "
+                         "across, a pixel or two of color bleed reads as a metre of "
+                         "height, and a ball on the table was called airborne 92%% "
+                         "of the time -- its x/y then slid along the view ray")
     # -- shared: field / camera -----------------------------------------
     ap.add_argument("--field", type=float, nargs=2, metavar=("W", "H"),
                     default=None,
@@ -623,13 +596,8 @@ def main() -> None:
     ap.add_argument("--pitch", type=float, default=90.0,
                     help="floor mode: camera downward tilt from horizontal, degrees "
                          "(90 = straight down, directly over the field centre)")
-    ap.add_argument("--camera", type=int, default=0, help="camera index")
-    ap.add_argument("--width", type=int, default=1280)
-    ap.add_argument("--height", type=int, default=720)
-    ap.add_argument("--hfov", type=float, default=None,
-                    help="assumed horizontal FOV in degrees, if not calibrated")
     ap.add_argument("--field-pose", type=str, default=None,
-                    help="measured field pose to load (default robocup_testing/calib/field_pose.json, "
+                    help="measured field pose to load (default vision/calib/field_pose.json, "
                          "written by calibrate-field)")
     ap.add_argument("--corner-origin", action="store_true",
                     help="ignore any custom origin saved by calibrate-field and report "
@@ -637,12 +605,6 @@ def main() -> None:
     ap.add_argument("--synthetic-field", action="store_true",
                     help="use the made-up field from --cam-height/--pitch even if a "
                          "measured one is saved")
-    ap.add_argument("--no-lock", action="store_true",
-                    help="skip the auto-exposure / auto-WB lock the ball tracker wants "
-                         "(not recommended: a camera left on auto re-exposes whenever "
-                         "something bright moves through frame, and the ball's colour "
-                         "drifts out from under its profile)")
-    ap.add_argument("--list-cameras", action="store_true")
     ap.add_argument("--list-profiles", action="store_true")
     ap.add_argument("--display-width", type=int, default=1600,
                     help="scale the window to this width in pixels; "
@@ -678,12 +640,15 @@ def main() -> None:
     ap.add_argument("--no-window", action="store_true",
                     help="headless: no window, nothing drawn, no keys; Ctrl+C quits. "
                          "For when the only reader is another program")
-    ap.add_argument("--mjpg", action="store_true",
-                    help="ask the camera for MJPG frames, which most USB webcams need "
-                         "to reach 720p at full frame rate")
+    ap.add_argument("--mjpeg", type=int, default=None, metavar="PORT",
+                    help="also serve what the window shows as an MJPEG stream at "
+                         "http://<host>:PORT/stream.mjpg (the web app's Tracking page "
+                         "uses this). Works with --no-window: it still draws, just "
+                         "not on screen. Off by default")
+    add_photon_args(ap, stream_optional=False)
     args = ap.parse_args()
     if args.zmq_pub:
-        import_zmq()  # fail now, not after the camera has been opened and locked
+        import_zmq()  # fail now, not after PhotonVision has been connected to
     headless = args.no_window
     json_out = Path(args.json_out) if args.json_out else None
     if json_out:
@@ -692,9 +657,6 @@ def main() -> None:
     if json_log_path:
         json_log_path.parent.mkdir(parents=True, exist_ok=True)
 
-    if args.list_cameras:
-        list_cameras()
-        return
     if args.list_profiles:
         profiles = load_all()
         print(f"{color_file()}: {', '.join(sorted(profiles)) or '(none yet)'}")
@@ -721,41 +683,17 @@ def main() -> None:
         # On screen too, so a custom zero is never a surprise.
         transform.source += f", origin ({transform.origin[0]:g}, {transform.origin[1]:g})"
 
-    # A one-frame driver queue, so a frame is never older than the one the
-    # camera took last. Where the backend ignores it, LatestFrameGrabber below
-    # still drains the queue as fast as it fills.
-    cap = open_camera(args.camera, args.width, args.height,
-                      fourcc="MJPG" if args.mjpg else None, buffersize=1)
-    locked = False
+    # The stream reads on its own thread from here on, keeping only the newest
+    # frame, so a frame is never older than the one PhotonVision sent last.
+    tags, stream = open_photon(args, need_stream=True)
     http_server = None
     zmq_pub = None
     json_log_file = None
-    grabber = None
-    if not args.no_lock:
-        # Let the camera settle on the scene before freezing it, or the lock
-        # freezes whatever exposure it happened to open with. Tag detection
-        # does not care about this either way (it thresholds greyscale), so
-        # this is purely for the ball's color profile to hold still.
-        for _ in range(20):
-            cap.read()
-        print("camera lock: " + ", ".join(lock_camera(cap)))
-        locked = True
 
     try:
-        ok, frame = read_frame(cap)
-        if not ok:
-            raise SystemExit("camera opened but the first frame failed")
-        h, w = frame.shape[:2]
+        w, h = tags.size
+        K, dist, intr_source = tags.K, tags.dist, tags.source
 
-        if args.hfov is not None:
-            K = intr.from_fov(w, h, args.hfov)
-            dist = np.zeros(5)
-            intr_source = f"assumed {args.hfov:g} deg HFOV"
-        else:
-            K, dist, intr_source = intr.load(w, h)
-
-        tag_detector = pa.Detector(families="tag36h11", nthreads=4, quad_decimate=1.0,
-                                   decode_sharpening=0.25)
         tag_tracker = TagTracker(field, sigma_a=args.tag_sigma_a,
                                  sigma_alpha_deg=args.tag_sigma_alpha,
                                  max_coast_s=args.tag_coast)
@@ -774,9 +712,10 @@ def main() -> None:
         run_id = time.strftime("%Y%m%d-%H%M%S")
         frame_no = 0
 
-        # Whole-frame undistortion: the tag detector searches the entire
+        # Whole-frame undistortion: the ball detector searches the entire
         # image, so it (and the overlay drawn on top of it) need to share one
-        # undistorted pinhole space -- see vision_core.intrinsics.undistort_maps.
+        # undistorted pinhole space with the tag corners -- see
+        # vision_core.intrinsics.undistort_maps.
         undistort_maps = intr.undistort_maps(K, dist, w, h)
 
         print(f"\nfield {field.width:g} x {field.height:g} m, {transform.source}")
@@ -796,6 +735,10 @@ def main() -> None:
         if zmq_pub is not None:
             print(f"publishing live state on ZMQ PUB {args.zmq_pub} every frame")
         publishing = any(p is not None for p in (json_out, http_server, json_log_file, zmq_pub))
+        video = MjpegServer(args.mjpeg) if args.mjpeg else None
+        if video is not None:
+            print(f"serving the tracking view at http://localhost:{args.mjpeg}/stream.mjpg")
+        last_video = 0.0
 
         win = "combined tracking"
         if headless:
@@ -804,42 +747,66 @@ def main() -> None:
             print("window open -- q or Esc to quit\n")
             cv2.namedWindow(win, cv2.WINDOW_AUTOSIZE)
 
-        # From here on only the grabber's thread reads the camera.
-        grabber = LatestFrameGrabber(cap)
         last_t = time.perf_counter()
+        tag_last_t = None  # PhotonVision's clock: the last result's capture time
+        tag_last_perf = last_t  # ours, when that result was taken in
+        t_tags = None  # time.time() instant tag_states are for (t_tags in the doc)
+        dets: list = []
+        tag_poses: list[TagFieldPose] = []
+        tag_states: list[TagFieldState] = []
+        tag_latency_ms = 0.0
+        tag_skipped = 0
         try:
             while True:
-                got = grabber.read()
+                got = stream.read()
                 if got is None:
-                    print("camera stopped returning frames")
+                    print("PhotonVision's stream stopped sending frames")
                     break
                 frame, t_capture, t_perf = got
                 frame_no += 1
                 # dt between *captures*, not between loop iterations: when the
-                # grabber drops a frame, the filters are told the real gap.
+                # stream drops a frame, the ball filter is told the real gap.
                 dt = t_perf - last_t
                 last_t = t_perf
-                fps = 0.9 * fps + 0.1 / max(dt, 1e-6)
+                if dt > 0:  # the first frame can predate the loop's clock
+                    fps = 0.9 * fps + 0.1 / dt
 
                 if undistort_maps is not None:
                     frame = cv2.remap(frame, *undistort_maps, cv2.INTER_LINEAR)
 
                 t0 = time.perf_counter()
-                grey = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                cam_params = (K[0, 0], K[1, 1], K[0, 2], K[1, 2])
-                with suppressed_stderr():
-                    dets = tag_detector.detect(grey, estimate_tag_pose=True,
-                                               camera_params=cam_params,
-                                               tag_size=args.tag_size)
-                tag_poses = [
-                    tag_field_pose(d, transform, field, args.heading_offset, K=K) for d in dets
-                ]
-                tag_states = tag_tracker.update(tag_poses, dt)
+                result = tags.poll()
+                if result is not None:
+                    # Tags step by PhotonVision's capture times, not this loop's:
+                    # results arrive on their own schedule, not with the frames.
+                    tag_dt = 0.0 if tag_last_t is None else max(0.0, result.t - tag_last_t)
+                    tag_last_t, tag_last_perf = result.t, t0
+                    t_tags = result.t_wall
+                    tag_latency_ms = result.latency_ms
+                    tag_skipped += result.skipped
+                    dets = for_tracking(result.detections, K, dist, args.tag_size)
+                    tag_poses = [
+                        tag_field_pose(d, transform, field, args.heading_offset, K=K)
+                        for d in dets
+                    ]
+                    tag_states = tag_tracker.update(tag_poses, tag_dt)
+                elif tag_last_t is not None and t0 - tag_last_perf > TAG_STALE_S:
+                    # PhotonVision went quiet. Step on as if it saw nothing, so
+                    # the tracks coast and drop; both clocks move by the gap,
+                    # which keeps the next result's dt right.
+                    gap = t0 - tag_last_perf
+                    tag_last_t += gap
+                    tag_last_perf = t0
+                    if t_tags is not None:
+                        t_tags += gap
+                    dets, tag_poses = [], []
+                    tag_states = tag_tracker.update([], gap)
                 t1 = time.perf_counter()
                 ball_state = ball_tracker.update(frame, dt)
                 t2 = time.perf_counter()
 
-                off_plane.add(tag_poses)
+                if result is not None:
+                    off_plane.add(tag_poses)
                 # None is the tracker idling (nothing reached --ball-min-conc),
                 # which is a frame without the ball as much as a coasting one is.
                 if ball_state is not None and ball_state.visible:
@@ -870,12 +837,14 @@ def main() -> None:
                         "fps": fps,
                         "tag_ms": (t1 - t0) * 1000.0,
                         "ball_ms": (t2 - t1) * 1000.0,
-                        "capture_dropped": grabber.dropped,
+                        "capture_dropped": stream.dropped,
+                        "photon_latency_ms": tag_latency_ms,
+                        "photon_skipped": tag_skipped,
                         "ball_dropouts": ball_dropouts,
                     }
                     doc = build_state_doc(field, tag_states, ball_state, seq=seq,
                                           run_id=run_id, frame=frame_no,
-                                          t_capture=t_capture,
+                                          t_capture=t_capture, t_tags=t_tags,
                                           tag_max_coast_s=tag_tracker.max_coast_s,
                                           stats=stats)
                     if json_out is not None:
@@ -895,7 +864,7 @@ def main() -> None:
 
                 # Drawing only after publishing: none of it feeds the doc, and
                 # every millisecond spent on overlays first is latency_ms.
-                if headless:
+                if headless and video is None:
                     continue
                 draw_field(frame, field, transform, K, show_grid)
                 for d, pose in zip(dets, tag_poses):
@@ -916,6 +885,13 @@ def main() -> None:
                     composite = cv2.resize(
                         composite, None, fx=k, fy=k,
                         interpolation=cv2.INTER_AREA if k < 1.0 else cv2.INTER_LINEAR)
+                # JPEG-encoding every frame would cost more than the drawing;
+                # a viewer needs far fewer.
+                if video is not None and t_perf - last_video >= 1.0 / VIDEO_FPS:
+                    video.publish(composite)
+                    last_video = t_perf
+                if headless:
+                    continue
                 cv2.imshow(win, composite)
 
                 key = read_key()
@@ -936,14 +912,6 @@ def main() -> None:
                     # silently keeping the ball track, which may be exactly the
                     # thing you pressed `r` to get rid of.
                     ball_tracker = _new_ball_tracker(args, color, transform, K, field)
-                elif key in (ord("["), ord("]")):
-                    K = K.copy()
-                    K[0, 0] *= 0.98 if key == ord("[") else 1.02
-                    K[1, 1] = K[0, 0]
-                    intr_source = "hand-tuned"
-                    undistort_maps = intr.undistort_maps(K, dist, w, h)
-                    ball_tracker = _new_ball_tracker(args, color, transform, K, field)
-                    print(f"fx {K[0, 0]:.1f}  -> {intr.hfov_of(K, w):.1f} deg HFOV")
                 elif key == ord("w"):
                     if using_calibrated:
                         print(f"field is calibrated ({transform.source}); "
@@ -963,31 +931,23 @@ def main() -> None:
                     args.ball_min_conc = float(np.clip(args.ball_min_conc + step, 0.0, 255.0))
                     ball_tracker.detector.min_concentration = args.ball_min_conc
                     print(f"min ball concentration {args.ball_min_conc:.0f}")
-                elif key == ord("s"):
-                    path = intr.save(K, w, h, intr_source, dist=dist)
-                    print(f"saved {path}")
-                    if not np.any(dist):
-                        print("(fx only, no lens distortion -- run calibrate-camera for that)")
         except KeyboardInterrupt:
             # The only way out with --no-window, and fine with a window too.
             print("\ninterrupted -- shutting down")
 
     finally:
-        # The grabber first: its thread is still reading the camera, and
-        # VideoCapture is not safe to unlock or release from under it.
-        if grabber is not None:
-            grabber.stop()
-            print(f"capture thread dropped {grabber.dropped} frame(s) the tracker "
-                  "was too busy to take")
+        stream.stop()
+        print(f"stream thread dropped {stream.dropped} frame(s) the tracker "
+              "was too busy to take")
         if http_server is not None:
             http_server.stop()
         if zmq_pub is not None:
             zmq_pub.stop()
         if json_log_file is not None:
             json_log_file.close()
-        if locked:
-            print("camera unlock: " + ", ".join(unlock_camera(cap)))
-        cap.release()
+        if video is not None:
+            video.stop()
+        tags.close()
         if not headless:
             cv2.destroyAllWindows()
 
