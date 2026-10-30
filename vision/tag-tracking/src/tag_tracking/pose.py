@@ -50,6 +50,20 @@ class TagFieldPose:
 TAG_VISUAL_RIGHT = np.array([-1.0, 0.0, 0.0])
 
 
+#: Frame width from which tag outlines are found on a half-size image.
+DECIMATE_FROM_WIDTH = 1200
+
+
+def auto_tag_decimate(frame_width: int) -> float:
+    """pupil_apriltags quad_decimate for a frame this wide. Halving a 1280-wide
+    frame is ~4x faster with the same accuracy (corners are refined at full
+    resolution either way). Below that detection is already a few ms, and a
+    far tag can be under 20 px, where halving loses it -- an 80 mm tag on a
+    3 m field at 800x600 was missed in a third of frames at decimate 2, none at 1.
+    """
+    return 2.0 if frame_width >= DECIMATE_FROM_WIDTH else 1.0
+
+
 def _corner_right_on_field(detection, transform: CameraFieldTransform, K: np.ndarray):
     """The tag's visual-right direction on the field plane, from its corners.
 
@@ -65,12 +79,30 @@ def _corner_right_on_field(detection, transform: CameraFieldTransform, K: np.nda
     return (c[0] + c[3]) / 2.0 - (c[1] + c[2]) / 2.0
 
 
+def _ray_to_plane(u: float, v: float, transform: CameraFieldTransform, K: np.ndarray,
+                  height: float):
+    """Field (x, y) where pixel (u, v)'s ray meets the plane `height` metres
+    above the field (along +Z), or None if it never does in front of the camera.
+    Pixels are already undistorted, as for _corner_right_on_field."""
+    ray = transform.direction_to_field(
+        np.linalg.inv(K) @ np.array([u, v, 1.0]))[0]
+    cam = transform.camera_origin_in_field()
+    if abs(ray[2]) < 1e-9:
+        return None
+    s = (height - cam[2]) / ray[2]
+    if s <= 0:
+        return None
+    p = cam + s * ray
+    return float(p[0]), float(p[1])
+
+
 def tag_field_pose(
     detection,
     transform: CameraFieldTransform,
     field: Field,
     heading_offset_deg: float = 0.0,
     K: np.ndarray | None = None,
+    tag_height: float = 0.0,
 ) -> TagFieldPose:
     """Convert one pose-estimated AprilTag detection into field coordinates.
 
@@ -91,9 +123,25 @@ def tag_field_pose(
     tens of degrees. The corners have no such ambiguity, and projecting them onto
     the field plane keeps directions exactly even when the tag rides above it,
     since the tag lies parallel to the field.
+
+    `K` also moves the position onto the field plane: x, y are where the ray
+    through the tag's centre pixel meets the plane `tag_height` metres above
+    the field (0 for a tag lying on it; the shell height for one on a robot).
+    pose_t is ranged from the tag's apparent size, so a --tag-size or fx a few
+    percent off slides every position towards or away from the camera -- about
+    10 cm at the corners of a 3 m field for 5 mm of tag size. The ray depends
+    only on the calibrated pose, so a tag set where a calibration tag stood
+    reads back that corner. off_plane_m stays pose_t's: its distance from the
+    plane is the tell-tale for exactly that size/fx mismatch.
     """
     centre_cam = np.asarray(detection.pose_t, dtype=np.float64).reshape(3)
     x, y, z = transform.camera_to_field(centre_cam)[0]
+    if K is not None:
+        on_plane = _ray_to_plane(float(detection.center[0]), float(detection.center[1]),
+                                 transform, K, tag_height)
+        if on_plane is not None:
+            x, y = on_plane
+            z -= tag_height
 
     # Heading: take the direction that points right across the upright tag,
     # express it in the field frame, and measure its angle about the field normal.

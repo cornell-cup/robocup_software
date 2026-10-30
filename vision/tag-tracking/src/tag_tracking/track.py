@@ -239,13 +239,16 @@ def main() -> None:
                     help="--synthetic-camera: image height")
     ap.add_argument("--heading-offset", type=float, default=0.0,
                     help="degrees added to theta, if the tag is not mounted upright")
+    ap.add_argument("--tag-height", type=float, default=0.0,
+                    help="metres the tag sits above the field (0 = lying on it; a robot's "
+                         "shell height for a tag on top of a robot)")
     ap.add_argument("--display-width", type=int, default=1600,
                     help="scale the window to this width in pixels; "
                          "enlarges as well as shrinks")
     ap.add_argument("--print-poses", action="store_true",
                     help="also stream (id, x, y, theta, vx, vy, speed) to stdout, "
                          "one line per tracked tag per frame")
-    ap.add_argument("--sigma-a", type=float, default=1.0,
+    ap.add_argument("--sigma-a", type=float, default=8.0,
                     help="filter process noise: how hard a robot may accelerate, "
                          "m/s^2. Raise it if the track lags behind a fast robot")
     ap.add_argument("--sigma-alpha", type=float, default=180.0,
@@ -452,7 +455,8 @@ def main() -> None:
         dets = for_tracking(raw, K, dist, args.tag_size)
 
         poses = [
-            tag_field_pose(d, transform, field, args.heading_offset, K=K) for d in dets
+            tag_field_pose(d, transform, field, args.heading_offset, K=K,
+                               tag_height=args.tag_height) for d in dets
         ]
         states = tracker.update(poses, dt)
 

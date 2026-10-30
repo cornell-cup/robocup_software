@@ -178,6 +178,14 @@ VISION_SNAP_ANGLE = math.pi / 2  # rad
 # to MAX_BALL_SPEED at any instant, so MAX_BALL_SPEED * gap around it.
 # Sightings outside are rejected (outlier gate); predictions and dead-reckoning
 # are clamped into it, and speeds capped at ROBOT_MAX_SPEED / MAX_BALL_SPEED.
+# Limits for a camera-mirrored robot's reach circle and speed cap. Not the sim
+# robot's ROBOT_MAX_SPEED / ROBOT_MAX_ACCEL (1.19 m/s, 3.57 m/s^2): those model the
+# simulated motors, and a tag moved by hand -- or a real robot -- outruns them,
+# so every fast frame was rejected and the robot lurched when the gate relocked.
+# These still put a one-frame jump of more than ~10 cm beyond the predicted
+# position outside the circle, so a misdetection elsewhere on the field is refused.
+VISION_ROBOT_MAX_SPEED = 6.0  # m/s
+VISION_ROBOT_MAX_ACCEL = 40.0  # m/s^2
 VISION_GATE_MARGIN = 0.05  # meters, position noise of one sighting
 VISION_VEL_NOISE = 0.1  # m/s, error on the tracker's Kalman velocity
 VISION_GATE_RELOCK = 3  # consecutive rejects before accepting anyway

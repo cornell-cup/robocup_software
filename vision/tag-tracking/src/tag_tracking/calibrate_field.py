@@ -58,6 +58,7 @@ from vision_core.field import (
     resolve_field,
     saved_origin,
 )
+from vision_core.intrinsics import undistort_maps
 from vision_core.planview import draw_field
 
 from .detect import LocalTagDetector, TagDetection, for_tracking
@@ -417,13 +418,28 @@ def pick_origin(
     SNAP_PX), 'c' for the centre, Enter or 's' to accept, 'd' or Esc to keep
     the default corner. Starts at `initial` (e.g. the previously saved
     origin), so Enter alone keeps it.
+
+    Frames come in raw and are undistorted here before anything is drawn, the
+    same as the trackers do: draw_field projects with a plain pinhole K, so
+    drawn over the raw (distorted) picture the field would miss the real
+    corners towards the edges of the frame, while tracking afterwards lines up.
+    Snapping and clicks then work in that same undistorted picture.
     """
     corner = transform.with_origin(None)
+    first = read_bgr()
+    h, w = first.shape[:2]
+    maps = undistort_maps(K, np.zeros(5) if dist is None else dist, w, h)
+    pending = [first]
+
+    def read_undistorted() -> np.ndarray:
+        frame = pending.pop() if pending else read_bgr()
+        return frame.copy() if maps is None else cv2.remap(frame, *maps, cv2.INTER_LINEAR)
+
     snaps = _snap_points(field)
     snap_px = {}
     for sx, sy in snaps:
         px, _ = cv2.projectPoints(np.array([[sx, sy, 0.0]]), *corner.rvec_tvec(), K,
-                                  np.zeros(5) if dist is None else dist)
+                                  np.zeros(5))
         snap_px[(sx, sy)] = px.reshape(2)
     chosen: list[tuple[float, float] | None] = [initial]
 
@@ -434,7 +450,7 @@ def pick_origin(
         if np.linalg.norm(snap_px[near] - (u, v)) < SNAP_PX:
             chosen[0] = near
             return
-        p = corner.pixel_to_field(u, v, K, dist)
+        p = corner.pixel_to_field(u, v, K)
         if p is not None:
             chosen[0] = (round(float(p[0]), 3), round(float(p[1]), 3))
 
@@ -442,7 +458,7 @@ def pick_origin(
     cv2.setMouseCallback(window_name, on_mouse)
     try:
         while True:
-            disp = read_bgr().copy()
+            disp = read_undistorted()
             o = chosen[0]
             shown = corner.with_origin(o)
             draw_field(disp, field.relative_to(o), shown, K)
