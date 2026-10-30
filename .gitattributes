@@ -1,0 +1,5 @@
+# LF line endings for the simulator and strategy code, as robocup/ (where they
+# used to live) had it. vision/ and app/ keep what they were committed with.
+sim/** text=auto eol=lf
+strategy/** text=auto eol=lf
+archive/** text=auto eol=lf

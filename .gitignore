@@ -1,5 +1,5 @@
-# Repo-wide ignores. robocup/ and robocup_testing/ keep their own .gitignore
-# files for folder-specific rules; these apply everywhere, including the root.
+# Repo-wide ignores. vision/ keeps its own .gitignore for folder-specific
+# rules; these apply everywhere, including the root.
 
 # Python
 __pycache__/
@@ -11,7 +11,7 @@ __pycache__/
 # sample recording.
 runs/
 *.jsonl
-!robocup_testing/test.jsonl
+!vision/test.jsonl
 *.json.tmp
 state.json
 live_state.json
@@ -19,3 +19,17 @@ live_state.json
 # OS / editor noise
 .DS_Store
 Thumbs.db
+
+# Simulator and strategy (moved here from robocup/.gitignore)
+archive/godot/.godot/
+addons/godot-git-plugin/
+# RL training output: only the one committed checkpoint is kept
+strategy/rl/checkpoints/*
+!strategy/rl/checkpoints/first_final/
+strategy/rl/checkpoints/first_final/*
+!strategy/rl/checkpoints/first_final/final.zip
+strategy/rl/tb_logs/
+strategy/rl/runs/
+
+# Web app: npm installs, never committed
+app/web/node_modules/
