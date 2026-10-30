@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { Logo } from "./components/Logo";
 import { Toasts } from "./components/Toasts";
-import { usePhotonVision } from "./lib/photonvision";
+import { photonvision, usePhotonVision } from "./lib/photonvision";
 import { useSim } from "./lib/sim";
 import { Ball } from "./pages/Ball";
 import { Calibration } from "./pages/Calibration";
@@ -42,9 +42,62 @@ export default function App() {
   );
 }
 
+/** PhotonVision in the header, on every page: the camera pages all need it.
+ *  Shows its state with the one action that makes sense next. */
+function PhotonVisionStatus() {
+  const { status: pv, busy } = usePhotonVision();
+  if (!pv) return null;
+  const inst = pv.install;
+  const downloading = inst.state === "starting" || inst.state === "working";
+
+  if (pv.up) {
+    return (
+      <span className="stat">
+        <a className="stat" href={`http://${location.hostname}:5800`} target="_blank" rel="noreferrer" title="Open PhotonVision's own UI: camera, lens calibration, AprilTag pipeline">
+          <span className="dot ok" />
+          PhotonVision <span className="ext-arrow" aria-hidden="true">↗</span>
+        </a>
+        {pv.ours && <button className="btn sm ghost stat-btn" disabled={busy} onClick={photonvision.stop}>Stop</button>}
+      </span>
+    );
+  }
+  if (downloading) {
+    const pct = inst.total ? ` ${Math.round(((inst.got ?? 0) / inst.total) * 100)}%` : "";
+    return (
+      <span className="stat" title={inst.step ?? undefined}>
+        <span className="dot warn pulse" />
+        Downloading PhotonVision{pct}
+      </span>
+    );
+  }
+  if (pv.state === "starting") {
+    return (
+      <span className="stat">
+        <span className="dot warn pulse" />
+        PhotonVision starting…
+      </span>
+    );
+  }
+  if (!pv.installed) {
+    return (
+      <span className="stat" title={`About 160 MB, into ${pv.folder}`}>
+        <span className="dot" />
+        PhotonVision not installed
+        <button className="btn sm primary stat-btn" disabled={busy} onClick={photonvision.install}>Download</button>
+      </span>
+    );
+  }
+  return (
+    <span className="stat" title={pv.failure ?? `${pv.jar} in ${pv.folder}`}>
+      <span className={`dot${pv.failure ? " red" : ""}`} />
+      PhotonVision off
+      <button className="btn sm stat-btn" disabled={busy} onClick={photonvision.start}>Start</button>
+    </span>
+  );
+}
+
 function Header({ route }: { route: string }) {
   const sim = useSim();
-  const { status: pv } = usePhotonVision();
   return (
     <header className="top">
       <a className="brand" href="#/sim">
@@ -63,18 +116,7 @@ function Header({ route }: { route: string }) {
       </nav>
 
       <div className="status">
-        {pv &&
-          (pv.up ? (
-            <a className="stat" href={`http://${location.hostname}:5800`} target="_blank" rel="noreferrer" title="Open PhotonVision's own UI">
-              <span className="dot ok" />
-              PhotonVision <span className="ext-arrow" aria-hidden="true">↗</span>
-            </a>
-          ) : (
-            <a className="stat" href="#/calibration" title="Start it from Field calibration">
-              <span className={`dot${pv.state === "starting" ? " warn pulse" : ""}`} />
-              PhotonVision {pv.state === "starting" ? "starting" : "off"}
-            </a>
-          ))}
+        <PhotonVisionStatus />
         <span className="stat" title={sim.connected ? "" : "Can't reach the app server"}>
           <span className={`dot${sim.up ? " ok" : !sim.connected ? " red" : ""}`} />
           {!sim.connected ? "Server offline" : sim.up ? "Sim running" : "Sim stopped"}

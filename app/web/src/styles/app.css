@@ -394,6 +394,12 @@ table.plain td {
 a.stat:hover {
   color: var(--text);
 }
+.stat-btn {
+  height: 26px;
+  padding: 0 10px;
+  font-size: 14px;
+  margin-left: 2px;
+}
 /* marks a link that opens another site in a new tab */
 .ext-arrow {
   margin-left: -3px;
