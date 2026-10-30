@@ -50,7 +50,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from ball_tracking.ball import BallFieldState, BallTracker
+from ball_tracking.ball import REST_EXIT_M, BallFieldState, BallTracker
 from ball_tracking.ball_color import color_file, load_all, load_profile
 from ball_tracking.track_ball import AIR_COLOR, BALL_COLOR, draw_ball_marks
 from ball_tracking.track_ball import GHOST_COLOR as BALL_GHOST_COLOR
@@ -170,6 +170,7 @@ def draw_combined_readout(
         f"LOST {ball_state.age:.1f}s (held)" if ball_state.lost
         else f"COASTING {ball_state.age * 1000:.0f}ms" if not ball_state.visible
         else "AIRBORNE" if not ball_state.grounded
+        else "grounded, resting" if ball_state.resting
         else "grounded"
     )
     color = (
@@ -283,6 +284,7 @@ def ball_state_to_dict(s: BallFieldState, field: Field) -> dict:
         "inside": s.inside(field),
         "age": s.age,
         "lost": s.lost,
+        "resting": s.resting,
     }
 
 
@@ -568,6 +570,7 @@ def _new_ball_tracker(args, color, transform, K, field) -> BallTracker:
         color, transform, K, None, sigma_px=args.ball_sigma_px,
         sigma_a=args.ball_sigma_a, sigma_a_air=args.ball_sigma_a_air, field=field,
         min_concentration=args.ball_min_conc, ground_only=not args.ball_airborne,
+        rest_exit_m=args.ball_rest_mm / 1000.0,
     )
 
 
@@ -609,6 +612,10 @@ def main() -> None:
                     help="ball filter process noise while airborne, m/s^2")
     ap.add_argument("--ball-sigma-px", type=float, default=3.0,
                     help="assumed pixel noise on the ball centre")
+    ap.add_argument("--ball-rest-mm", type=float, default=REST_EXIT_M * 1000,
+                    help="a ball that stops is held still, its position the average "
+                         "of what is seen, until it moves this far (mm, default "
+                         f"{REST_EXIT_M * 1000:g}); 0 follows every measurement")
     ap.add_argument("--ball-min-conc", type=float, default=80.0,
                     help="mean color likelihood (0-255) a blob needs to count as "
                          "the ball; below it no ball is published. Each blob's "

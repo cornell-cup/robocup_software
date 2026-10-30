@@ -23,6 +23,7 @@ The cross-check is free, because apparent radius is a second, independent ranger
 
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass
 
 import cv2
@@ -34,6 +35,15 @@ from .ball_color import BallColor
 
 #: Below this speed the direction of travel is noise, not a direction.
 SPEED_EPS = 0.05
+
+#: A grounded ball slower than REST_SPEED (m/s) for REST_AFTER_S is at rest:
+#: the filter holds its velocity at zero and averages the measurements instead
+#: of following each one, so a still ball reads still. It rolls again once the
+#: mean of the last REST_WINDOW measurements is rest_exit_m from that position.
+REST_SPEED = 0.10
+REST_AFTER_S = 0.25
+REST_WINDOW = 3
+REST_EXIT_M = 0.006
 
 
 # --------------------------------------------------------------------------
@@ -63,6 +73,9 @@ class BallFieldState:
     #: Unseen for longer than the filter will coast. x/y/z are then held where
     #: the coast ran out and vx/vy/speed read 0 -- a position, not a prediction.
     lost: bool = False
+    #: Sitting still: x/y are the average of the measurements since it stopped,
+    #: and vx/vy/speed read 0. See REST_SPEED.
+    resting: bool = False
 
     def inside(self, field: Field) -> bool:
         return field.contains(self.x, self.y)
@@ -365,6 +378,7 @@ class BallFilter:
         sigma_a_air: float = 10.0,
         gate: float = 9.0,
         max_coast_s: float = 0.35,
+        rest_exit_m: float = REST_EXIT_M,
     ) -> None:
         #: Process noise as an acceleration, m/s^2. 2-4 suits a ball rolling on
         #: carpet, where the "acceleration" being modelled is mostly the surface
@@ -380,6 +394,15 @@ class BallFilter:
         self.initialised = False
         self.grounded = True
         self.age = 0.0
+        #: Metres the recent measurements must move to end a rest; 0 never rests.
+        #: Not the gate: the gate is sized by sigma_px, ~1 cm at 2 m, several
+        #: times what a still ball really wobbles, so it would let a slow roll
+        #: go centimetres before noticing.
+        self.rest_exit_m = float(rest_exit_m)
+        self.resting = False
+        self._slow_s = 0.0
+        self._clock = 0.0  # filter time, s: summed predict() steps
+        self._recent: deque[tuple[float, np.ndarray]] = deque(maxlen=REST_WINDOW)
 
     # -- prediction --------------------------------------------------------
 
@@ -394,9 +417,14 @@ class BallFilter:
             # let the clock keep running, so age still says how stale it is.
             self.age += dt
             return
-        sigma = self.sigma_a if self.grounded else self.sigma_a_air
+        # At rest nothing is pushing it: no process noise, so each measurement
+        # adds to the average instead of dragging the estimate after it.
+        sigma = 0.0 if self.resting else self.sigma_a if self.grounded else self.sigma_a_air
         self.kf.predict(cv_transition(dt, 3), cv_process_noise(dt, [sigma] * 3))
         self.age += dt
+        self._clock += dt
+        slow = self.grounded and float(np.hypot(self.kf.x[3], self.kf.x[4])) < REST_SPEED
+        self._slow_s = self._slow_s + dt if slow else 0.0
 
     # -- update ------------------------------------------------------------
 
@@ -414,6 +442,12 @@ class BallFilter:
         self.initialised = True
         self.grounded = grounded
         self.age = 0.0
+        self._end_rest()
+
+    def _end_rest(self) -> None:
+        self.resting = False
+        self._slow_s = 0.0
+        self._recent.clear()
 
     def update_grounded(
         self, xy: np.ndarray, sigma_xy: float, plane_z: float, jump: float = 0.0
@@ -428,20 +462,37 @@ class BallFilter:
             # with came from the weak radius ranger. Loosen before believing the
             # precise measurement, for the same reason as the other direction.
             self.release(max(float(jump), 0.10))
+        z = np.asarray(xy, np.float64).reshape(2)
+        if self.resting:
+            self._recent.append((self._clock, z))
+            ts = np.array([t for t, _ in self._recent])
+            zs = np.array([p for _, p in self._recent])
+            moved = float(np.linalg.norm(zs.mean(axis=0) - self.kf.x[:2]))
+            if len(self._recent) == REST_WINDOW and moved > self.rest_exit_m:
+                # Rolling: back to following it, loosened by how far it went so
+                # the averaged-tight estimate lets go, and already moving at the
+                # speed those measurements show rather than starting from zero.
+                self.release(moved)
+                if ts[-1] > ts[0]:
+                    self.kf.x[3:5] = (zs[-1] - zs[0]) / (ts[-1] - ts[0])
         H = np.zeros((2, 6))
         H[0, 0] = H[1, 1] = 1.0
         R = np.eye(2) * sigma_xy**2
-        ok = self._update(np.asarray(xy, np.float64).reshape(2), H, R)
+        ok = self._update(z, H, R)
         self.grounded = True
+        if (ok and not self.resting and self.rest_exit_m > 0
+                and self._slow_s >= REST_AFTER_S):
+            self.resting = True
+            self._recent.clear()
         # A ball on the field is at exactly one height and is not rising. Say so
         # rather than letting z drift on process noise nobody is correcting.
+        # At rest, the same for its velocity.
         x, P = self.kf.x, self.kf.P
-        x[2] = plane_z
-        x[5] = 0.0
-        P[2, :] = P[:, 2] = 0.0
-        P[5, :] = P[:, 5] = 0.0
-        P[2, 2] = 1e-6
-        P[5, 5] = 1e-6
+        pinned = (2, 3, 4, 5) if self.resting else (2, 5)
+        for i in pinned:
+            x[i] = plane_z if i == 2 else 0.0
+            P[i, :] = P[:, i] = 0.0
+            P[i, i] = 1e-6
         return ok
 
     def release(self, sigma: float) -> None:
@@ -462,6 +513,7 @@ class BallFilter:
         the gate correctly rejects the correct new measurement, leaving the
         filter coasting on a confident, stale, sinking estimate.
         """
+        self._end_rest()
         var = max(float(sigma) ** 2, 1e-4)
         P = self.kf.P
         for i in range(3):
@@ -516,6 +568,7 @@ class BallFilter:
             visible=visible,
             age=float(self.age),
             lost=lost,
+            resting=self.resting and not lost,
         )
 
 
@@ -602,6 +655,7 @@ class BallTracker:
         max_z: float = 1.0,
         min_concentration: float = 80.0,
         ground_only: bool = False,
+        rest_exit_m: float = REST_EXIT_M,
     ) -> None:
         self.color = color
         self.detector = BallDetector(color, min_concentration=min_concentration)
@@ -625,6 +679,9 @@ class BallTracker:
         #: chroma, the mask blur) reads as one, swapping in the noisy radius
         #: position for a ball that is sitting on the table.
         self.ground_only = bool(ground_only)
+        #: BallFilter's: how far a resting ball's measurements must move before
+        #: it is followed again. 0 turns resting off.
+        self.rest_exit_m = float(rest_exit_m)
 
         #: Where a ball can plausibly be. None makes every track plausible, and
         #: the output is simply the healthiest.
@@ -652,7 +709,8 @@ class BallTracker:
         self.last_obs: BallObservation | None = None
 
     def _new_filter(self) -> BallFilter:
-        return BallFilter(sigma_a=self.sigma_a, sigma_a_air=self.sigma_a_air)
+        return BallFilter(sigma_a=self.sigma_a, sigma_a_air=self.sigma_a_air,
+                          rest_exit_m=self.rest_exit_m)
 
     @property
     def filter(self) -> BallFilter:
