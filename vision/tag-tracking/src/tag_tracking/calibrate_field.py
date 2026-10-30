@@ -288,6 +288,94 @@ def solve_sequential(
     )
 
 
+class CornerSampler:
+    """The bookkeeping of a sequential capture, apart from any window:
+    capture_sequential_corners() drives it from an OpenCV window, the web app
+    from buttons.
+
+    At each position in `layout`, in order: add() accumulates every frame with
+    *exactly one* tag visible (zero or several are ambiguous, so skipped) up to
+    `frames_per_corner`, to average out per-frame jitter. Only a tag held still
+    counts: one that moves more than STILL_PX restarts the samples, and one
+    still within MIN_CORNER_SEP_PX of a corner already confirmed is ignored --
+    otherwise the next corner fills up in half a second from wherever the tag
+    was while being carried there.
+
+    `results` is {tag_id: averaged detection}, keyed the same way `layout` is
+    -- the physical tag's id does not have to match; only the order the
+    positions are visited in does.
+    """
+
+    #: what add() reports, for whoever shows it
+    NO_TAG, SEVERAL, AT_PREVIOUS, MOVING, CAPTURING, READY, DONE = (
+        "no_tag", "several", "at_previous", "moving", "capturing", "ready", "done")
+
+    def __init__(self, layout: dict[int, tuple[float, float]],
+                 frames_per_corner: int = FRAMES_PER_CORNER) -> None:
+        self.items = list(layout.items())
+        self.frames_per_corner = frames_per_corner
+        self.results: dict[int, TagDetection] = {}
+        self.index = 0
+        self._samples: list[np.ndarray] = []
+        self._corners: list[np.ndarray] = []
+
+    @property
+    def done(self) -> bool:
+        return self.index >= len(self.items)
+
+    @property
+    def count(self) -> int:
+        return len(self._samples)
+
+    @property
+    def ready(self) -> bool:
+        return self.count >= self.frames_per_corner
+
+    def add(self, dets: list[TagDetection]) -> str:
+        """One frame's detections; returns what is happening, as one of the
+        class's status strings."""
+        if self.done:
+            return self.DONE
+        if len(dets) != 1:
+            return self.SEVERAL if dets else self.NO_TAG
+        c = np.asarray(dets[0].center, np.float64)
+        if any(np.linalg.norm(c - r.center) < MIN_CORNER_SEP_PX for r in self.results.values()):
+            return self.AT_PREVIOUS
+        status = self.CAPTURING
+        if self._samples and np.linalg.norm(c - np.mean(self._samples, axis=0)) > STILL_PX:
+            self.retry()
+            status = self.MOVING
+        if not self.ready:
+            self._samples.append(c)
+            self._corners.append(np.asarray(dets[0].corners, np.float64))
+        return self.READY if self.ready else status
+
+    def retry(self) -> None:
+        """Clears the current corner's samples."""
+        self._samples.clear()
+        self._corners.clear()
+
+    def confirm(self) -> tuple[np.ndarray, float]:
+        """Keeps the current corner's average and moves to the next; returns
+        the averaged pixel centre and its jitter (px)."""
+        if self.done or not self.ready:
+            raise RuntimeError("this corner has not got enough samples yet")
+        label_id = self.items[self.index][0]
+        avg = np.mean(self._samples, axis=0)
+        jitter = float(np.std(np.linalg.norm(np.array(self._samples) - avg, axis=1)))
+        self.results[label_id] = _averaged(label_id, avg, np.mean(self._corners, axis=0))
+        self.index += 1
+        self.retry()
+        return avg, jitter
+
+    def back(self) -> None:
+        """Drops the last confirmed corner, to capture it again."""
+        if self.index > 0:
+            self.index -= 1
+            self.results.pop(self.items[self.index][0], None)
+        self.retry()
+
+
 def capture_sequential_corners(
     read: Reader,
     layout: dict[int, tuple[float, float]],
@@ -297,96 +385,67 @@ def capture_sequential_corners(
     """Interactively capture one tag's pixel centre at each field position in
     `layout`, in turn -- for a single tag (e.g. mounted on a robot) driven to
     each corner while the camera stays fixed, instead of several tags visible
-    at once.
+    at once. See CornerSampler for what counts as a sample.
 
-    At each position: accumulates every frame with *exactly one* tag visible
-    (zero or several are ambiguous, so skipped) up to `frames_per_corner`,
-    averaging their pixel centres and corners to smooth out per-frame jitter.
-    Only a tag held still counts: one that moves more than STILL_PX restarts
-    the samples, and one still within MIN_CORNER_SEP_PX of a corner already
-    confirmed is ignored -- otherwise the next corner fills up in half a
-    second from wherever the tag was while being carried there. 'q' confirms
-    the current corner and moves to the next once enough samples are in;
-    'r' clears the current corner's samples to retry it; Esc aborts entirely.
-
-    Returns {tag_id: averaged detection}, keyed the same way `layout` is --
-    the physical tag's id at capture time does not have to match; only the
-    order you visit `layout`'s positions in does.
+    'q' confirms the current corner and moves to the next once enough samples
+    are in; 'r' clears the current corner's samples to retry it; Esc aborts
+    entirely.
     """
     win = window_name
     cv2.namedWindow(win, cv2.WINDOW_AUTOSIZE)
-    results: dict[int, TagDetection] = {}
-    items = list(layout.items())
+    sampler = CornerSampler(layout, frames_per_corner)
+    messages = {
+        CornerSampler.NO_TAG: "no tag visible",
+        CornerSampler.AT_PREVIOUS: "still at the previous corner -- move the tag",
+        CornerSampler.MOVING: "tag moving -- set it down and let go",
+        CornerSampler.CAPTURING: "hold steady -- capturing",
+        CornerSampler.READY: "'q' to confirm and move on",
+    }
     try:
-        for i, (label_id, (fx, fy)) in enumerate(items):
-            samples: list[np.ndarray] = []
-            corner_samples: list[np.ndarray] = []
-            while True:
-                bgr, dets = read()
-                disp = bgr.copy()
-                for d in dets:
-                    cv2.polylines(disp, [np.asarray(d.corners, np.int32)], True,
-                                  (0, 165, 255), 2)
-                good = len(dets) == 1
-                hint = None
-                if good:
-                    c = np.asarray(dets[0].center, np.float64)
-                    if any(np.linalg.norm(c - r.center) < MIN_CORNER_SEP_PX
-                           for r in results.values()):
-                        good = False
-                        hint = "still at the previous corner -- move the tag"
-                    elif samples and np.linalg.norm(c - np.mean(samples, axis=0)) > STILL_PX:
-                        samples.clear()
-                        corner_samples.clear()
-                        hint = "tag moving -- set it down and let go"
-                if good and len(samples) < frames_per_corner:
-                    samples.append(c)
-                    corner_samples.append(np.asarray(dets[0].corners, np.float64))
-                ready = len(samples) >= frames_per_corner
-                status_colour = (
-                    (0, 255, 0) if ready else (0, 165, 255) if good else (0, 0, 255)
-                )
-                cv2.rectangle(disp, (0, 0), (disp.shape[1], 84), (0, 0, 0), -1)
-                cv2.putText(
-                    disp,
-                    f"corner {i + 1}/{len(items)}: place ONE tag at field "
-                    f"({fx:g}, {fy:g})   captured {len(samples)}/{frames_per_corner}",
-                    (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.6, status_colour, 2, cv2.LINE_AA,
-                )
-                if hint is not None:
-                    msg = hint
-                elif len(dets) > 1:
-                    msg = f"{len(dets)} tags visible -- show exactly one"
-                elif not good:
-                    msg = "no tag visible"
-                else:
-                    msg = "'q' to confirm and move on" if ready else "hold steady -- capturing"
-                cv2.putText(
-                    disp, f"{msg}   |   'r' retry this corner   |   Esc abort",
-                    (10, 56), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
-                    (0, 255, 0) if ready else (200, 200, 200), 1, cv2.LINE_AA,
-                )
-                cv2.imshow(win, disp)
-                key = read_key()
-                if key == 27:
-                    print("aborted")
-                    raise SystemExit(0)
-                if key == ord("r"):
-                    samples.clear()
-                    corner_samples.clear()
-                if key == ord("q") and ready:
-                    break
-            avg = np.mean(samples, axis=0)
-            px_std = float(np.std(np.linalg.norm(np.array(samples) - avg, axis=1)))
-            results[label_id] = _averaged(label_id, avg, np.mean(corner_samples, axis=0))
-            print(
-                f"  corner {i + 1}/{len(items)} at ({fx:g}, {fy:g}): "
-                f"averaged {len(samples)} samples, pixel ({avg[0]:.1f}, {avg[1]:.1f}), "
-                f"jitter {px_std:.2f} px"
+        while not sampler.done:
+            i = sampler.index
+            fx, fy = sampler.items[i][1]
+            bgr, dets = read()
+            disp = bgr.copy()
+            for d in dets:
+                cv2.polylines(disp, [np.asarray(d.corners, np.int32)], True,
+                              (0, 165, 255), 2)
+            status = sampler.add(dets)
+            ready = sampler.ready
+            good = status in (CornerSampler.CAPTURING, CornerSampler.MOVING, CornerSampler.READY)
+            status_colour = (
+                (0, 255, 0) if ready else (0, 165, 255) if good else (0, 0, 255)
             )
+            cv2.rectangle(disp, (0, 0), (disp.shape[1], 84), (0, 0, 0), -1)
+            cv2.putText(
+                disp,
+                f"corner {i + 1}/{len(sampler.items)}: place ONE tag at field "
+                f"({fx:g}, {fy:g})   captured {sampler.count}/{frames_per_corner}",
+                (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.6, status_colour, 2, cv2.LINE_AA,
+            )
+            msg = messages.get(status, f"{len(dets)} tags visible -- show exactly one")
+            cv2.putText(
+                disp, f"{msg}   |   'r' retry this corner   |   Esc abort",
+                (10, 56), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
+                (0, 255, 0) if ready else (200, 200, 200), 1, cv2.LINE_AA,
+            )
+            cv2.imshow(win, disp)
+            key = read_key()
+            if key == 27:
+                print("aborted")
+                raise SystemExit(0)
+            if key == ord("r"):
+                sampler.retry()
+            if key == ord("q") and ready:
+                avg, px_std = sampler.confirm()
+                print(
+                    f"  corner {i + 1}/{len(sampler.items)} at ({fx:g}, {fy:g}): "
+                    f"averaged {frames_per_corner} samples, pixel ({avg[0]:.1f}, {avg[1]:.1f}), "
+                    f"jitter {px_std:.2f} px"
+                )
     finally:
         cv2.destroyWindow(win)
-    return results
+    return sampler.results
 
 
 # --------------------------------------------------------------------------
