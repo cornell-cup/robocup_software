@@ -9,11 +9,11 @@ import sys
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(os.path.dirname(_HERE))
 sys.path.insert(0, _ROOT)
-sys.path.insert(0, os.path.join(_ROOT, "python"))
+sys.path.insert(0, os.path.join(_ROOT, "sim"))
 
 from stable_baselines3 import PPO  # noqa: E402
 
-from decision_making.rl.env import KickEnv  # noqa: E402
+from strategy.rl.env import KickEnv  # noqa: E402
 
 
 def main() -> None:

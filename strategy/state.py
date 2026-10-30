@@ -6,7 +6,7 @@ from typing import Any
 import numpy as np
 
 # Field geometry comes from python/config.py so a custom --field reaches strategy.
-_PYTHON_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "python")
+_PYTHON_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "sim")
 if _PYTHON_DIR not in sys.path:
     sys.path.insert(0, _PYTHON_DIR)
 

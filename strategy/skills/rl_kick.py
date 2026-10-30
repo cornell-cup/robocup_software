@@ -17,12 +17,12 @@ from stable_baselines3 import PPO
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(os.path.dirname(_HERE))
-sys.path.insert(0, os.path.join(_ROOT, "python"))
+sys.path.insert(0, os.path.join(_ROOT, "sim"))
 
 from config import FIELD_H, FIELD_IS_DEFAULT, FIELD_W  # noqa: E402
 
-from decision_making.rl.env import SUBGOAL_RANGE, make_kick_obs
-from decision_making.state import BallState, RobotState
+from strategy.rl.env import SUBGOAL_RANGE, make_kick_obs
+from strategy.state import BallState, RobotState
 
 
 class RLKickSkill:

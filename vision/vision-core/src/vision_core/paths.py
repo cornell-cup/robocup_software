@@ -16,7 +16,7 @@ from pathlib import Path
 
 
 def repo_root() -> Path:
-    """The robocup_testing folder: the one holding vision-core/ and calib/.
+    """The vision folder: the one holding vision-core/ and calib/.
 
     Fixed by layout, not found by a marker file: this file lives at
     <root>/vision-core/src/vision_core/paths.py. (It used to search upward for
@@ -25,7 +25,7 @@ def repo_root() -> Path:
     root = Path(__file__).resolve().parents[3]
     if not (root / "vision-core").is_dir():
         raise RuntimeError(
-            f"{__file__} is not inside the robocup_testing source tree; "
+            f"{__file__} is not inside the vision source tree; "
             f"vision_core must be installed editable. Run 'uv sync' from the repo root."
         )
     return root

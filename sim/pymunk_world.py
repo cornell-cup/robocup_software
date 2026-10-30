@@ -17,11 +17,11 @@ import numpy as np
 import pymunk
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.dirname(_HERE))  # project root (for decision_making.*)
+sys.path.insert(0, os.path.dirname(_HERE))  # project root (for strategy.*)
 sys.path.insert(0, _HERE)
 # Only importable after the sys.path setup above; importing it earlier worked
 # only when the caller had already put the project root on sys.path.
-from decision_making.skills.dribble import try_dribble_ball  # noqa: E402
+from strategy.skills.dribble import try_dribble_ball  # noqa: E402
 from config import (  # noqa: E402
     ANGULAR_DAMP,
     BALL_DAMP,
@@ -44,7 +44,7 @@ from config import (  # noqa: E402
     WHEEL_DISTANCE,
 )
 
-from decision_making.skills.kick import try_kick_ball  # noqa: E402
+from strategy.skills.kick import try_kick_ball  # noqa: E402
 
 COLLISION_ROBOT = 1
 COLLISION_BALL = 2

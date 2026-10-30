@@ -7,7 +7,7 @@ Usage:
     python run_pipeline.py --no-viz
     python run_pipeline.py --vision http://localhost:8000/state
     python run_pipeline.py --vision tcp://localhost:5556 --field 1.93 1.32
-    python run_pipeline.py --vision tcp://localhost:5556 --field ../../robocup_testing/calib/field_pose.json
+    python run_pipeline.py --vision tcp://localhost:5556 --field ../vision/calib/field_pose.json
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from config import FIELD_ENV, parse_field  # noqa: E402
 
-DECISION_DIR = os.path.join(os.path.dirname(HERE), "decision_making")
+DECISION_DIR = os.path.join(os.path.dirname(HERE), "strategy")
 
 # Ordered start sequence: simulation must bind its sockets before others connect.
 # (name, script, cwd)
@@ -89,7 +89,7 @@ def main() -> None:
         nargs="+",
         metavar="W H | FILE",
         default=None,
-        help="True-size sim field in metres, or robocup_testing's calib/field_pose.json. "
+        help="True-size sim field in metres, or vision's calib/field_pose.json. "
         + "Default 9 x 6 (camera field stretched onto it).",
     )
     args = parser.parse_args()

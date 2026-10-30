@@ -3,7 +3,7 @@ pygame>=2.0
 pyzmq>=24.0
 numpy>=1.21
 
-# RL training (optional — only needed for decision_making/rl/)
+# RL training (optional — only needed for strategy/rl/)
 gymnasium>=1.0
 stable-baselines3>=2.3
 torch>=2.2

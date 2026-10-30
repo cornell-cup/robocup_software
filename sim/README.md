@@ -57,7 +57,7 @@ python/
 ├── run_pipeline.py      # Launcher — spawns all four nodes as subprocesses
 └── requirements.txt     # Python dependencies
 
-decision_making/
+strategy/
 ├── strategy_node.py     # Autonomous strategy
 ├── state.py             # GameState dataclass + builder
 ├── geometry.py          # Spatial queries (distances, goal positions)
@@ -78,9 +78,9 @@ The sim shares one environment with the tracker: `.venv/` at the repo root
 ```powershell
 # From the repo root (robocup_software), once and after each git pull
 uv sync                 # sim + tracker + pyzmq
-uv sync --extra rl      # instead, if you use decision_making/rl/ (adds gymnasium, stable-baselines3, torch, tensorboard)
+uv sync --extra rl      # instead, if you use strategy/rl/ (adds gymnasium, stable-baselines3, torch, tensorboard)
 
-# Then, from robocup/python/
+# Then, from sim/
 uv run python run_pipeline.py
 ```
 
@@ -93,7 +93,7 @@ uv run python run_pipeline.py
 
 Not needed any more: `uv run --no-project` (the sim used to have no project of
 its own) and `uv venv` / `uv pip install` into `robocup/.venv`. Full flag
-reference: [root README, Setup](../../README.md#setup).
+reference: [root README, Setup](../README.md#setup).
 
 Without uv: `pip install -r requirements.txt` from this folder, in a Python 3.12 venv.
 
@@ -114,7 +114,7 @@ python run_pipeline.py --color red
 
 # Mirror the real field from the camera, or replay a recording (see Vision Mirror)
 python run_pipeline.py --vision tcp://localhost:5556
-python run_pipeline.py --vision ../../robocup_testing/test.jsonl
+python run_pipeline.py --vision ../vision/test.jsonl
 python run_pipeline.py --vision tcp://localhost:5556 --field 1.93 1.32   # sim field at the real table's size
 ```
 
@@ -128,7 +128,7 @@ Each node can be run in isolation for debugging:
 
 ```bash
 python simulation_node.py                              # starts physics, publishes on port 9090
-python ../decision_making/strategy_node.py --mode zmq  # strategy on port 9091
+python ../strategy/strategy_node.py --mode zmq  # strategy on port 9091
 python robot_node.py                                   # c# connects to sim, reads port 5555, pushes to port 9092
 python viz_node.py                                     # # connects to sim, renders, publishes targets on port 9093
 ```
@@ -178,16 +178,16 @@ python viz_node.py                                     # # connects to sim, rend
 
 ## Vision Mirror
 
-`--vision` feeds camera tracking from [robocup_testing](https://github.com/ana-jiangR/robocup_testing)'s `track-combined` into SimNode. Tracked objects follow the camera; everything else stays simulated, so a real robot can play against sim robots. `vision_bridge.py` does the work.
+`--vision` feeds camera tracking from [vision/](../vision/)'s `track-combined` into SimNode. Tracked objects follow the camera; everything else stays simulated, so a real robot can play against sim robots. `vision_bridge.py` does the work.
 
 ### Before you start (once)
 
-1. **Folders.** Both halves live in this monorepo: `F:\Cornell\CornellCupRobotics\robocup_software\robocup` (sim) and `F:\Cornell\CornellCupRobotics\robocup_software\robocup_testing` (tracker). Adjust the path if your clone is elsewhere.
-2. **Environment.** One `uv sync` at the repo root covers the sim **and** the tracker, including pyzmq for `--zmq-pub`; see [Setup](#setup). Every sim command runs **from `robocup\python`**. With uv, prefix it with `uv run python`; with pip, just `python`.
+1. **Folders.** Both halves live in this monorepo: `F:\Cornell\CornellCupRobotics\robocup_software\robocup` (sim) and `F:\Cornell\CornellCupRobotics\robocup_software\vision` (tracker). Adjust the path if your clone is elsewhere.
+2. **Environment.** One `uv sync` at the repo root covers the sim **and** the tracker, including pyzmq for `--zmq-pub`; see [Setup](#setup). Every sim command runs **from `sim`**. With uv, prefix it with `uv run python`; with pip, just `python`.
 3. **Stay current.** `git pull` in `robocup_software`, then `uv sync` at the repo root (`uv sync --extra rl` if you use RL).
-4. **Calibration** (live only). Without it tag and ball positions are off, and the sim drops sightings that land outside the field.
+4. **PhotonVision** (live only). The tracker's camera is PhotonVision's: run it, set its pipeline to AprilTag 36h11, lock exposure and white balance, calibrate the lens in its UI, and point its NetworkTables Server Address at the tracker's machine. See vision's [PhotonVision setup](../vision/tag-tracking/README.md#photonvision-setup).
+5. **Calibration** (live only). Without it tag and ball positions are off, and the sim drops sightings that land outside the field. The lens is PhotonVision's (step 4); the rest:
    ```powershell
-   uv run calibrate-camera                      # lens, writes calib/intrinsics.json
    uv run calibrate-field --field 1.93 1.32     # your measured field W H in metres, once
    uv run calibrate-ball --profile mine --radius-mm 20   # only if your ball has no profile yet
    ```
@@ -200,30 +200,30 @@ python viz_node.py                                     # # connects to sim, rend
 ### A. Replay a recording (no camera)
 
 ```powershell
-cd F:\Cornell\CornellCupRobotics\robocup_software\robocup\python
-uv run python run_pipeline.py --vision ..\..\robocup_testing\test.jsonl
+cd F:\Cornell\CornellCupRobotics\robocup_software\sim
+uv run python run_pipeline.py --vision ..\vision\test.jsonl
 ```
 
 - Add `--replay-speed 3` to fast-forward. The replay loops at the end.
 - Add `--field 1.93 1.32` to replay at true size (see [D](#d-true-size-field)); `test.jsonl` was recorded on a 1.93 x 1.32 m field.
 - `test.jsonl` is the one committed recording: 5 runs, about 7 min of playback (the gaps between runs are squashed to 1 s). Run 1 (~3 min) has tag 4 and the ball, run 2 (~1 min) the ball only, runs 3-5 (~1 min each) tag 1 with the ball mostly unseen. With auto mapping tag 4 claims robot 0 when it first lands on the field, and tag 1 then takes robot 1; `--tag-map 4:0,1:1` pins that layout.
-- Any `--json-log` file from `track-combined` replays the same way, e.g. your own `..\..\robocup_testing\runs\myrun.jsonl` (see [C](#c-record-a-session)). Run logs are gitignored, so they stay local.
+- Any `--json-log` file from `track-combined` replays the same way, e.g. your own `..\vision\runs\myrun.jsonl` (see [C](#c-record-a-session)). Run logs are gitignored, so they stay local.
 
 ### B. Live (camera, two terminals)
 
 **Terminal 1, tracker:**
 
 ```powershell
-cd F:\Cornell\CornellCupRobotics\robocup_software\robocup_testing
-uv run track-combined --ball-profile mine --tag-size 0.080 --mjpg --zmq-pub "tcp://*:5556"
+cd F:\Cornell\CornellCupRobotics\robocup_software\vision
+uv run track-combined --ball-profile mine --tag-size 0.080 --zmq-pub "tcp://*:5556"
 ```
 
-`--ball-profile` is your profile name and `--tag-size` your tag's measured black square in metres. No `--field`: the tracker uses the size saved by `calibrate-field`. Keep the quotes around `tcp://*:5556`. Leave the window on the first time to check detections; add `--no-window` once you trust it.
+`--ball-profile` is your profile name and `--tag-size` your tag's measured black square in metres. No `--field`: the tracker uses the size saved by `calibrate-field`. It waits for PhotonVision to connect over NetworkTables, then reads the camera from PhotonVision's stream. Keep the quotes around `tcp://*:5556`. Leave the window on the first time to check detections; add `--no-window` once you trust it.
 
 **Terminal 2, sim:**
 
 ```powershell
-cd F:\Cornell\CornellCupRobotics\robocup_software\robocup\python
+cd F:\Cornell\CornellCupRobotics\robocup_software\sim
 uv run python run_pipeline.py --vision tcp://localhost:5556 --ignore-tags 0,1,2,3
 ```
 
@@ -240,13 +240,13 @@ HTTP fallback, e.g. with main's tracker: `--serve-http 8000` on the tracker, `--
 Add `--json-log` to the tracker command. It can run at the same time as live mode:
 
 ```powershell
-uv run track-combined --ball-profile mine --tag-size 0.080 --mjpg --zmq-pub "tcp://*:5556" --json-log runs\myrun.jsonl
+uv run track-combined --ball-profile mine --tag-size 0.080 --zmq-pub "tcp://*:5556" --json-log runs\myrun.jsonl
 ```
 
 One JSON line per frame, appended (a second launch adds a new run to the same file). Replay it with A:
 
 ```powershell
-uv run python run_pipeline.py --vision ..\..\robocup_testing\runs\myrun.jsonl
+uv run python run_pipeline.py --vision ..\vision\runs\myrun.jsonl
 ```
 
 ### D. True-size field
@@ -254,9 +254,9 @@ uv run python run_pipeline.py --vision ..\..\robocup_testing\runs\myrun.jsonl
 By default the sim field is 9 x 6 m and the real table is stretched onto it, so a 1.93 m table plays 4.7x too fast. `--field` makes the sim field the real size instead: camera metres map 1:1 and speeds are real.
 
 ```powershell
-cd F:\Cornell\CornellCupRobotics\robocup_software\robocup\python
-uv run python run_pipeline.py --vision tcp://localhost:5556 --field ..\..\robocup_testing\calib\field_pose.json
-uv run python run_pipeline.py --vision ..\..\robocup_testing\test.jsonl --field 1.93 1.32
+cd F:\Cornell\CornellCupRobotics\robocup_software\sim
+uv run python run_pipeline.py --vision tcp://localhost:5556 --field ..\vision\calib\field_pose.json
+uv run python run_pipeline.py --vision ..\vision\test.jsonl --field 1.93 1.32
 ```
 
 - `--field W H` in metres, or the tracker's `calib/field_pose.json` (reads its saved `field` size). Use the same size the tracker was calibrated with; the sim warns if the tracker's `field` differs by more than 5 mm.
@@ -277,7 +277,7 @@ Sim (`run_pipeline.py`, passed through to `simulation_node.py`):
 | `--ignore-tags IDS` | Tags never mirrored, e.g. `0,1,2,3` for the corner reference tags. |
 | `--flip-x`, `--flip-y` | Mirror the camera field if a robot moves opposite to its tag (origin in a different corner). |
 | `--replay-speed X` | Replay only. Default 1. |
-| `--field W H` / `--field FILE` | True-size sim field (see [D](#d-true-size-field)). `FILE` is robocup_testing's `calib/field_pose.json`. Default 9 x 6 with the real field stretched onto it. |
+| `--field W H` / `--field FILE` | True-size sim field (see [D](#d-true-size-field)). `FILE` is vision's `calib/field_pose.json`. Default 9 x 6 with the real field stretched onto it. |
 | `--no-viz`, `--no-strategy` | As usual. |
 
 Tracker (`track-combined`):
@@ -288,21 +288,22 @@ Tracker (`track-combined`):
 | `--serve-http PORT` | Serve the latest frame for HTTP polling |
 | `--json-log FILE` | Record every frame for replay |
 | `--no-window` | Headless, a few fps faster; Ctrl+C quits |
-| `--mjpg` | MJPG from the webcam, needed by many USB cams for 720p at 30 fps |
 | `--ball-profile NAME` | Ball color profile from `calib/ball_color.json` |
 | `--tag-size M` | Measured tag black-square size, metres (default 0.080) |
+| `--photon-camera NAME` | PhotonVision camera nickname, if it publishes more than one |
+| `--nt-server HOST` | Connect to an existing NetworkTables server instead of running one in the tracker |
 
 ### Troubleshooting
 
 | Symptom | Fix |
 |---------|-----|
-| `can't open file ...\robocup\run_pipeline.py` | Run from `robocup\python`, or call `python\run_pipeline.py`. |
+| `can't open file ...\robocup\run_pipeline.py` | Run from `sim`, or call `python\run_pipeline.py`. |
 | PowerShell: `The '<' operator is reserved` | A placeholder was pasted literally. Use a real value, e.g. `--ball-profile mine`. |
-| Unknown ball profile | Name not in `robocup_testing/calib/ball_color.json`: `git pull`, or create it with `uv run calibrate-ball --profile NAME`. |
+| Unknown ball profile | Name not in `vision/calib/ball_color.json`: `git pull`, or create it with `uv run calibrate-ball --profile NAME`. |
 | `--zmq-pub` unrecognized, or "needs pyzmq" | Out of date, or launched in a different venv: `git pull`, `uv sync` at the repo root, and start it with `uv run`. |
 | `error: Extra zmq is not defined` | Old command. Plain `uv sync` at the repo root already installs pyzmq. |
 | `No module named 'torch'` (or `gymnasium`, `stable_baselines3`) | RL extra missing, or a plain `uv sync` removed it: `uv sync --extra rl`. |
-| A `.venv` folder inside `robocup/` or `robocup_testing/` | Leftover from the old per-folder setup. Delete it; only the root `.venv` is used. |
+| A `.venv` folder inside `robocup/` or `vision/` | Leftover from the old per-folder setup. Delete it; only the root `.venv` is used. |
 | Strip says `DOWN` | Tracker not running, or `--vision` endpoint/port doesn't match `--zmq-pub`. |
 | `Address in use` | Another pipeline or tracker is still running. Close it (check Task Manager for stray `python.exe`). |
 | Robot doesn't follow the tag | Check the terminal for `tag N -> robot R` (auto) or `tag N seen but not in --tag-map`. No line at all means the tag never landed on the field: recalibrate. A robot parked in a corner is a corner reference tag: add `--ignore-tags 0,1,2,3`. |
@@ -310,7 +311,8 @@ Tracker (`track-combined`):
 | A robot stays grey | Tag not seen recently, or its positions land off the field: recalibrate the field, and watch for the tracker's off-plane warning. |
 | `--field ...field_pose.json`: no field width/height | The calibration predates saved sizes. Re-run `uv run calibrate-field --field W H`, or pass the numbers. |
 | `tracker field ... != sim --field ...` | `--field` doesn't match what the tracker was calibrated with. Use the same numbers, or pass the calibration file. |
-| Camera won't open / dark green picture | Close other apps using it; `uv run unlock-camera` in robocup_testing. |
+| Tracker: `no PhotonVision camera appeared on NetworkTables` | PhotonVision isn't running, or its NetworkTables Server Address doesn't point at the tracker's machine (`127.0.0.1` if same machine). See [PhotonVision setup](../vision/tag-tracking/README.md#photonvision-setup). |
+| Tracker: `could not open PhotonVision's stream` | Check the stream URL in PhotonVision's camera view and pass it with `--stream URL`. |
 
 ### How it works
 

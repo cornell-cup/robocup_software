@@ -1,7 +1,7 @@
 """PPO trainer for the kick skill.
 
-python decision_making/rl/train.py --check-only # 10k smoke, 1 env
-python decision_making/rl/train.py --timesteps 500000 # real run, 8 envs
+python strategy/rl/train.py --check-only # 10k smoke, 1 env
+python strategy/rl/train.py --timesteps 500000 # real run, 8 envs
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from datetime import datetime
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(os.path.dirname(_HERE))
 sys.path.insert(0, _ROOT)
-sys.path.insert(0, os.path.join(_ROOT, "python"))
+sys.path.insert(0, os.path.join(_ROOT, "sim"))
 
 import gymnasium as gym  # noqa: E402
 import numpy as np  # noqa: E402
@@ -28,7 +28,7 @@ from stable_baselines3.common.vec_env import (  # noqa: E402
     VecEnv,
 )
 
-from decision_making.rl.env import KickEnv  # noqa: E402
+from strategy.rl.env import KickEnv  # noqa: E402
 
 CHECKPOINT_DIR = os.path.join(_HERE, "checkpoints")
 TB_LOG_DIR = os.path.join(_HERE, "tb_logs")

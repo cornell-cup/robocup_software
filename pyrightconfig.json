@@ -1,13 +1,15 @@
 {
-  "include": ["robocup/python", "robocup/decision_making", "robocup_testing"],
-  "exclude": [".venv", "**/__pycache__", "robocup/godot_archive"],
+  "include": ["sim", "strategy", "vision", "app/server"],
+  "exclude": [".venv", "**/__pycache__", "**/node_modules", "archive"],
   "pythonVersion": "3.12",
   "venvPath": ".",
   "venv": ".venv",
 
   "executionEnvironments": [
-    { "root": "robocup", "extraPaths": ["robocup", "robocup/python"] },
-    { "root": "robocup_testing" }
+    { "root": "sim", "extraPaths": [".", "sim"] },
+    { "root": "strategy", "extraPaths": [".", "sim"] },
+    { "root": "vision" },
+    { "root": "app/server", "extraPaths": ["sim"] }
   ],
 
   "reportUnknownVariableType": "none",

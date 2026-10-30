@@ -11,9 +11,9 @@ from typing import TYPE_CHECKING, Any, final
 import numpy as np
 
 if TYPE_CHECKING:
-    from decision_making.skills.rl_kick import RLKickSkill
+    from strategy.skills.rl_kick import RLKickSkill
 
-# Add project root so `decision_making.*` resolves when run as a standalone script
+# Add project root so `strategy.*` resolves when run as a standalone script
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 VISION_PORT = 9090
@@ -27,9 +27,9 @@ DEFAULT_RL_CHECKPOINT = os.path.join(
     "rl", "checkpoints", "first_final", "final.zip",
 )
 
-from decision_making.geometry import distance, lerp, opp_goal, our_goal  # noqa: E402
-from decision_making.prediction import predict_intercept_point  # noqa: E402
-from decision_making.state import (  # noqa: E402
+from strategy.geometry import distance, lerp, opp_goal, our_goal  # noqa: E402
+from strategy.prediction import predict_intercept_point  # noqa: E402
+from strategy.state import (  # noqa: E402
     FIELD_LENGTH,
     GOAL_Y_MAX,
     GOAL_Y_MIN,
@@ -518,7 +518,7 @@ def _try_load_skill(path: str):
         print(f"[Strategy node] RL checkpoint not found: {path}")
         return None
     try:
-        from decision_making.skills.rl_kick import RLKickSkill
+        from strategy.skills.rl_kick import RLKickSkill
         skill = RLKickSkill(path)
         print(f"[Strategy node] loaded RL kick from {path}")
         return skill

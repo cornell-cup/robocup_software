@@ -21,7 +21,7 @@ from gymnasium import spaces
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _ROOT = os.path.dirname(os.path.dirname(_HERE))
-sys.path.insert(0, os.path.join(_ROOT, "python"))
+sys.path.insert(0, os.path.join(_ROOT, "sim"))
 
 from config import (  # noqa: E402
     FIELD_H,
@@ -37,14 +37,14 @@ from config import (  # noqa: E402
 )
 from pymunk_world import PymunkWorld  # noqa: E402
 
-from decision_making.rl.reward import (  # noqa: E402
+from strategy.rl.reward import (  # noqa: E402
     GOAL_SCORED_BONUS,
     OUT_OF_FIELD_PENALTY,
     OWN_GOAL_PENALTY,
     RewardTerms,
     compute_step_reward,
 )
-from decision_making.skills.kick import (  # noqa: E402
+from strategy.skills.kick import (  # noqa: E402
     KICK_ZONE_DEPTH,
     KICK_ZONE_HALF_WIDTH,
 )
@@ -101,7 +101,7 @@ def _ball_in_kick_zone(
     ball_x: float,
     ball_y: float,
 ) -> bool:
-    # Keep in sync with decision_making.skills.kick.try_kick_ball.
+    # Keep in sync with strategy.skills.kick.try_kick_ball.
     dx, dy = ball_x - robot_x, ball_y - robot_y
     local_x = math.cos(robot_angle) * dx + math.sin(robot_angle) * dy
     local_y = -math.sin(robot_angle) * dx + math.cos(robot_angle) * dy
