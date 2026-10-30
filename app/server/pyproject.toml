@@ -1,0 +1,27 @@
+[project]
+name = "robocup-web"
+version = "0.1.0"
+description = "Web app for the robocup stack: simulator, field calibration, ball profiles"
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pyzmq>=24.0",
+    "numpy>=1.21",
+    "opencv-python>=5.0.0.93",
+    "vision-core",
+    "tag-tracking",
+    "ball-tracking",
+]
+
+[project.scripts]
+robocup-web = "robocup_web.app:main"
+
+[tool.uv.sources]
+vision-core = { workspace = true }
+tag-tracking = { workspace = true }
+ball-tracking = { workspace = true }
+
+[build-system]
+requires = ["uv_build>=0.12.12,<0.13.0"]
+build-backend = "uv_build"

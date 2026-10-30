@@ -1,0 +1,167 @@
+.tags {
+  display: inline-flex;
+  gap: 4px;
+}
+.tag {
+  min-width: 26px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 14px;
+  border: 1px solid var(--line-2);
+  color: var(--dim);
+}
+.tag.on {
+  color: white;
+  background: var(--red);
+  border-color: var(--red);
+}
+.head-hint {
+  margin-left: auto;
+  color: var(--muted);
+}
+
+.overlay .outline {
+  fill: none;
+  stroke: var(--red-2);
+  stroke-width: 2;
+}
+.overlay .centre {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.4);
+  stroke-width: 1;
+  stroke-dasharray: 5 5;
+}
+.overlay .snap {
+  fill: rgba(255, 255, 255, 0.8);
+}
+.overlay .axis {
+  stroke-width: 2.5;
+  stroke-linecap: round;
+}
+.overlay .axis.x {
+  stroke: var(--red-2);
+}
+.overlay .axis.y {
+  stroke: var(--team-blue);
+}
+.overlay .axis-label {
+  font-weight: 700;
+  font-family: var(--sans);
+  dominant-baseline: middle;
+}
+.overlay .axis-label.x {
+  fill: var(--red-2);
+}
+.overlay .axis-label.y {
+  fill: var(--team-blue);
+}
+.overlay .origin {
+  fill: white;
+  stroke: var(--red);
+  stroke-width: 2.5;
+}
+.overlay .det {
+  fill: rgba(255, 255, 255, 0.06);
+  stroke: rgba(255, 255, 255, 0.5);
+  stroke-width: 1.5;
+}
+.overlay .det.ref {
+  fill: rgba(var(--red-rgb), 0.15);
+  stroke: var(--red-2);
+  stroke-width: 2;
+}
+.overlay .det-label {
+  fill: white;
+  font-family: var(--mono);
+  font-weight: 700;
+  text-anchor: middle;
+  dominant-baseline: central;
+  paint-order: stroke;
+  stroke: rgba(0, 0, 0, 0.8);
+  stroke-width: 4;
+}
+
+.ext {
+  margin-top: 12px;
+}
+.stop-pv {
+  margin-top: 4px;
+}
+.pv {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.pv-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+}
+.pv-row .muted {
+  margin-left: auto;
+  font-size: 14px;
+}
+.pv-log {
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--dim);
+  white-space: nowrap;
+}
+.pv-log div {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cell {
+  height: 32px;
+  padding: 0 6px;
+}
+.seen {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid var(--line-2);
+}
+.seen.on {
+  background: var(--red-2);
+  border-color: var(--red-2);
+}
+.progress {
+  position: relative;
+  height: 4px;
+  border-radius: 2px;
+  background: #222;
+  overflow: hidden;
+}
+.progress .bar {
+  height: 100%;
+  background: var(--red-2);
+  transition: width 0.3s;
+}
+.progress .mark {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: rgba(255, 255, 255, 0.7);
+}
+.progress-text {
+  display: flex;
+  justify-content: space-between;
+  font-size: 14.5px;
+  margin-top: -6px;
+}
+.quality {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+}
+.quality.poor {
+  color: var(--error-text);
+}

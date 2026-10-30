@@ -1,25 +1,29 @@
 [project]
 name = "robocup-software"
 version = "0.1.0"
-description = "Monorepo env: the robocup sim/strategy stack and the robocup_testing vision skills in one .venv"
-# robocup_testing caps at <3.14 (pupil-apriltags has no 3.14 wheels).
+description = "Monorepo env: the simulator, strategy, vision tracking and web app in one .venv"
+# The <3.14 cap dates from pupil-apriltags, which is gone; photonlibpy resolves
+# on 3.14 too. Lift it once the rest of the stack (pygame, pymunk, torch) is
+# checked there.
 requires-python = ">=3.12,<3.14"
 dependencies = [
-    # robocup/ (mirrors robocup/python/requirements.txt)
+    # sim/ and strategy/ (mirrors sim/requirements.txt)
     "pymunk>=6.0",
     "pygame>=2.0",
     "pyzmq>=24.0",
     "numpy>=1.21",
-    # robocup_testing/ skills, so their CLI entry points (track, selfcheck, ...)
+    # vision/ packages, so their CLI entry points (track, selfcheck, ...)
     # work via `uv run` from anywhere in the repo
     "vision-core",
     "tag-tracking",
     "ball-tracking",
     "combined-tracking[zmq]",
+    # app/server: the web app (`uv run robocup-web`)
+    "robocup-web",
 ]
 
 [project.optional-dependencies]
-# Only needed for robocup/decision_making/rl/
+# Only needed for strategy/rl/
 rl = [
     "gymnasium>=1.0",
     "stable-baselines3>=2.3",
@@ -34,10 +38,11 @@ package = false
 # The one uv workspace for the repo: one uv.lock, one .venv, here at the root.
 [tool.uv.workspace]
 members = [
-    "robocup_testing/vision-core",
-    "robocup_testing/tag-tracking",
-    "robocup_testing/ball-tracking",
-    "robocup_testing/combined-tracking",
+    "vision/vision-core",
+    "vision/tag-tracking",
+    "vision/ball-tracking",
+    "vision/combined-tracking",
+    "app/server",
 ]
 
 [tool.uv.sources]
@@ -45,3 +50,4 @@ vision-core = { workspace = true }
 tag-tracking = { workspace = true }
 ball-tracking = { workspace = true }
 combined-tracking = { workspace = true }
+robocup-web = { workspace = true }

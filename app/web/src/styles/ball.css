@@ -1,0 +1,72 @@
+.warn-text {
+  color: var(--warn);
+}
+.views {
+  width: 300px;
+}
+.overlay .box {
+  fill: rgba(255, 255, 255, 0.08);
+  stroke: white;
+  stroke-width: 2;
+  stroke-dasharray: 6 4;
+}
+.pic-hint {
+  position: absolute;
+  left: 12px;
+  bottom: 10px;
+  margin: 0;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.7);
+  font-size: 14px;
+  color: var(--muted);
+  pointer-events: none;
+}
+.sample {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 15px;
+}
+.sample .muted {
+  font-size: 14px;
+}
+.sample .btn {
+  margin-left: auto;
+}
+.slider {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.slider > span {
+  display: flex;
+  justify-content: space-between;
+  font-size: 15px;
+}
+.slider b {
+  font-weight: 600;
+}
+.slider small {
+  color: var(--dim);
+  font-size: 14px;
+}
+.hues {
+  display: block;
+  width: 100%;
+  height: 90px;
+  margin-bottom: 8px;
+}
+.hues .ball-mark {
+  stroke: white;
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+tr.current td {
+  color: var(--text);
+  font-weight: 600;
+}
+.note-line {
+  font-size: 13px;
+  font-weight: 400;
+}

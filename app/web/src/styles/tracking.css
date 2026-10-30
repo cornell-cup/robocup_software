@@ -1,0 +1,27 @@
+.rec {
+  color: var(--red-2);
+}
+.checks {
+  list-style: none;
+  margin: 14px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 15px;
+}
+.checks li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.checks a {
+  color: var(--red-2);
+  margin-left: 4px;
+}
+tr.coasting td {
+  color: var(--dim);
+}
+tr.ball td:first-child {
+  color: #ffa21a;
+}

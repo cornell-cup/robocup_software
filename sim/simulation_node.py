@@ -42,11 +42,17 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(_HERE))
 sys.path.insert(0, _HERE)
 from config import (
+    BALL_RADIUS,
     COMMAND_PORT,
     DT,
     FIELD_H,
+    FIELD_IS_DEFAULT,
     FIELD_W,
+    GOAL_Y_MAX,
+    GOAL_Y_MIN,
     NUM_ROBOTS,
+    ROBOT_RADIUS,
+    TEAM_BLUE_SIZE,
     VISION_FLIP_X,
     VISION_FLIP_Y,
     VISION_IGNORE_TAGS,
@@ -62,12 +68,24 @@ from vision_bridge import (
     parse_ids,
     parse_tag_map,
 )
-from decision_making.skills.dribble import try_dribble_ball
+from strategy.skills.dribble import try_dribble_ball
 
 HALF_DURATION = 300.0  # seconds per half
 BALL_STUCK_THRESHOLD = 0.02
 BALL_STUCK_DURATION = 10.0
 VISION_LOG_PERIOD = 5.0  # seconds between vision stats prints
+#: The field as config.py sets it up for this run, published with every state.
+FIELD_INFO = {
+    "width": FIELD_W,
+    "height": FIELD_H,
+    "goal_y_min": GOAL_Y_MIN,
+    "goal_y_max": GOAL_Y_MAX,
+    "robot_radius": ROBOT_RADIUS,
+    "ball_radius": BALL_RADIUS,
+    "team_blue_size": TEAM_BLUE_SIZE,
+    "num_robots": NUM_ROBOTS,
+    "is_default": FIELD_IS_DEFAULT,
+}
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="RoboCup simulation node")
@@ -312,6 +330,9 @@ def main() -> None:
             },
             "ball": state["ball"],
             "robots": state["robots"],
+            # Static, but sent every tick so a viewer that joins late (the web
+            # app) can draw the field without importing config.
+            "field": FIELD_INFO,
         }
         if vision_snap is not None:
             tags = vision_snap["stats"]["tags"]

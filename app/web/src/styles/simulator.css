@@ -1,0 +1,198 @@
+.sim-page {
+  grid-template-columns: minmax(0, 1fr) 380px;
+}
+.scoreboard {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 28px;
+  height: 64px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--line);
+}
+.scoreboard .team {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+.scoreboard .team.blue {
+  justify-content: flex-end;
+}
+.scoreboard .name {
+  font-size: 15px;
+  color: var(--muted);
+}
+.scoreboard .score {
+  font-size: 30px;
+  font-weight: 600;
+  line-height: 1;
+}
+.scoreboard .blue .score {
+  color: var(--team-blue);
+}
+.scoreboard .red .score {
+  color: var(--team-red);
+}
+.scoreboard .clock {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 96px;
+}
+.scoreboard .time {
+  font-size: 22px;
+  font-weight: 600;
+}
+.scoreboard .phase {
+  font-size: 14px;
+  color: var(--muted);
+}
+.field-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 280px;
+}
+.stage-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  height: 40px;
+  padding: 0 14px;
+  border-top: 1px solid var(--line);
+  font-size: 14.5px;
+  color: var(--muted);
+  white-space: pre;
+}
+
+.veil {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.6);
+}
+.veil-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 18px 20px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line-2);
+  background: var(--panel);
+  max-width: 380px;
+}
+.veil-card h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 650;
+}
+.veil-card p {
+  margin: 0 0 8px;
+  font-size: 15px;
+}
+
+.flash,
+.winner {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 16px;
+  display: flex;
+  justify-content: center;
+  align-items: baseline;
+  gap: 14px;
+  pointer-events: none;
+}
+.flash {
+  animation: fade 2.2s ease-out forwards;
+}
+.flash .goal,
+.winner .label {
+  font-size: 32px;
+  font-weight: 700;
+}
+.flash .mono,
+.winner .mono {
+  font-size: 22px;
+  color: var(--muted);
+}
+.flash.blue .goal {
+  color: var(--team-blue);
+}
+.flash.red .goal {
+  color: var(--team-red);
+}
+.winner {
+  top: 0;
+  bottom: 0;
+  align-items: center;
+  background: rgba(0, 0, 0, 0.7);
+  text-transform: capitalize;
+}
+@keyframes fade {
+  0%,
+  80% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+.popup {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-2);
+  background: var(--panel);
+  font-weight: 600;
+  font-size: 15px;
+  pointer-events: none;
+}
+
+.robots {
+  display: flex;
+  gap: 6px;
+}
+.chip {
+  flex: 1;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-2);
+  background: transparent;
+  font-weight: 600;
+  cursor: pointer;
+}
+.chip.blue {
+  color: var(--team-blue);
+}
+.chip.red {
+  color: var(--team-red);
+}
+.chip:hover {
+  background: var(--panel-2);
+}
+.chip.on {
+  background: #262626;
+  border-color: var(--red-2);
+}
+.keys {
+  margin: 0;
+  font-size: 14px;
+  color: var(--dim);
+}
+.toggles {
+  display: flex;
+  flex-direction: column;
+}
+
+@media (max-width: 1000px) {
+  .field-wrap {
+    height: 62vh;
+    flex: none;
+  }
+}
