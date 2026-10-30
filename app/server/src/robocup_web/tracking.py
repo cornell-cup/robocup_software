@@ -48,6 +48,7 @@ NUMBER_FLAGS = (
     ("ball_min_conc", "--ball-min-conc", 0, 255),
     ("ball_sigma_a", "--ball-sigma-a", 0.01, 500),
     ("ball_sigma_a_air", "--ball-sigma-a-air", 0.01, 500),
+    ("ball_rest_mm", "--ball-rest-mm", 0, 100),
     ("ball_sigma_px", "--ball-sigma-px", 0.1, 50),
     ("cam_height", "--cam-height", 0.1, 20),
     ("pitch", "--pitch", 1, 90),

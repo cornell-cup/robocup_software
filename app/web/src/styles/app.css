@@ -196,6 +196,14 @@ input[type="range"] {
   color: var(--dim);
   font-size: 14px;
 }
+kbd {
+  font-family: var(--mono);
+  font-size: 13px;
+  padding: 0 5px;
+  border: 1px solid var(--line-2);
+  border-radius: 4px;
+  color: var(--muted);
+}
 
 /* ── bits ────────────────────────────────────────────────────────────── */
 

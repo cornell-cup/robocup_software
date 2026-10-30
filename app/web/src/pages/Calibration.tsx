@@ -13,10 +13,26 @@ type Row = { id: number; x: number; y: number };
 
 const pts = (p: number[][]) => p.map((q) => q.join(",")).join(" ");
 const fmtTime = (t?: number) => (t ? new Date(t * 1000).toLocaleString() : "–");
-function quality(deg: number | null, mm: number | null) {
+function quality(r: NonNullable<CalibStatus["result"]>) {
+  const { rotation_spread_deg: deg, translation_spread_mm: mm, fit_mm: fit } = r;
+  if (fit) {
+    // About what placing a tag by hand and a tape-measured field carry.
+    const worst = Math.max(...fit.map((f) => f ?? Infinity));
+    return worst < 15 ? "good" : worst < 30 ? "fair" : "poor";
+  }
   if (deg === null || mm === null) return "";
   return deg < 0.3 && mm < 3 ? "good" : deg < 1 && mm < 10 ? "fair" : "poor";
 }
+
+/** What CornerSampler.add() reported, said for the page. */
+const CORNER_MSG: Record<string, string> = {
+  no_tag: "no tag visible",
+  several: "several tags visible: show exactly one",
+  at_previous: "still at the previous corner: move the tag",
+  moving: "tag moving: set it down and let go",
+  capturing: "hold steady, capturing…",
+  ready: "got it: confirm and move on",
+};
 
 export function Calibration() {
   const [st, setSt] = useState<CalibStatus | null>(null);
@@ -35,6 +51,7 @@ export function Calibration() {
     camera: "", ntServer: "", streamUrl: "", resW: "", resH: "",
     tagSize: "", fieldW: "", fieldH: "", minFrames: 10,
     customLayout: false, layoutRows: [] as Row[],
+    oneTag: false, perCorner: 30,
   });
   const set = <K extends keyof typeof form>(k: K, v: (typeof form)[K]) => setForm((f) => ({ ...f, [k]: v }));
 
@@ -51,7 +68,10 @@ export function Calibration() {
   const allVisible = layout.length > 0 && layout.every((r) => seen.has(r.id));
   const minNeeded = st?.setup?.min_frames ?? form.minFrames;
   const maxFrames = st?.setup?.max_frames ?? 40;
-  const canSolve = !!st && st.captured >= minNeeded;
+  // One tag at a time, once a capture of that kind has started.
+  const corners = st?.setup?.sequential ? st.corners : undefined;
+  const cornersDone = !!corners && corners.index >= corners.total;
+  const canSolve = !!st && (corners ? cornersDone : !st.setup?.sequential && st.captured >= minNeeded);
   const result = st?.result;
   const step = !connected ? 1 : result ? 3 : 2;
   const fs = Math.max(size[0], size[1]) / 55; // label size, image px
@@ -110,9 +130,26 @@ export function Calibration() {
       field_w: fw,
       field_h: fh,
       min_frames: form.minFrames,
+      sequential: form.oneTag,
+      frames_per_corner: form.perCorner,
       layout: Object.fromEntries(layout.map((r) => [String(r.id), [r.x, r.y]])),
     });
   }
+
+  const corner = (action: "confirm" | "retry" | "back") => run("/calib/corner", { action });
+
+  // One tag at a time: q confirms and r retries, as in calibrate-field's window.
+  useEffect(() => {
+    if (!corners || !st?.capturing) return;
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement;
+      if (t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "TEXTAREA" || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.key === "q" && corners.ready) corner("confirm");
+      else if (e.key === "r") corner("retry");
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [corners?.ready, st?.capturing, !!corners]);
 
   async function save() {
     const s = await run("/calib/save", {});
@@ -140,7 +177,7 @@ export function Calibration() {
     setForm((f) => ({ ...f, layoutRows: f.layoutRows.map((r, j) => (j === i ? { ...r, [key]: Number(value) } : r)) }));
   }
 
-  const q = result ? quality(result.rotation_spread_deg, result.translation_spread_mm) : "";
+  const q = result ? quality(result) : "";
   const pvUi = st?.camera?.host ? `http://${st.camera.host === "127.0.0.1" ? location.hostname : st.camera.host}:5800` : null;
 
   return (
@@ -151,11 +188,19 @@ export function Calibration() {
             <>
               <span className="info"><span className="dot ok" />{st.camera.name}</span>
               <span className="info mono">{st.camera.size[0]}×{st.camera.size[1]}, {st.rate.toFixed(0)} fps</span>
-              <span className="tags" title="Reference tags in view">
-                {refIds.map((id) => (
-                  <span key={id} className={`tag${seen.has(id) ? " on" : ""}`}>{id}</span>
-                ))}
-              </span>
+              {corners ? (
+                <span className="tags" title="Corners captured">
+                  {Array.from({ length: corners.total }, (_, i) => (
+                    <span key={i} className={`tag${i < corners.index ? " on" : ""}`}>{i + 1}</span>
+                  ))}
+                </span>
+              ) : (
+                <span className="tags" title="Reference tags in view">
+                  {refIds.map((id) => (
+                    <span key={id} className={`tag${seen.has(id) ? " on" : ""}`}>{id}</span>
+                  ))}
+                </span>
+              )}
             </>
           ) : (
             <span className="info">
@@ -183,9 +228,15 @@ export function Calibration() {
                     <circle cx={st.overlay.origin[0]} cy={st.overlay.origin[1]} r={fs * 0.38} className="origin" />
                   </>
                 )}
+                {!result && corners?.captured.map((c, i) => (
+                  <g key={`k${i}`}>
+                    <circle cx={c[0]} cy={c[1]} r={fs * 0.3} className="snap" />
+                    <text x={c[0]} y={c[1]} dx={fs * 0.45} fontSize={fs} className="det-label">{i + 1}</text>
+                  </g>
+                ))}
                 {(st?.detections ?? []).map((d) => (
                   <g key={d.id}>
-                    <polygon points={pts(d.corners)} className={`det${isRef(d.id) ? " ref" : ""}`} />
+                    <polygon points={pts(d.corners)} className={`det${corners || isRef(d.id) ? " ref" : ""}`} />
                     <text x={d.center[0]} y={d.center[1]} fontSize={fs} className="det-label">{d.id}</text>
                   </g>
                 ))}
@@ -300,10 +351,17 @@ export function Calibration() {
                 <span>Tag size (m)</span>
                 <input className="input mono" type="number" step="0.001" min="0.001" placeholder="e.g. 0.177" value={form.tagSize} onChange={(e) => set("tagSize", e.target.value)} disabled={st?.capturing} />
               </label>
-              <label className="field">
-                <span>Frames</span>
-                <input className="input mono" type="number" min="3" max="40" value={form.minFrames} onChange={(e) => set("minFrames", Number(e.target.value))} disabled={st?.capturing} />
-              </label>
+              {form.oneTag ? (
+                <label className="field">
+                  <span>Frames per corner</span>
+                  <input className="input mono" type="number" min="3" max="300" value={form.perCorner} onChange={(e) => set("perCorner", Number(e.target.value))} disabled={st?.capturing} />
+                </label>
+              ) : (
+                <label className="field">
+                  <span>Frames</span>
+                  <input className="input mono" type="number" min="3" max="40" value={form.minFrames} onChange={(e) => set("minFrames", Number(e.target.value))} disabled={st?.capturing} />
+                </label>
+              )}
             </div>
             <small className="dim">Tag size is the black square's edge.</small>
             <div className="row">
@@ -312,32 +370,63 @@ export function Calibration() {
             </div>
 
             <div>
+              <Toggle label="One tag at a time" checked={form.oneTag} onChange={(on) => set("oneTag", on)} disabled={st?.capturing} />
+              <small className="dim">
+                {form.oneTag
+                  ? "Put one tag at each corner in turn, in the order below (counterclockwise seen from above). Any tag id works."
+                  : "Four tags with these ids, all in view at once."}
+              </small>
+            </div>
+
+            <div>
               <Toggle label="Reference tags at custom positions" checked={form.customLayout} onChange={customize} />
               <table className="plain">
-                <thead><tr><th>Tag</th><th>x (m)</th><th>y (m)</th><th /></tr></thead>
+                <thead><tr><th>{form.oneTag ? "#" : "Tag"}</th><th>x (m)</th><th>y (m)</th><th /></tr></thead>
                 <tbody>
                   {form.customLayout
                     ? form.layoutRows.map((r, i) => (
-                        <tr key={i}>
-                          <td><input className="input mono cell" type="number" value={r.id} onChange={(e) => editRow(i, "id", e.target.value)} /></td>
+                        <tr key={i} className={corners && corners.index === i && st?.capturing ? "current" : undefined}>
+                          <td>{form.oneTag ? <span className="mono">{i + 1}</span> : <input className="input mono cell" type="number" value={r.id} onChange={(e) => editRow(i, "id", e.target.value)} />}</td>
                           <td><input className="input mono cell" type="number" step="0.001" value={r.x} onChange={(e) => editRow(i, "x", e.target.value)} /></td>
                           <td><input className="input mono cell" type="number" step="0.001" value={r.y} onChange={(e) => editRow(i, "y", e.target.value)} /></td>
-                          <td><span className={`seen${seen.has(r.id) ? " on" : ""}`} /></td>
+                          <td><span className={`seen${(corners ? i < corners.index : seen.has(r.id)) ? " on" : ""}`} /></td>
                         </tr>
                       ))
-                    : layout.map((r) => (
-                        <tr key={r.id}>
-                          <td className="mono">{r.id}</td>
+                    : layout.map((r, i) => (
+                        <tr key={r.id} className={corners && corners.index === i && st?.capturing ? "current" : undefined}>
+                          <td className="mono">{form.oneTag ? i + 1 : r.id}</td>
                           <td className="mono">{r.x.toFixed(3)}</td>
                           <td className="mono">{r.y.toFixed(3)}</td>
-                          <td><span className={`seen${seen.has(r.id) ? " on" : ""}`} /></td>
+                          <td><span className={`seen${(corners ? i < corners.index : seen.has(r.id)) ? " on" : ""}`} /></td>
                         </tr>
                       ))}
                 </tbody>
               </table>
             </div>
 
-            {st && (st.capturing || (st.captured > 0 && !result)) && (
+            {corners && !result && (st?.capturing || cornersDone) && (
+              <>
+                {cornersDone ? (
+                  <div className="progress-text"><span>All {corners.total} corners captured</span><span className="muted">solve when ready</span></div>
+                ) : (
+                  <>
+                    <div className="corner-now">
+                      Corner <b>{corners.index + 1}/{corners.total}</b>: put one tag at
+                      <b className="mono"> ({layout[corners.index]?.x.toFixed(3)}, {layout[corners.index]?.y.toFixed(3)})</b>
+                    </div>
+                    <div className="progress">
+                      <div className="bar" style={{ width: `${Math.min(100, (corners.count / corners.per_corner) * 100)}%` }} />
+                    </div>
+                    <div className="progress-text">
+                      <span className="mono">{corners.count}/{corners.per_corner}</span>
+                      <span className={corners.status === "ready" ? "" : "muted"}>{CORNER_MSG[corners.status ?? "no_tag"] ?? ""}</span>
+                    </div>
+                  </>
+                )}
+              </>
+            )}
+
+            {!corners && st && (st.capturing || (st.captured > 0 && !result)) && (
               <>
                 <div className="progress">
                   <div className="bar" style={{ width: `${Math.min(100, (st.captured / maxFrames) * 100)}%` }} />
@@ -350,17 +439,32 @@ export function Calibration() {
               </>
             )}
 
+            {corners && st?.capturing && (
+              <>
+                <button className={`btn block${corners.ready ? " primary" : ""}`} disabled={busy || !corners.ready} onClick={() => corner("confirm")}>
+                  Confirm corner {corners.index + 1} <kbd>q</kbd>
+                </button>
+                <div className="row">
+                  <button className="btn sm" disabled={busy} onClick={() => corner("retry")}>Retry corner <kbd>r</kbd></button>
+                  <button className="btn sm" disabled={busy || corners.index === 0} onClick={() => corner("back")}>Back a corner</button>
+                </div>
+              </>
+            )}
+            {corners && cornersDone && !st?.capturing && !result && (
+              <button className="btn sm" disabled={busy} onClick={() => corner("back")}>Redo the last corner</button>
+            )}
+
             <div className="row">
               {st?.capturing ? (
                 <button className="btn" disabled={busy} onClick={() => run("/calib/capture/stop")}>Stop</button>
               ) : (
                 <button className={`btn${!canSolve ? " primary" : ""}`} disabled={busy || !connected} onClick={startCapture}>
-                  {st && st.captured > 0 ? "Capture again" : "Start capture"}
+                  {st && (st.captured > 0 || (corners && corners.index > 0)) ? "Capture again" : "Start capture"}
                 </button>
               )}
               <button className={`btn${canSolve ? " primary" : ""}`} disabled={busy || !canSolve} onClick={() => run("/calib/solve", {}, "Field pose solved")}>Solve</button>
             </div>
-            {connected && !allVisible && !st?.capturing && (
+            {connected && !form.oneTag && !allVisible && !st?.capturing && (
               <p className="note">Every reference tag must be in view at once. Visible now: {[...seen].join(", ") || "none"}.</p>
             )}
           </div>
@@ -372,13 +476,17 @@ export function Calibration() {
               {result.from === "calibrated" && (
                 <div className={`quality ${q}`}>
                   <span className={`dot ${q === "good" ? "ok" : q === "fair" ? "warn" : "red"}`} />
-                  {q === "good" ? "The frames agree closely." : q === "fair" ? "Usable, with some spread between frames." : "The frames disagree. Check the tags and the lens calibration."}
+                  {result.fit_mm
+                    ? (q === "good" ? "The corners fit within placing-by-hand error." : q === "fair" ? "Usable: a corner is a few cm out. Check where the tag sat." : "The corners don't fit. Check the field size, the corner order and that the tag sat still.")
+                    : (q === "good" ? "The frames agree closely." : q === "fair" ? "Usable, with some spread between frames." : "The frames disagree. Check the tags and the lens calibration.")}
                 </div>
               )}
               <dl className="kv">
                 {result.frames !== null && <><dt>Frames used</dt><dd>{result.frames}</dd></>}
                 {result.rotation_spread_deg !== null && <><dt>Rotation spread</dt><dd>{result.rotation_spread_deg.toFixed(3)}°</dd></>}
                 {result.translation_spread_mm !== null && <><dt>Position spread</dt><dd>{result.translation_spread_mm.toFixed(2)} mm</dd></>}
+                {result.fit_mm && <><dt>Corner miss</dt><dd>{result.fit_mm.map((f, i) => `${i + 1}: ${f === null ? "–" : f.toFixed(0)}`).join(", ")} mm</dd></>}
+                {result.reproj_px !== null && <><dt>Corner fit</dt><dd>{result.reproj_px.toFixed(2)} px rms, {result.max_reproj_px?.toFixed(2)} px worst</dd></>}
                 <dt>Camera height</dt><dd>{result.camera_height_m.toFixed(3)} m</dd>
                 <dt>Field</dt><dd>{result.field[0]} × {result.field[1]} m</dd>
                 <dt>Origin</dt><dd>{result.origin ? `(${result.origin[0]}, ${result.origin[1]}) m` : "first corner"}</dd>

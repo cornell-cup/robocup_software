@@ -82,6 +82,10 @@ connect while tracking.
    can only run once per machine.
 2. Enter the **tag size** (black square edge, metres) and the field size, then
    **Start capture**: frames that see every reference tag are collected. **Solve**.
+   With only one tag, turn on **One tag at a time** (`calibrate-field --sequential`):
+   put it at each corner in the order listed, counterclockwise seen from above, let
+   go until the count fills, then **Confirm corner** (`q`; `r` retries, **Back a
+   corner** redoes the one before). Any tag id works; only one may be in view.
 3. Pick the **origin**: corner, centre, typed coordinates, or click the picture (snaps to
    corners, edge midpoints and the centre). **Save** writes `vision/calib/field_pose.json`,
    which every tracker loads the next time it starts.
@@ -126,7 +130,8 @@ HTTP 400 with `{"error": "..."}`.
 | GET | `/calib/status` | connection, detections, capture progress, result, overlay geometry, saved file |
 | POST | `/calib/connect` | `{"camera", "nt_server", "stream", "res": [w, h]}`, all optional |
 | POST | `/calib/disconnect`, `/calib/capture/stop`, `/calib/solve`, `/calib/load-saved`, `/calib/save` | |
-| POST | `/calib/capture/start` | `{"tag_size", "field_w", "field_h", "min_frames"?, "layout"?: {"0": [x, y], ...}}` |
+| POST | `/calib/capture/start` | `{"tag_size", "field_w", "field_h", "min_frames"?, "layout"?: {"0": [x, y], ...}, "sequential"?, "frames_per_corner"?}` |
+| POST | `/calib/corner` | one tag at a time: `{"action": "confirm" \| "retry" \| "back"}` |
 | POST | `/calib/origin` | `{"mode": "corner" \| "center"}`, `{"mode": "field", "x", "y"}` or `{"mode": "pixel", "u", "v"}` |
 | GET | `/tracking/status` | tracker process and its newest output (tags, ball, stats) |
 | POST | `/tracking/start` | `{"tag_size", "ball_profile", "record"?, "tag_height"?, "heading_offset"?, "tag_coast"?, "tag_sigma_a"?, "tag_sigma_alpha"?, "ball_min_conc"?, "ball_radius_mm"?, "ball_sigma_a"?, "ball_sigma_a_air"?, "ball_sigma_px"?, "ball_airborne"?, "corner_origin"?, "field_pose"?, "field"?: [w, h], "synthetic_field"?, "mode"?, "cam_height"?, "pitch"?, "distance"?, "yaw"?, "pitch_wall"?, "photon_camera"?, "nt_server"?, "stream"?, "photon_res"?, "print_poses"?, "print_states"?, "json_out"?, "serve_http"?, "display_width"?}`; `/tracking/stop` |

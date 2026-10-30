@@ -131,6 +131,12 @@
   background: var(--red-2);
   border-color: var(--red-2);
 }
+tr.current td {
+  background: rgba(var(--red-rgb), 0.12);
+}
+.corner-now {
+  font-size: 15px;
+}
 .progress {
   position: relative;
   height: 4px;

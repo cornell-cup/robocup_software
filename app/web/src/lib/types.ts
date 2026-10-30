@@ -118,7 +118,18 @@ export interface CalibStatus {
     layout: Record<string, number[]>;
     min_frames: number;
     max_frames: number;
+    sequential: boolean;
   } | null;
+  /** One tag at a time: where the capture is. */
+  corners?: {
+    index: number;
+    total: number;
+    count: number;
+    per_corner: number;
+    ready: boolean;
+    status: "no_tag" | "several" | "at_previous" | "moving" | "capturing" | "ready" | "done" | null;
+    captured: number[][];
+  };
   rate: number;
   camera?: {
     name: string;
@@ -137,6 +148,10 @@ export interface CalibStatus {
     frames: number | null;
     rotation_spread_deg: number | null;
     translation_spread_mm: number | null;
+    reproj_px: number | null;
+    max_reproj_px: number | null;
+    /** One tag at a time: how far each corner's tag lands from where it was put, mm. */
+    fit_mm: (number | null)[] | null;
     camera_height_m: number;
   };
   overlay?: {
@@ -233,7 +248,7 @@ export interface TrackingDoc {
     id: number; x: number; y: number; theta_deg: number; speed: number;
     visible: boolean; lost?: boolean; inside?: boolean; age?: number;
   }[];
-  ball: { x: number; y: number; z?: number; speed?: number; visible: boolean; grounded?: boolean } | null;
+  ball: { x: number; y: number; z?: number; speed?: number; visible: boolean; grounded?: boolean; resting?: boolean } | null;
   stats: {
     fps?: number; latency_ms?: number; photon_latency_ms?: number;
     capture_dropped?: number; photon_skipped?: number; ball_dropouts?: number;

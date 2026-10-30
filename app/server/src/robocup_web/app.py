@@ -234,6 +234,11 @@ def create_app(photonvision_dir: Path | None = None, start_photonvision: bool = 
         state.calib.stop_capture()
         return state.calib.status()
 
+    @app.post("/api/v1/calib/corner")
+    def calib_corner(opts: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
+        state.calib.corner(str(opts.get("action")))
+        return state.calib.status()
+
     @app.post("/api/v1/calib/solve")
     def calib_solve() -> dict[str, Any]:
         state.calib.solve()

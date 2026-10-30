@@ -20,7 +20,7 @@ type View = "both" | "camera" | "field";
  *  passes on. Empty means the tracker's own default. */
 const ADVANCED = {
   tagHeight: "", headingOffset: "", tagCoast: "", tagSigmaA: "", tagSigmaAlpha: "",
-  ballMinConc: "", ballRadiusMm: "", ballSigmaA: "", ballSigmaAAir: "", ballSigmaPx: "", ballAirborne: false,
+  ballMinConc: "", ballRadiusMm: "", ballSigmaA: "", ballSigmaAAir: "", ballSigmaPx: "", ballRestMm: "", ballAirborne: false,
   cornerOrigin: false, fieldPose: "", fieldW: "", fieldH: "",
   syntheticField: false, synthMode: "floor" as "floor" | "wall", camHeight: "", pitch: "", distance: "", yaw: "", pitchWall: "",
   photonCamera: "", ntServer: "", stream: "", photonW: "", photonH: "",
@@ -79,6 +79,8 @@ export function Tracking() {
     ...ADVANCED,
   });
   const set = <K extends keyof typeof form>(k: K, v: (typeof form)[K]) => setForm((f) => ({ ...f, [k]: v }));
+  // The camera and resolution given on the calibration page, for any left empty here.
+  const calibConn = readSaved<{ camera?: string; resW?: string; resH?: string }>("calib.form") ?? {};
 
   const running = !!st?.process.running;
   const live = feed.up ? feed.doc : null;
@@ -125,7 +127,14 @@ export function Tracking() {
   const ballProfile = names.includes(form.ballProfile) ? form.ballProfile : names[0] ?? "";
   const madeUpField = form.syntheticField || calibSaved === false;
 
-  async function start() {
+  // Why the last run stopped: the line it printed just before exiting with an error.
+  const exitAt = log.map((l) => /^\[tracker exited with code /.test(l.text)).lastIndexOf(true);
+  const failedRun = exitAt > 0 && !/code 0\]$/.test(log[exitAt].text) && !log.slice(exitAt).some((l) => l.text.startsWith("$ "));
+  const failure = !running && failedRun ? log[exitAt - 1] : null;
+  const cameraChoices = failure?.text.match(/several cameras \(([^)]+)\)/)?.[1].split(", ") ?? [];
+
+  async function start(f = form) {
+    const form = f;
     setBusy(true);
     try {
       const opt = (v: string) => (v.trim() === "" ? null : Number(v));
@@ -144,6 +153,7 @@ export function Tracking() {
         ball_sigma_a: opt(form.ballSigmaA),
         ball_sigma_a_air: opt(form.ballSigmaAAir),
         ball_sigma_px: opt(form.ballSigmaPx),
+        ball_rest_mm: opt(form.ballRestMm),
         ball_airborne: form.ballAirborne,
         corner_origin: form.cornerOrigin,
         field_pose: form.fieldPose || null,
@@ -155,10 +165,10 @@ export function Tracking() {
         distance: madeUpField ? opt(form.distance) : null,
         yaw: madeUpField ? opt(form.yaw) : null,
         pitch_wall: madeUpField ? opt(form.pitchWall) : null,
-        photon_camera: form.photonCamera.trim() || null,
+        photon_camera: form.photonCamera.trim() || calibConn.camera?.trim() || null,
         nt_server: form.ntServer.trim() || null,
         stream: form.stream.trim() || null,
-        photon_res: pair(form.photonW, form.photonH),
+        photon_res: pair(form.photonW, form.photonH) ?? pair(calibConn.resW ?? "", calibConn.resH ?? ""),
         print_poses: form.printPoses,
         print_states: form.printStates,
         json_out: form.jsonOut.trim() || null,
@@ -296,6 +306,22 @@ export function Tracking() {
                 field positions for the simulator and anything else listening on port 5556. Here you get its camera
                 view and the field drawn live.
               </p>
+              {failure && (
+                <div className="note error">
+                  The tracker stopped: {failure.text}
+                  {cameraChoices.length > 0 && (
+                    <div className="row camera-choices">
+                      {cameraChoices.map((c) => (
+                        <button key={c} className="btn sm" disabled={busy} onClick={() => {
+                          const f = { ...form, photonCamera: c };
+                          setForm(f);
+                          start(f);
+                        }}>Use {c}</button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
               {!running && (
                 <ul className="checks">
                   {checks.map((c) => (
@@ -371,7 +397,10 @@ export function Tracking() {
                       <NumberField label="Accel. noise (m/s²)" placeholder="3" step={0.5} value={form.ballSigmaA} onChange={(v) => set("ballSigmaA", v)} hint="Ball filter process noise while rolling" />
                       <NumberField label="In the air (m/s²)" placeholder="10" step={0.5} value={form.ballSigmaAAir} onChange={(v) => set("ballSigmaAAir", v)} hint="Ball filter process noise while airborne" />
                     </div>
-                    <NumberField label="Pixel noise (px)" placeholder="3" step={0.5} value={form.ballSigmaPx} onChange={(v) => set("ballSigmaPx", v)} hint="How far off the ball's centre in the picture is assumed to be" />
+                    <div className="row">
+                      <NumberField label="Pixel noise (px)" placeholder="3" step={0.5} value={form.ballSigmaPx} onChange={(v) => set("ballSigmaPx", v)} hint="How far off the ball's centre in the picture is assumed to be" />
+                      <NumberField label="Rest hold (mm)" placeholder="6" step={1} value={form.ballRestMm} onChange={(v) => set("ballRestMm", v)} hint="A ball that stops is held still (its position averaged) until it moves this far. 0 follows every measurement." />
+                    </div>
                     <Toggle label="Ball can leave the ground" checked={form.ballAirborne} onChange={(v) => set("ballAirborne", v)} hint="Estimate height from the ball's size. Unreliable with the camera far away." />
                   </div>
 
@@ -418,12 +447,12 @@ export function Tracking() {
 
                   <div className="opt-group">
                     <h3>PhotonVision</h3>
-                    <label className="field"><span>Camera</span><input className="input" placeholder="the only camera" value={form.photonCamera} onChange={(e) => set("photonCamera", e.target.value)} /></label>
+                    <label className="field"><span>Camera</span><input className="input" placeholder={calibConn.camera?.trim() || "the only camera"} value={form.photonCamera} onChange={(e) => set("photonCamera", e.target.value)} /></label>
                     <label className="field"><span>NetworkTables server</span><input className="input mono" placeholder="run it here" value={form.ntServer} onChange={(e) => set("ntServer", e.target.value)} /></label>
                     <label className="field"><span>Stream URL</span><input className="input mono" placeholder="PhotonVision's :1181/stream.mjpg" value={form.stream} onChange={(e) => set("stream", e.target.value)} /></label>
                     <div className="row">
-                      <NumberField label="Resolution width" placeholder="as published" value={form.photonW} onChange={(v) => set("photonW", v)} hint="Only if PhotonVision doesn't say: the resolution its lens calibration is for" />
-                      <NumberField label="Height" placeholder="as published" value={form.photonH} onChange={(v) => set("photonH", v)} />
+                      <NumberField label="Resolution width" placeholder={calibConn.resW || "as published"} value={form.photonW} onChange={(v) => set("photonW", v)} hint="Only if PhotonVision doesn't say: the resolution its lens calibration is for" />
+                      <NumberField label="Height" placeholder={calibConn.resH || "as published"} value={form.photonH} onChange={(v) => set("photonH", v)} />
                     </div>
                   </div>
 
@@ -443,7 +472,7 @@ export function Tracking() {
                   <button className="link" onClick={() => setForm((f) => ({ ...f, ...ADVANCED }))}>Reset these to the defaults</button>
                 </>
               )}
-              <button className="btn primary block" disabled={busy || !ballProfile || !form.tagSize} onClick={start}>Start tracking</button>
+              <button className="btn primary block" disabled={busy || !ballProfile || !form.tagSize} onClick={() => start()}>Start tracking</button>
               <small className="dim">Stops the Field calibration page's PhotonVision connection, if it has one: the tracker needs it.</small>
             </div>
           )}
@@ -498,7 +527,7 @@ export function Tracking() {
                   <td>Ball</td>
                   <td className="mono">{num(live.ball?.x)}</td>
                   <td className="mono">{num(live.ball?.y)}</td>
-                  <td className="mono dim">{live.ball?.z !== undefined && live.ball.z > 0.01 ? `z ${num(live.ball.z)}` : ""}</td>
+                  <td className="mono dim">{live.ball?.grounded === false && live.ball.z !== undefined ? `z ${num(live.ball.z)}` : live.ball?.resting ? "at rest" : ""}</td>
                   <td className="mono">{num(live.ball?.speed)}</td>
                 </tr>
               </tbody>
@@ -510,7 +539,7 @@ export function Tracking() {
 
         <Card title="Log">
           <div className="log mono">
-            {log.length ? log.map((l) => <div key={l.n} className={/error|traceback|exception/i.test(l.text) ? "err" : undefined}>{l.text}</div>)
+            {log.length ? log.map((l, i) => <div key={l.n} className={/error|traceback|exception/i.test(l.text) || (log[i + 1] && /^\[tracker exited with code [1-9]/.test(log[i + 1].text)) ? "err" : undefined}>{l.text}</div>)
               : <div className="dim">Nothing yet.</div>}
           </div>
         </Card>

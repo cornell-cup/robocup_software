@@ -3,8 +3,9 @@ buttons instead of an OpenCV window.
 
 The steps and the maths are calibrate_field's own -- connect to PhotonVision
 (photon.py), collect frames that see every reference tag, calibrate_field()
-them, place the origin (pixel_to_field, with the same snapping), save
-field_pose.json -- only the window is new. Overlays are not drawn into the
+them (or, one tag at a time, CornerSampler and solve_sequential(), as
+--sequential does), place the origin (pixel_to_field, with the same
+snapping), save field_pose.json -- only the window is new. Overlays are not drawn into the
 picture: their pixel coordinates go to the browser, which draws them over the
 camera stream, so they stay sharp and clickable.
 
@@ -23,12 +24,16 @@ from typing import Any
 import cv2
 import numpy as np
 from tag_tracking.calibrate_field import (
+    FRAMES_PER_CORNER,
     MAX_LIVE_FRAMES,
     MIN_FRAMES,
     SNAP_PX,
+    CornerSampler,
     FieldCalibrationResult,
+    SequentialCalibrationResult,
     calibrate_field,
     default_field_layout,
+    solve_sequential,
 )
 from tag_tracking.photon import PhotonStream, PhotonTags, blank_frame, open_photon
 from vision_core.field import (
@@ -61,7 +66,10 @@ class FieldCalibration:
         self._capturing = False
         self._views: list[list] = []
         self._setup: dict[str, Any] | None = None
-        self._result: FieldCalibrationResult | None = None
+        self._corners: CornerSampler | None = None  # one tag at a time
+        self._corner_status = CornerSampler.NO_TAG
+        self._result: FieldCalibrationResult | SequentialCalibrationResult | None = None
+        self._fit_mm: list[float | None] | None = None  # one tag: each corner's miss
         self._transform: ReferenceTagFieldTransform | None = None  # corner frame
         self._field: Field | None = None
         self._origin: tuple[float, float] | None = None
@@ -125,7 +133,9 @@ class FieldCalibration:
                 self._dets = r.detections
                 self._dets_t = now
                 self._rate = 0.9 * self._rate + 0.1 / max(now - last, 1e-3)
-                if self._capturing and self._setup is not None:
+                if self._capturing and self._corners is not None:
+                    self._corner_status = self._corners.add(r.detections)
+                elif self._capturing and self._setup is not None:
                     need = set(self._setup["layout"])
                     if need.issubset(d.tag_id for d in r.detections):
                         self._views.append(r.detections)
@@ -166,37 +176,83 @@ class FieldCalibration:
         if len(layout) < ReferenceTagFieldTransform.MIN_TAGS:
             raise CommandError(f"need at least {ReferenceTagFieldTransform.MIN_TAGS} reference tags")
         min_frames = int(opts.get("min_frames") or MIN_FRAMES)
+        sequential = bool(opts.get("sequential"))
+        per_corner = int(opts.get("frames_per_corner") or FRAMES_PER_CORNER)
+        if not 3 <= per_corner <= 300:
+            raise CommandError("frames per corner must be 3-300")
         with self._lock:
             if self.state != "connected":
                 raise CommandError("connect to PhotonVision first")
             self._setup = {"tag_size": tag_size, "field": (w, h), "layout": layout,
                            "min_frames": min_frames,
-                           "max_frames": max(min_frames, MAX_LIVE_FRAMES)}
+                           "max_frames": max(min_frames, MAX_LIVE_FRAMES),
+                           "sequential": sequential}
             self._views = []
+            self._corners = CornerSampler(layout, per_corner) if sequential else None
+            self._corner_status = CornerSampler.NO_TAG
             self._capturing = True
 
     def stop_capture(self) -> None:
         with self._lock:
             self._capturing = False
 
+    def corner(self, action: str) -> None:
+        """One tag at a time: confirm the current corner, retry it, or go
+        back to the one before."""
+        with self._lock:
+            sampler = self._corners
+            if sampler is None:
+                raise CommandError("start a one-tag-at-a-time capture first")
+            if action == "confirm":
+                if not sampler.ready:
+                    raise CommandError("this corner hasn't got enough steady frames yet")
+                sampler.confirm()
+                if sampler.done:
+                    self._capturing = False
+            elif action == "retry":
+                sampler.retry()
+            elif action == "back":
+                sampler.back()
+                self._capturing = True
+            else:
+                raise CommandError("action must be confirm, retry or back")
+
     def solve(self) -> None:
         with self._lock:
             tags, setup, views = self._tags, self._setup, list(self._views)
+            sampler = self._corners
             self._capturing = False
         if tags is None or setup is None:
             raise CommandError("capture frames first")
         try:
-            result = calibrate_field(views, setup["layout"], tags.K, tags.dist,
-                                     min_frames=setup["min_frames"],
-                                     max_frames=setup["max_frames"],
-                                     tag_size=setup["tag_size"])
-        except RuntimeError as e:
+            if sampler is not None:
+                if not sampler.done:
+                    raise CommandError(f"capture every corner first "
+                                       f"({sampler.index}/{len(sampler.items)} done)")
+                result = solve_sequential(dict(sampler.results), setup["layout"], tags.K,
+                                          tags.dist, tag_size=setup["tag_size"])
+            else:
+                result = calibrate_field(views, setup["layout"], tags.K, tags.dist,
+                                         min_frames=setup["min_frames"],
+                                         max_frames=setup["max_frames"],
+                                         tag_size=setup["tag_size"])
+        except (RuntimeError, LookupError) as e:
             raise CommandError(str(e)) from None
+        fit_mm = None
+        if sampler is not None:
+            # The fit in millimetres on the field, which pixels are not: each
+            # tag's seen centre, back onto the floor, against where it was put.
+            fit_mm = []
+            for tid, det in sampler.results.items():
+                p = result.transform.pixel_to_field(*det.center, tags.K, tags.dist)
+                fit_mm.append(None if p is None else
+                              round(float(np.hypot(*(p[:2] - setup["layout"][tid]))) * 1000, 1))
         w, h = tags.size
         result.transform.source += f" ({w}x{h}, {tags.source})"
         result.transform.field_size = setup["field"]
         with self._lock:
             self._result = result
+            self._fit_mm = fit_mm
             self._transform = result.transform
             self._field = Field(*setup["field"])
             # A custom origin is a point on the field, not on the camera:
@@ -281,8 +337,21 @@ class FieldCalibration:
                 },
                 "rate": round(self._rate, 1) if dets else 0.0,
             }
+            sampler = self._corners
+            if sampler is not None:
+                out["corners"] = {
+                    "index": sampler.index,
+                    "total": len(sampler.items),
+                    "count": sampler.count,
+                    "per_corner": sampler.frames_per_corner,
+                    "ready": sampler.ready,
+                    "status": self._corner_status if self._capturing else None,
+                    # where the confirmed corners sat in the picture, raw pixels
+                    "captured": [np.asarray(d.center).round(1).tolist()
+                                 for d in sampler.results.values()],
+                }
             transform, field, origin = self._transform, self._field, self._origin
-            result, result_from = self._result, self._result_from
+            result, result_from, fit_mm = self._result, self._result_from, self._fit_mm
         if tags is not None:
             out["camera"] = {
                 "name": tags.name, "size": list(tags.size), "fx": round(float(tags.K[0, 0]), 1),
@@ -295,15 +364,20 @@ class FieldCalibration:
             for d in dets
         ]
         if transform is not None and field is not None:
+            frames = isinstance(result, FieldCalibrationResult)
+            one_tag = isinstance(result, SequentialCalibrationResult)
             out["result"] = {
                 "from": result_from,
                 "source": transform.source,
                 "field": [field.width, field.height],
                 "origin": None if origin is None else list(origin),
-                "frames": result.n_frames if result else None,
-                "rotation_spread_deg": round(result.rotation_spread_deg, 3) if result else None,
+                "frames": result.n_frames if frames else None,
+                "rotation_spread_deg": round(result.rotation_spread_deg, 3) if frames else None,
                 "translation_spread_mm": (round(result.translation_spread_m * 1000, 2)
-                                          if result else None),
+                                          if frames else None),
+                "reproj_px": round(result.reproj_error_px, 2) if one_tag else None,
+                "max_reproj_px": round(result.max_reproj_error_px, 2) if one_tag else None,
+                "fit_mm": fit_mm if one_tag else None,
                 "camera_height_m": round(float(transform.camera_origin_in_field()[2]), 3),
             }
             if tags is not None:

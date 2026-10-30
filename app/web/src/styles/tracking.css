@@ -82,18 +82,14 @@ tr.ball td:first-child {
   font-weight: 600;
   color: var(--text);
 }
+.camera-choices {
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
 .keys {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
-}
-kbd {
-  font-family: var(--mono);
-  font-size: 13px;
-  padding: 0 5px;
-  border: 1px solid var(--line-2);
-  border-radius: 4px;
-  color: var(--muted);
 }
 @media (max-width: 1000px) {
   .track-views > .picture,
