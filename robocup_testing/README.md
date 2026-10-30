@@ -61,7 +61,9 @@ uv run track-combined --ball-profile mine --tag-size 0.080
 ```
 
 Turning the made-up field into a real, measured one is a one-time calibration
-step — `uv run calibrate-camera` and `uv run calibrate-field`, or
+step — `uv run calibrate` walks through it on screen (lens, field, then a
+tape-measure accuracy check), or run `uv run calibrate-camera` and
+`uv run calibrate-field` yourself, or
 `uv run track --calibrate-live` to do both in one session. See
 [`tag-tracking`'s README](tag-tracking/#one-time-calibration-making-it-real).
 
@@ -107,10 +109,15 @@ installed now, `--extra zmq` errors (`Extra zmq is not defined`), and
 
 | Command | What it does | Writes |
 | --- | --- | --- |
+| `uv run calibrate` | **Start here.** The three steps below in order, as a menu; every choice made on screen, no flags needed | all of the below |
 | `uv run calibrate-camera` | Measures the lens: wave a printed board at the webcam | `calib/intrinsics.json` |
 | `uv run calibrate-field` | Measures the field position: point the webcam at your 4 tags | `calib/field_pose.json` |
 | `uv run calibrate-field --sequential` | Same, but one tag moved to each corner in turn (camera fixed) instead of 4 at once | `calib/field_pose.json` |
 | `uv run calibrate-field --pick-origin` | Re-pick where `(0,0)` is — click it on the live view — without recalibrating | `calib/field_pose.json` |
+| `uv run verify-calibration` | Checks it all against 9 tape-measured spots, in mm | `calib/verification/` |
+
+`calibrate-camera`, `calibrate-field` and `verify-calibration` open on a choices
+screen (prefilled from any flags given); add `--no-setup` to skip it.
 | `uv run calibrate-ball` | Measures the ball's color: drag a box over it | `calib/ball_color.json` |
 | `uv run track --calibrate-live` | Lens + field in one session, then starts tracking | `calib/field_pose.json` |
 | `uv run track --calibrate-live --sequential` | Same, one tag moved to each corner instead of 4 at once | `calib/field_pose.json` |
@@ -159,7 +166,7 @@ against the wrong physical size until you correct it.
 | --- | --- | --- | --- |
 | `--field W H` | Real field size, in metres. Saved with the calibration, so after `calibrate-field --field W H` every tracker uses it without being told | the saved size, else `1.2 0.8` | `calibrate-field`, `track` (incl. `--calibrate-live`, `--synthetic-camera`), `track-ball`, `track-combined` |
 | `--tag-size` | Real black-square tag size, in metres | `0.080` | `track` (incl. `--calibrate-live`, `--synthetic-camera`) |
-| `--camera N` | Which webcam index to use | `0` | `calibrate-camera`, `calibrate-field`, `track` |
+| `--camera N` | Which webcam index to use | `0` (the calibration tools: the one chosen last time) | `calibrate-camera`, `calibrate-field`, `verify-calibration`, `track` |
 | `--out PATH` | Where to save the calibration result | `robocup_testing/calib/...` | `calibrate-camera`, `calibrate-field` |
 | `--field-pose PATH` | Field calibration file to load/save | `calib/field_pose.json` | `track` (incl. `--calibrate-live`) |
 | `--layout ID:X,Y ...` | Custom reference-tag positions, overrides the default 4 corners | corners of `--field` | `calibrate-field` |

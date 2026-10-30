@@ -134,21 +134,24 @@ def save(
     source: str,
     dist: np.ndarray | None = None,
     path: Path | None = None,
+    metrics: dict | None = None,
 ) -> Path:
-    """Write a camera matrix to calib/, creating the directory if needed."""
+    """Write a camera matrix to calib/, creating the directory if needed.
+
+    `metrics` (calibrate-camera's quality numbers: reprojection error, views,
+    frame coverage, when) is stored under "metrics" so the file says how good
+    it is."""
     path = path or intrinsics_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     dist = np.zeros(5, np.float64) if dist is None else np.asarray(dist, np.float64)
-    path.write_text(
-        json.dumps(
-            {
-                "width": int(width),
-                "height": int(height),
-                "camera_matrix": np.asarray(K, np.float64).tolist(),
-                "dist_coeffs": dist.ravel().tolist(),
-                "source": source,
-            },
-            indent=2,
-        )
-    )
+    doc = {
+        "width": int(width),
+        "height": int(height),
+        "camera_matrix": np.asarray(K, np.float64).tolist(),
+        "dist_coeffs": dist.ravel().tolist(),
+        "source": source,
+    }
+    if metrics is not None:
+        doc["metrics"] = metrics
+    path.write_text(json.dumps(doc, indent=2))
     return path

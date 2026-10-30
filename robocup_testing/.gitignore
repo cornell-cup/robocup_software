@@ -20,6 +20,10 @@ ENV/
 /field.png
 /tag*.png
 
+# Remembered setup choices (camera number, tag size): per machine, since
+# camera numbers differ from one laptop to the next.
+/calib/last_choices.json
+
 # Editor / OS noise
 .vscode/
 .idea/

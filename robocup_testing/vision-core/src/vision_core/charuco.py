@@ -60,6 +60,9 @@ class IntrinsicsResult:
     rms_reproj_px: float
     n_frames: int
     source: str
+    #: How much of the frame the captured board corners reached (see
+    #: frame_coverage), or None when nobody measured it (synthetic runs).
+    coverage: dict | None = None
 
 
 def calibrate_intrinsics(
@@ -128,6 +131,34 @@ def calibrate_intrinsics(
         n_frames=len(all_obj),
         source=f"charuco, {len(all_obj)} views, rms {rms:.2f}px",
     )
+
+
+#: Frame divided into COVERAGE_GRID x COVERAGE_GRID cells for frame_coverage.
+COVERAGE_GRID = 4
+
+
+def frame_coverage(points: Iterable[np.ndarray], image_size: tuple[int, int],
+                   grid: int = COVERAGE_GRID) -> dict:
+    """How much of the frame a calibration's board corners reached.
+
+    Reprojection error is measured on the views captured, so a session that
+    only ever showed the board mid-frame scores well while knowing nothing
+    about distortion at the edges -- which is where it is strongest. This is
+    the number that exposes that: the share of grid cells with at least one
+    corner in them, and how many of the frame's four corner cells were reached.
+    """
+    w, h = image_size
+    hit = np.zeros((grid, grid), bool)
+    for p in points:
+        x, y = float(p[0]), float(p[1])
+        if 0 <= x < w and 0 <= y < h:
+            hit[int(y * grid / h), int(x * grid / w)] = True
+    corners = [hit[0, 0], hit[0, -1], hit[-1, 0], hit[-1, -1]]
+    return {
+        "coverage_pct": round(float(100.0 * hit.mean()), 1),
+        "corner_cells_reached": int(sum(corners)),
+        "grid": grid,
+    }
 
 
 # --------------------------------------------------------------------------

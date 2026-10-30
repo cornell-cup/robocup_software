@@ -1,7 +1,8 @@
 """One-time field-pose calibration: point a calibrated camera at the fixed
 reference AprilTags and solve where the field is, once.
 
-    uv run calibrate-field                                    # live camera, default 4-corner layout
+    uv run calibrate-field                                    # guided: choose everything on screen
+    uv run calibrate-field --no-setup                         # skip the choices screen, flags as given
     uv run calibrate-field --field 1.2 0.8                    # a different field size
     uv run calibrate-field --layout 0:0,0 1:1.2,0 2:1.2,0.8 3:0,0.8
     uv run calibrate-field --synthetic                        # self-test, no hardware
@@ -31,6 +32,12 @@ or press Enter to keep the first corner as before. The click needs the pose --
 that is what turns a pixel into a field point -- which is why it comes after.
 The choice is saved as `origin` next to R/t; every tracker picks it up.
 
+The guided run (the default) starts with a screen for the camera, the method,
+the field and tag sizes and where (0, 0) goes, puts plain instructions and a
+map of the corners under the live picture, and ends on a verdict with Save /
+Try again. The words come from calib_guide, the drawing from vision_core.ui;
+the capture loops take a ui.Window so the `calibrate` menu can share one.
+
 Saves to robocup_testing/calib/field_pose.json (vision_core.paths), same as
 calib/intrinsics.json. track.py loads this automatically once it exists, in
 place of the made-up field.
@@ -40,13 +47,15 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterable
 
 import cv2
 import numpy as np
 import pupil_apriltags as pa
-from vision_core.camera import open_camera, read_frame, read_key
+from vision_core import ui
+from vision_core.camera import open_camera, read_frame
 from vision_core.field import (
     Field,
     ReferenceTagFieldTransform,
@@ -56,8 +65,10 @@ from vision_core.field import (
     saved_origin,
 )
 from vision_core.intrinsics import undistort_maps
+from vision_core.options import initial_values
 from vision_core.planview import draw_field
 
+from . import calib_guide as guide
 from .pose import tag_field_pose
 
 MIN_FRAMES = 10
@@ -162,26 +173,45 @@ def parse_layout(spec: list[str]) -> dict[int, tuple[float, float]]:
     return layout
 
 
+def _layout_bounds(layout: dict[int, tuple[float, float]],
+                   field: Field | None) -> tuple[float, float, float, float]:
+    if field is not None:
+        return (field.x0, field.y0, field.width, field.height)
+    xs, ys = [p[0] for p in layout.values()], [p[1] for p in layout.values()]
+    return (min(xs), min(ys), max(xs) - min(xs), max(ys) - min(ys))
+
+
+def layout_map(layout: dict[int, tuple[float, float]], field: Field | None,
+               states: list[str]) -> np.ndarray:
+    """The corners as lettered points on a small field map."""
+    return ui.field_map(_layout_bounds(layout, field), list(layout.values()),
+                        [guide.LETTERS[i] for i in range(len(layout))], states)
+
+
 def capture_reference_frames(
     read_bgr: Callable[[], np.ndarray],
     layout: dict[int, tuple[float, float]],
     min_frames: int = MIN_FRAMES,
     max_frames: int = MAX_LIVE_FRAMES,
     window_name: str = "calibrate-field",
+    *,
+    window: ui.Window | None = None,
+    field: Field | None = None,
 ) -> list[np.ndarray]:
     """Show a live preview and collect grayscale frames until all reference
-    tags have been seen `min_frames`+ times. 'q' to finish once enough are
-    captured, Esc to abort (raises SystemExit).
+    tags have been seen `min_frames`+ times. Enter (or 'q') to finish once
+    enough are captured, Esc to abort (raises ui.Cancelled, a SystemExit).
 
     Takes a plain `read_bgr()` callable rather than a specific camera type, so
     both this module's own live capture and track.py's already-open
     cv2.VideoCapture can drive this identically -- this is the interactive
     half of what --calibrate-live on track re-uses directly, instead of
-    duplicating the capture loop there.
+    duplicating the capture loop there. Pass `window` to draw into one the
+    caller owns, and `field` for the map's outline.
     """
     detector = pa.Detector(families="tag36h11", nthreads=2, quad_decimate=1.0)
-    win = window_name
-    cv2.namedWindow(win, cv2.WINDOW_AUTOSIZE)
+    own = window is None
+    window = window or ui.Window(window_name)
     frames: list[np.ndarray] = []
     try:
         while True:
@@ -200,28 +230,20 @@ def capture_reference_frames(
                 )
             if good and len(frames) < max_frames:
                 frames.append(grey)
-            status_colour = (0, 255, 0) if good else (0, 0, 255)
-            cv2.rectangle(disp, (0, 0), (disp.shape[1], 84), (0, 0, 0), -1)
-            cv2.putText(
-                disp, f"captured {len(frames)}/{min_frames}   need ids {sorted(layout)}"
-                      f"   see {sorted(seen_ids) or '(none)'}",
-                (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.62, status_colour, 2, cv2.LINE_AA,
-            )
-            ready = len(frames) >= min_frames
-            go_msg = "'q' TO FINISH -- enough captured" if ready else "'q' does nothing yet -- need more captures"
-            cv2.putText(
-                disp, f"{go_msg}   |   Esc to abort", (10, 56),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.58, (0, 255, 0) if ready else (200, 200, 200), 1, cv2.LINE_AA,
-            )
-            cv2.imshow(win, disp)
-            key = read_key()
-            if key == 27:
+            info = guide.field_four_tags_text(list(layout), sorted(seen_ids), len(frames),
+                                              min_frames)
+            states = ["ok" if t in seen_ids else "todo" for t in layout]
+            window.show(ui.stack(disp, ui.instruction_panel(
+                disp.shape[1], info, layout_map(layout, field, states))))
+            key = window.key()
+            if key == ui.ESC:
                 print("aborted")
-                raise SystemExit(0)
-            if key == ord("q") and len(frames) >= min_frames:
+                raise ui.Cancelled()
+            if key in (ui.ENTER, ui.SPACE, ord("q")) and len(frames) >= min_frames:
                 break
     finally:
-        cv2.destroyWindow(win)
+        if own:
+            window.close()
     return frames
 
 
@@ -299,6 +321,9 @@ def capture_sequential_corners(
     layout: dict[int, tuple[float, float]],
     frames_per_corner: int = FRAMES_PER_CORNER,
     window_name: str = "calibrate-field (one tag)",
+    *,
+    window: ui.Window | None = None,
+    field: Field | None = None,
 ) -> dict[int, np.ndarray]:
     """Interactively capture one tag's pixel centre at each field position in
     `layout`, in turn -- for a single tag (e.g. mounted on a robot) driven to
@@ -311,19 +336,21 @@ def capture_sequential_corners(
     Only a tag held still counts: one that moves more than STILL_PX restarts
     the samples, and one still within MIN_CORNER_SEP_PX of a corner already
     confirmed is ignored -- otherwise the next corner fills up in half a
-    second from wherever the tag was while being carried there. 'q' confirms
-    the current corner and moves to the next once enough samples are in;
-    'r' clears the current corner's samples to retry it; Esc aborts entirely.
+    second from wherever the tag was while being carried there. Enter (or
+    'q') confirms the current corner and moves to the next once enough
+    samples are in; 'r' clears the current corner's samples to retry it; Esc
+    aborts entirely (ui.Cancelled).
 
     Returns {tag_id: averaged detection}, keyed the same way `layout` is --
     the physical tag's id at capture time does not have to match; only the
     order you visit `layout`'s positions in does.
     """
     detector = pa.Detector(families="tag36h11", nthreads=2, quad_decimate=1.0)
-    win = window_name
-    cv2.namedWindow(win, cv2.WINDOW_AUTOSIZE)
+    own = window is None
+    window = window or ui.Window(window_name)
     results: dict[int, _AveragedDetection] = {}
     items = list(layout.items())
+    bounds = _layout_bounds(layout, field)
     try:
         for i, (label_id, (fx, fy)) in enumerate(items):
             samples: list[np.ndarray] = []
@@ -352,38 +379,23 @@ def capture_sequential_corners(
                     samples.append(c)
                     corner_samples.append(np.asarray(dets[0].corners, np.float64))
                 ready = len(samples) >= frames_per_corner
-                status_colour = (
-                    (0, 255, 0) if ready else (0, 165, 255) if good else (0, 0, 255)
-                )
-                cv2.rectangle(disp, (0, 0), (disp.shape[1], 84), (0, 0, 0), -1)
-                cv2.putText(
-                    disp,
-                    f"corner {i + 1}/{len(items)}: place ONE tag at field "
-                    f"({fx:g}, {fy:g})   captured {len(samples)}/{frames_per_corner}",
-                    (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.6, status_colour, 2, cv2.LINE_AA,
-                )
-                if hint is not None:
-                    msg = hint
-                elif len(dets) > 1:
-                    msg = f"{len(dets)} tags visible -- show exactly one"
-                elif not good:
-                    msg = "no tag visible"
-                else:
-                    msg = "'q' to confirm and move on" if ready else "hold steady -- capturing"
-                cv2.putText(
-                    disp, f"{msg}   |   'r' retry this corner   |   Esc abort",
-                    (10, 56), cv2.FONT_HERSHEY_SIMPLEX, 0.55,
-                    (0, 255, 0) if ready else (200, 200, 200), 1, cv2.LINE_AA,
-                )
-                cv2.imshow(win, disp)
-                key = read_key()
-                if key == 27:
+                for r in results.values():  # corners already done
+                    cv2.circle(disp, tuple(int(v) for v in r.center), 9, (110, 205, 110), -1,
+                               cv2.LINE_AA)
+                info = guide.field_one_tag_text(i, len(items), (fx, fy), bounds[2], bounds[3],
+                                                len(samples), frames_per_corner, len(dets), hint)
+                states = ["ok" if j < i else "current" if j == i else "todo"
+                          for j in range(len(items))]
+                window.show(ui.stack(disp, ui.instruction_panel(
+                    disp.shape[1], info, layout_map(layout, field, states))))
+                key = window.key()
+                if key == ui.ESC:
                     print("aborted")
-                    raise SystemExit(0)
+                    raise ui.Cancelled()
                 if key == ord("r"):
                     samples.clear()
                     corner_samples.clear()
-                if key == ord("q") and ready:
+                if key in (ui.ENTER, ui.SPACE, ord("q")) and ready:
                     break
             avg = np.mean(samples, axis=0)
             px_std = float(np.std(np.linalg.norm(np.array(samples) - avg, axis=1)))
@@ -396,7 +408,8 @@ def capture_sequential_corners(
                 f"jitter {px_std:.2f} px"
             )
     finally:
-        cv2.destroyWindow(win)
+        if own:
+            window.close()
     return results
 
 
@@ -421,6 +434,8 @@ def pick_origin(
     dist: np.ndarray | None = None,
     window_name: str = "calibrate-field: pick origin",
     initial: tuple[float, float] | None = None,
+    *,
+    window: ui.Window | None = None,
 ) -> tuple[float, float] | None:
     """Click where field (0, 0) should be. Returns it in corner coords, or None
     to keep the default (the first corner).
@@ -454,9 +469,7 @@ def pick_origin(
         snap_px[(sx, sy)] = px.reshape(2)
     chosen: list[tuple[float, float] | None] = [initial]
 
-    def on_mouse(event, u, v, _flags, _param) -> None:
-        if event != cv2.EVENT_LBUTTONDOWN:
-            return
+    def click(u: float, v: float) -> None:
         near = min(snaps, key=lambda q: np.linalg.norm(snap_px[q] - (u, v)))
         if np.linalg.norm(snap_px[near] - (u, v)) < SNAP_PX:
             chosen[0] = near
@@ -465,8 +478,8 @@ def pick_origin(
         if p is not None:
             chosen[0] = (round(float(p[0]), 3), round(float(p[1]), 3))
 
-    cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
-    cv2.setMouseCallback(window_name, on_mouse)
+    own = window is None
+    window = window or ui.Window(window_name)
     try:
         while True:
             disp = read_undistorted()
@@ -474,26 +487,24 @@ def pick_origin(
             shown = corner.with_origin(o)
             draw_field(disp, field.relative_to(o), shown, K)
             for q in snaps:
-                cv2.circle(disp, tuple(snap_px[q].astype(int)), 3, (200, 200, 200), -1)
-            cv2.rectangle(disp, (0, 0), (disp.shape[1], 84), (0, 0, 0), -1)
-            where = ("first corner (default)" if o is None
-                     else f"({o[0]:g}, {o[1]:g}) m from the first corner")
-            cv2.putText(disp, f"origin: {where}", (10, 28), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.62, (0, 255, 0), 2, cv2.LINE_AA)
-            cv2.putText(disp, "click to place (snaps to corners/centre)   'c' centre   "
-                              "Enter accept   'd'/Esc keep default corner",
-                        (10, 56), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1,
-                        cv2.LINE_AA)
-            cv2.imshow(window_name, disp)
-            key = read_key()
-            if key in (27, ord("d")):
+                cv2.circle(disp, tuple(snap_px[q].astype(int)), 5, (200, 200, 200), -1)
+            where = ("corner A" if o is None
+                     else f"{o[0]:g} m along x and {o[1]:g} m along y from corner A")
+            window.show(ui.stack(disp, ui.instruction_panel(disp.shape[1],
+                                                            guide.origin_text(where))))
+            for u, v in window.clicks():
+                if v < h:  # on the picture, not the panel under it
+                    click(u, v)
+            key = window.key()
+            if key in (ui.ESC, ord("d")):
                 return None
             if key == ord("c"):
                 chosen[0] = (field.width / 2, field.height / 2)
-            if key in (13, 10, ord("s")):
+            if key in (ui.ENTER, ord("s")):
                 return chosen[0]
     finally:
-        cv2.destroyWindow(window_name)
+        if own:
+            window.close()
 
 
 def _choose_origin(args, read_bgr, transform, field, K, dist, out):
@@ -566,8 +577,9 @@ def _run_synthetic(args, field: Field, layout: dict[int, tuple[float, float]]):
     return result, args.out
 
 
-def _open_live(args):
-    """Open the camera and load intrinsics for the size it ACTUALLY delivers.
+def _open_live(args, cap=None):
+    """Open the camera (or take `cap`, already open) and load intrinsics for the
+    size it ACTUALLY delivers.
 
     Not args.width/height: a camera that ignores the request (640x480 when
     asked for 1280x720) would otherwise miss the real calibration, fall back to
@@ -576,7 +588,7 @@ def _open_live(args):
     """
     from vision_core.intrinsics import load as load_intrinsics
 
-    cap = open_camera(args.camera, args.width, args.height)
+    cap = cap or open_camera(args.camera, args.width, args.height)
     ok, frm = read_frame(cap)
     if not ok:
         cap.release()
@@ -699,6 +711,29 @@ def _run_live_sequential(args, field: Field, layout: dict[int, tuple[float, floa
     return result, out
 
 
+def field_metrics(result, args, field: Field,
+                  layout: dict[int, tuple[float, float]]) -> dict:
+    """The quality numbers of one field calibration, saved with the pose so
+    anyone opening field_pose.json can see how good the solve was -- the
+    sequential mode's reprojection error in particular used to be printed and
+    then lost."""
+    m: dict = {
+        "calibrated_at": datetime.now().isoformat(timespec="seconds"),
+        "field_m": [field.width, field.height],
+        "tag_size_m": args.tag_size,
+        "layout": {str(k): list(v) for k, v in layout.items()},
+    }
+    if isinstance(result, SequentialCalibrationResult):
+        m.update(mode="sequential", n_corners=result.n_corners,
+                 reproj_rms_px=round(result.reproj_error_px, 4),
+                 reproj_max_px=round(result.max_reproj_error_px, 4))
+    else:
+        m.update(mode="four_tags", n_frames=result.n_frames,
+                 rotation_spread_deg=round(result.rotation_spread_deg, 4),
+                 translation_spread_mm=round(result.translation_spread_m * 1000.0, 3))
+    return m
+
+
 def _run_pick_origin(args, field: Field) -> None:
     """--pick-origin: keep the saved pose, change only where (0, 0) is."""
     out = args.out or str(field_pose_path())
@@ -724,14 +759,182 @@ def _run_pick_origin(args, field: Field) -> None:
     print(f"saved {out}")
 
 
-def main() -> None:
+def _save(result, args, field: Field, layout, out: str) -> None:
+    Path(out).parent.mkdir(parents=True, exist_ok=True)
+    # The size travels with the pose: every tracker reads it from here.
+    result.transform.field_size = (field.width, field.height)
+    result.transform.metrics = field_metrics(result, args, field, layout)
+    result.transform.save(out)
+    print(f"\nsaved {out}")
+
+
+def _guided_origin(choice: str, field: Field, out: str, pick) -> tuple[float, float] | None:
+    """The origin a setup-screen choice means, in corner coords; `pick()` runs
+    the click picker."""
+    if choice == "center":
+        return (field.width / 2, field.height / 2)
+    if choice == "keep":
+        return saved_origin(out)
+    if choice == "click":
+        return pick()
+    return None
+
+
+def _guided_move_origin(window: ui.Window, args, values, out: str, cap) -> bool:
+    """Only move (0, 0): load the saved pose, set the origin, save."""
+    if not Path(out).exists():
+        if cap is not None:
+            cap.release()
+        ui.message(window, "Nothing to move yet",
+                   ["No field has been saved. Choose 'Find the field' first."], kind="warn")
+        return False
+    transform = ReferenceTagFieldTransform.load(out, use_origin=False)
+    field = resolve_field(None, out)
+    if values["origin"] == "click":
+        cap, read_bgr, K, dist, _ = _open_live(args, cap)
+        try:
+            origin = pick_origin(read_bgr, transform, field, K, dist,
+                                 initial=saved_origin(out), window=window)
+        finally:
+            cap.release()
+    else:
+        if cap is not None:
+            cap.release()
+        origin = _guided_origin(values["origin"], field, out, lambda: None)
+    transform = transform.with_origin(origin)
+    transform.field_size = (field.width, field.height)
+    transform.save(out)
+    where = "corner A" if origin is None else f"({origin[0]:g}, {origin[1]:g}) m from corner A"
+    print(f"origin: {where}\nsaved {out}")
+    ui.message(window, "Saved", [f"(0,0) is now at {where}.", f"Saved to {out}."], kind="ok",
+               headline="Origin saved.")
+    return True
+
+
+def guided(window: ui.Window | None = None, args=None) -> bool:
+    """The whole step on screen: choices, capture, verdict, origin, save.
+    Returns True if something was saved. Pass a window to share one (the
+    `calibrate` menu does); Back/Esc returns to the caller."""
+    args = args or build_parser().parse_args([])
+    own = window is None
+    window = window or ui.Window("calibrate-field")
+    out = args.out or str(field_pose_path())
+    saved = guide.saved_field_info(Path(out))
+    camera = guide.remembered("camera", args.camera, 0)
+    field0 = resolve_field(args.field, out)
+    method = ("one" if args.sequential else "four") if args.sequential is not None else (
+        "four" if saved["mode"] == "four_tags" else "one")
+    tag_size = guide.remembered("tag_size", args.tag_size, saved["tag_size"] or 0.080)
+    if args.origin is not None:
+        origin = "center" if args.origin == ["center"] else "click"
+    elif args.no_origin:
+        origin = "corner"
+    else:
+        origin = "keep" if saved["origin"] is not None else "corner"
+    options = guide.field_options(camera, method, field0.width, field0.height, tag_size,
+                                  origin, saved["origin"] is not None)
+    values = initial_values(options, {
+        "task": "origin" if args.pick_origin else "calibrate", "camera": camera,
+        "method": method, "field_w": field0.width, "field_h": field0.height,
+        "tag_size": tag_size, "origin": origin})
+    peek = ui.CameraPeek(args.width, args.height)
+    try:
+        while True:
+            pressed, values = ui.form(window, guide.FIELD_TITLE, guide.FIELD_INTRO, options,
+                                      values, buttons=(("start", "Start"),
+                                                       ("back", "Quit" if own else "Back")),
+                                      preview=peek.preview)
+            if pressed == "back":
+                return False
+            args.camera = int(values["camera"])
+            guide.save_choices({"camera": args.camera})
+            cap = peek.take(args.camera)
+            if values["task"] == "origin":
+                try:
+                    if _guided_move_origin(window, args, values, out, cap):
+                        return True
+                except ui.Cancelled:
+                    pass
+                except (SystemExit, RuntimeError) as e:
+                    ui.message(window, "The camera didn't open", [str(e.code if isinstance(
+                        e, SystemExit) else e)], kind="bad")
+                continue
+
+            args.sequential = values["method"] == "one"
+            args.tag_size = values["tag_size"]
+            guide.save_choices({"tag_size": args.tag_size})
+            field = Field(values["field_w"], values["field_h"])
+            layout = parse_layout(args.layout) if args.layout else default_field_layout(field)
+            try:
+                cap, read_bgr, K, dist, lens_note = _open_live(args, cap)
+            except ui.Cancelled:
+                raise
+            except (SystemExit, RuntimeError) as e:
+                ui.message(window, "The camera didn't open", [str(e.code if isinstance(
+                    e, SystemExit) else e), "Pick another camera and try again."], kind="bad")
+                continue
+            try:
+                if not lens_note.split(", ", 1)[1].startswith("charuco"):
+                    go = ui.message(
+                        window, "The lens isn't calibrated", [
+                            f"There is no lens calibration for this camera at "
+                            f"{lens_note.split(',')[0]}. Positions can be off by a lot.",
+                            "Do step 1 (Camera lens) first, unless this is just a quick test."],
+                        kind="warn", buttons=(("back", "Go back"), ("anyway", "Continue anyway")))
+                    if go == "back":
+                        continue
+                if args.sequential:
+                    averaged = capture_sequential_corners(read_bgr, layout,
+                                                          args.frames_per_corner,
+                                                          window=window, field=field)
+                    result = solve_sequential(averaged, layout, K, dist, tag_size=args.tag_size)
+                else:
+                    frames = capture_reference_frames(read_bgr, layout, args.min_frames,
+                                                      MAX_LIVE_FRAMES, window=window, field=field)
+                    result = calibrate_field(frames, layout, K, dist,
+                                             min_frames=args.min_frames, tag_size=args.tag_size)
+                result.transform.source += f" ({lens_note})"
+                v = guide.field_verdict(field_metrics(result, args, field, layout))
+                print(f"\n{result.transform.source}\n{v.headline}")
+                choice = ui.message(window, "Field result", v.lines, kind=v.kind,
+                                    headline=v.headline,
+                                    buttons=(("save", "Save"), ("again", "Try again"),
+                                             ("discard", "Don't save")))
+                if choice == "again":
+                    continue
+                if choice == "discard":
+                    return False
+                origin = _guided_origin(values["origin"], field, out, lambda: pick_origin(
+                    read_bgr, result.transform, field, K, dist,
+                    initial=saved_origin(out), window=window))
+                result.transform = result.transform.with_origin(origin)
+                _save(result, args, field, layout, out)
+                ui.message(window, "Saved", [f"Saved to {out}.", guide.FIELD_NEXT], kind="ok",
+                           headline="Field calibration saved.")
+                return True
+            except ui.Cancelled:
+                continue
+            except (RuntimeError, LookupError, cv2.error) as e:
+                ui.message(window, "That didn't work", [str(e), "Try again."], kind="bad")
+                continue
+            finally:
+                cap.release()
+    finally:
+        peek.release()
+        if own:
+            window.close()
+
+
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument(
         "--synthetic", action="store_true",
         help="self-test against a digital field, no hardware needed",
     )
+    ap.add_argument("--no-setup", action="store_true",
+                    help="skip the on-screen choices and use the flags as given")
     ap.add_argument(
-        "--sequential", action="store_true",
+        "--sequential", action="store_true", default=None,
         help="one tag, moved to each corner in turn (camera fixed) instead of "
              "all reference tags visible at once -- e.g. a robot carrying a "
              "single AprilTag, driven to each corner",
@@ -759,8 +962,11 @@ def main() -> None:
         "--pick-origin", action="store_true",
         help="don't recalibrate: load the saved pose and only (re)pick the origin",
     )
-    ap.add_argument("--tag-size", type=float, default=0.080)
-    ap.add_argument("--camera", type=int, default=0)
+    ap.add_argument("--tag-size", type=float, default=None,
+                    help="black-square size of the corner tag(s), metres (default: the "
+                         "size used last time, else 0.08)")
+    ap.add_argument("--camera", type=int, default=None,
+                    help="camera index (default: the one chosen last time, else 0)")
     ap.add_argument("--width", type=int, default=1280)
     ap.add_argument("--height", type=int, default=720)
     ap.add_argument("--min-frames", type=int, default=MIN_FRAMES)
@@ -773,18 +979,32 @@ def main() -> None:
         help="where to save (default robocup_testing/calib/field_pose.json; "
         "--synthetic saves nowhere unless you pass this)",
     )
-    args = ap.parse_args()
+    return ap
 
+
+def main() -> None:
+    ap = build_parser()
+    args = ap.parse_args()
+    if args.origin is not None and not (
+        args.origin == ["center"] or len(args.origin) == 2
+    ):
+        ap.error("--origin takes X Y (metres) or 'center'")
+
+    if not args.synthetic and not args.no_setup:
+        guided(args=args)
+        return
+
+    args.sequential = bool(args.sequential)
+    if args.tag_size is None:
+        args.tag_size = 0.080 if args.synthetic else guide.remembered(
+            "tag_size", None, guide.saved_field_info()["tag_size"] or 0.080)
+    args.camera = guide.remembered("camera", args.camera, 0)
     # A re-run (or --pick-origin) defaults to the size already saved, so the
     # field never silently snaps back to 1.2 x 0.8.
     # --synthetic without --out saves nothing, so it has no file to default from.
     field = resolve_field(args.field, None if (args.synthetic and not args.out)
                           else (args.out or field_pose_path()))
     layout = parse_layout(args.layout) if args.layout else default_field_layout(field)
-    if args.origin is not None and not (
-        args.origin == ["center"] or len(args.origin) == 2
-    ):
-        ap.error("--origin takes X Y (metres) or 'center'")
 
     if args.pick_origin:
         _run_pick_origin(args, field)
@@ -802,11 +1022,7 @@ def main() -> None:
         )
 
     if out:
-        Path(out).parent.mkdir(parents=True, exist_ok=True)
-        # The size travels with the pose: every tracker reads it from here.
-        result.transform.field_size = (field.width, field.height)
-        result.transform.save(out)
-        print(f"\nsaved {out}")
+        _save(result, args, field, layout, out)
     else:
         print("\n(--synthetic run, nothing saved -- pass --out to save anyway)")
 

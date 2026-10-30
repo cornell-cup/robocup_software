@@ -208,6 +208,7 @@ just supplies the CLI.
 uv run calibrate-camera --synthetic          # try it first: a digital board, no camera or board needed
 uv run calibrate-camera --save-board-png board.png   # print this
 uv run calibrate-camera                      # then: live camera, wave the printed board around
+                                             # (or `uv run calibrate` for all three steps, on screen)
 ```
 
 Move the board through a range of distances and tilts, and into the corners of

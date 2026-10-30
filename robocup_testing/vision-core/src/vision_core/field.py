@@ -319,6 +319,10 @@ class ReferenceTagFieldTransform(CameraFieldTransform):
     #: (width, height) in metres of the field this pose was solved for, or None
     #: for a file saved before the size was recorded.
     field_size: tuple[float, float] | None = None
+    #: How good the solve was, as calibrate-field measured it (mode, reprojection
+    #: error or frame spread, tag size, layout, when), or None for an older file.
+    #: Saved alongside R/t so the quality of a calibration travels with it.
+    metrics: dict | None = None
 
     def with_origin(self, origin: tuple[float, float] | None) -> ReferenceTagFieldTransform:
         """This pose re-expressed so `origin` (corner coords) reads (0, 0).
@@ -333,6 +337,7 @@ class ReferenceTagFieldTransform(CameraFieldTransform):
         out = type(self)(self.R, t, self.source)
         out.origin = origin
         out.field_size = self.field_size
+        out.metrics = self.metrics
         return out
 
     @classmethod
@@ -410,6 +415,8 @@ class ReferenceTagFieldTransform(CameraFieldTransform):
             d["field"] = {"width": self.field_size[0], "height": self.field_size[1]}
         if self.origin is not None:
             d["origin"] = list(self.origin)
+        if self.metrics is not None:
+            d["metrics"] = self.metrics
         Path(path).write_text(json.dumps(d, indent=2))
 
     @classmethod
@@ -419,6 +426,7 @@ class ReferenceTagFieldTransform(CameraFieldTransform):
         d = json.loads(Path(path).read_text())
         t = cls(np.array(d["R"]), np.array(d["t"]), d.get("source", str(path)))
         t.field_size = saved_field_size(path)
+        t.metrics = d.get("metrics")
         if use_origin and d.get("origin") is not None:
             t = t.with_origin(tuple(d["origin"]))
         return t

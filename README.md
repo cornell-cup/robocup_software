@@ -223,9 +223,11 @@ All commands are `uv run <command>`; add `--help` to any for its full flag list.
 | `selfcheck` | Proves the field math is correct | none |
 | `track --synthetic-camera` | Whole tag pipeline on a fake field | none |
 | `serve-tag` | Shows a sized AprilTag on your phone (`--field-sheet out.png` prints all 4 corner tags) | phone |
+| `calibrate` | **Start here for calibration.** A menu of the three steps (lens, field, check) showing which are done and how well, with the next one highlighted; every choice is made on screen | webcam |
 | `calibrate-camera` | Measures the lens from a waved ChArUco board → `calib/intrinsics.json` (`--save-board-png` to print the board, `--synthetic` to test) | webcam |
 | `calibrate-field --field W H` | Locates the field from 4 corner tags → `calib/field_pose.json`, saves the field size | webcam |
 | `calibrate-ball --profile NAME --radius-mm R` | Samples the ball's color → `calib/ball_color.json` (required before ball tracking) | webcam |
+| `verify-calibration --tag-size M` | Checks the calibration against 9 tape-measured points (corners, edge midpoints, centre) and reports the error in mm → `calib/verification/report.md` (`--synthetic` to test, `--synthetic-error shift\|scale` to see it catch a bad one) | webcam |
 | `track` | Track AprilTags (`--calibrate-live` calibrates lens + field first) | webcam |
 | `track-ball --ball-profile NAME` | Track the ball | webcam |
 | `track-combined --ball-profile NAME` | Tags and ball from one camera, and publish them | webcam |
@@ -285,6 +287,52 @@ status, fps and latency. Add `--json-log runs/myrun.jsonl` to the tracker to
 record the session. See the
 [Vision Mirror section](robocup/python/README.md#vision-mirror) for details and
 troubleshooting.
+
+**Calibrate, step by step, on screen:**
+
+```bash
+uv run calibrate
+```
+
+A menu of the three steps — camera lens, find the field, check the accuracy —
+with the one to do next highlighted. Each step starts with a screen where you
+pick the camera (with its live picture beside it) and type what you measured
+with a ruler, then shows plain instructions, a map and a progress bar under
+the live picture, and ends on a verdict with *Save* / *Try again*. The camera
+number and tag size are remembered for next time (in
+`calib/last_choices.json`, not committed). Each step also runs on its own
+(`uv run calibrate-camera`, `calibrate-field`, `verify-calibration`), and
+`--no-setup` skips the choices screen to run from the flags alone.
+
+**Check (and prove) calibration accuracy:**
+
+Mark 9 points on the field with a tape measure: the 4 corners, the 4 edge
+midpoints and the centre, measured from `(0,0)` — the screen shows them on a
+map before starting. Then step 3 of `uv run calibrate`, or:
+
+```bash
+uv run verify-calibration --no-setup --camera 2 --tag-size 0.127
+```
+
+The window walks through the points: put the tag's centre on each mark with its
+edges square to the field's edges (any side up), let go, press Enter once it has
+measured. It reads each point
+back through the same pipeline `track-combined` uses and compares it to the
+tape measure:
+
+| Result | Pass | Warn | Fail |
+| --- | --- | --- | --- |
+| Position error, RMS | < 10 mm | 10–20 mm | > 20 mm |
+| Position error, worst point | < 20 mm | 20–40 mm | > 40 mm |
+| Heading error, worst point | < 2° | 2–5° | > 5° |
+
+It also says what the error pattern points at (a shifted field, a wrong
+`--field` measurement, a weak lens calibration, one misplaced corner). Everything
+lands in `robocup_testing/calib/verification/`: `report.md` (verdict, plot, every
+number, and the lens/field calibration metrics it checked), `plot.png`,
+`latest.json`, and `history.jsonl` with one line per run. `calibrate-camera`
+and `calibrate-field` now also save their own quality numbers (reprojection
+error, views, frame coverage, date) under `"metrics"` in their calibration files.
 
 ## Status and caveats
 
