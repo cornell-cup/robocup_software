@@ -44,6 +44,9 @@ SETUP_CHECKS = [
     ("active VisionModules", "Started 0 active VisionModules",
      "no camera is enabled: in its UI, open Cameras and activate the camera"),
 ]
+#: Later lines that settle one of those checks: activating a camera in its UI
+#: logs only the request, never a fresh "active VisionModules" count.
+SETUP_SETTLED_BY = {"/api/utils/activateMatchedCamera": "active VisionModules"}
 
 
 def default_dir() -> Path:
@@ -170,6 +173,9 @@ class PhotonVisionProcess(ManagedProcess):
                 self._failure = why
         for key, _bad, _hint in SETUP_CHECKS:
             if key in line:
+                self._setup_lines[key] = line
+        for needle, key in SETUP_SETTLED_BY.items():
+            if needle in line:
                 self._setup_lines[key] = line
 
     def stop(self, timeout: float = 10.0) -> None:
