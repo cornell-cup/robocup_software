@@ -28,7 +28,9 @@ Keys:
 
 With --no-window there is no window and no keys: nothing is drawn at all, and
 Ctrl+C quits. That is the mode for when the only reader is another program
-(--zmq-pub, --serve-http, --json-out, --json-log).
+(--zmq-pub, --serve-http, --json-out, --json-log). --control takes the same keys
+as lines on stdin instead, for a program driving a headless tracker that it
+shows through --mjpeg (the web app's Tracking page).
 """
 
 from __future__ import annotations
@@ -38,7 +40,9 @@ import http.server
 import json
 import os
 import socket
+import queue
 import socketserver
+import sys
 import threading
 import time
 from collections import defaultdict, deque
@@ -516,6 +520,41 @@ def build_transform(args, field: Field, mode: str) -> CameraFieldTransform:
     return SyntheticFieldTransform.wall(field, args.distance, args.yaw, args.pitch_wall)
 
 
+class StdinKeys:
+    """--control: the window's keys, one per line on stdin -- g, t, m, w, r,
+    q, - or = -- plus "conc N" to set the minimum ball concentration outright.
+    Read on a thread of its own, so a quiet stdin never stalls a frame."""
+
+    #: next()'s key for "conc N".
+    SET_CONC = 0x100
+
+    def __init__(self) -> None:
+        self._lines: queue.SimpleQueue[str] = queue.SimpleQueue()
+        threading.Thread(target=self._read, daemon=True, name="stdin-keys").start()
+
+    def _read(self) -> None:
+        for line in sys.stdin:
+            if line.strip():
+                self._lines.put(line.strip())
+
+    def next(self) -> tuple[int, float | None]:
+        """(key code, value) for the oldest waiting line; (-1, None) if none."""
+        try:
+            line = self._lines.get_nowait()
+        except queue.Empty:
+            return -1, None
+        if len(line) == 1:
+            return ord(line), None
+        word, _, value = line.partition(" ")
+        if word == "conc":
+            try:
+                return self.SET_CONC, float(value)
+            except ValueError:
+                pass
+        print(f"--control: ignoring {line!r}")
+        return -1, None
+
+
 def _new_ball_tracker(args, color, transform, K, field) -> BallTracker:
     """A BallTracker for the *already undistorted* frame this tool hands it.
 
@@ -648,6 +687,12 @@ def main() -> None:
                          "http://<host>:PORT/stream.mjpg (the web app's Tracking page "
                          "uses this). Works with --no-window: it still draws, just "
                          "not on screen. Off by default")
+    ap.add_argument("--control", action="store_true",
+                    help="take the keys as lines on stdin too (g, t, m, w, r, q, - or =, "
+                         "or 'conc N'), for a program driving a --no-window tracker it "
+                         "shows through --mjpeg. Keys change only what is drawn, so "
+                         "without a window or --mjpeg only r, q and the ball "
+                         "concentration do anything")
     add_photon_args(ap, stream_optional=False)
     args = ap.parse_args()
     if args.zmq_pub:
@@ -742,6 +787,7 @@ def main() -> None:
         if video is not None:
             print(f"serving the tracking view at http://localhost:{args.mjpeg}/stream.mjpg")
         last_video = 0.0
+        control = StdinKeys() if args.control else None
 
         win = "combined tracking"
         if headless:
@@ -845,6 +891,9 @@ def main() -> None:
                         "photon_latency_ms": tag_latency_ms,
                         "photon_skipped": tag_skipped,
                         "ball_dropouts": ball_dropouts,
+                        # what the keys have set, for a --control driver to show
+                        "view": {"grid": show_grid, "trails": show_trails, "mask": show_mask,
+                                 "mode": mode, "ball_min_conc": args.ball_min_conc},
                     }
                     doc = build_state_doc(field, tag_states, ball_state, seq=seq,
                                           run_id=run_id, frame=frame_no,
@@ -868,7 +917,7 @@ def main() -> None:
 
                 # Drawing only after publishing: none of it feeds the doc, and
                 # every millisecond spent on overlays first is latency_ms.
-                if headless and video is None:
+                if headless and video is None and control is None:
                     continue
                 draw_field(frame, field, transform, K, show_grid)
                 for d, pose in zip(dets, tag_poses):
@@ -894,11 +943,13 @@ def main() -> None:
                 if video is not None and t_perf - last_video >= 1.0 / VIDEO_FPS:
                     video.publish(composite)
                     last_video = t_perf
-                if headless:
-                    continue
-                cv2.imshow(win, composite)
-
-                key = read_key()
+                key = -1
+                if not headless:
+                    cv2.imshow(win, composite)
+                    key = read_key()
+                value = None
+                if key == -1 and control is not None:
+                    key, value = control.next()
                 if key in (ord("q"), 27):
                     break
                 elif key == ord("g"):
@@ -933,6 +984,10 @@ def main() -> None:
                 elif key in (ord("-"), ord("=")):
                     step = -5.0 if key == ord("-") else 5.0
                     args.ball_min_conc = float(np.clip(args.ball_min_conc + step, 0.0, 255.0))
+                    ball_tracker.detector.min_concentration = args.ball_min_conc
+                    print(f"min ball concentration {args.ball_min_conc:.0f}")
+                elif key == StdinKeys.SET_CONC and value is not None:
+                    args.ball_min_conc = float(np.clip(value, 0.0, 255.0))
                     ball_tracker.detector.min_concentration = args.ball_min_conc
                     print(f"min ball concentration {args.ball_min_conc:.0f}")
         except KeyboardInterrupt:
