@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from .procs import CommandError, ManagedProcess
+from .pv_install import Installer, local_java, photonlibpy_version
 from .sim import REPO
 
 UI_PORT = 5800
@@ -70,22 +71,28 @@ class PhotonVisionProcess(ManagedProcess):
         self._failure: str | None = None
         self._setup_lines: dict[str, str] = {}
         self._up_cache = (0.0, False)
+        self.installer = Installer()
 
     # -- finding it ---------------------------------------------------------
 
     def _jar(self) -> Path | None:
+        """The jar matching photonlibpy's version if there is one, else the newest."""
         jars = sorted(self.folder.glob("photonvision-*.jar"), key=lambda p: p.stat().st_mtime)
         if os.name == "nt":
             jars = [j for j in jars if "win" in j.name] or jars
+        try:
+            wanted = photonlibpy_version()
+            jars = [j for j in jars if _version(j) == wanted] or jars
+        except CommandError:
+            pass
         return jars[-1] if jars else None
 
     def _java(self) -> Path | None:
         """A Java inside the PhotonVision folder first (the one known to work
         with it), else whatever `java` is on PATH."""
-        exe = "java.exe" if os.name == "nt" else "java"
-        local = sorted(self.folder.glob(f"*/bin/{exe}"))
+        local = local_java(self.folder)
         if local:
-            return local[-1]
+            return local
         found = shutil.which("java")
         return Path(found) if found else None
 
@@ -127,6 +134,9 @@ class PhotonVisionProcess(ManagedProcess):
             "failure": self._failure,
             "setup_hints": [hint for key, bad, hint in SETUP_CHECKS
                             if bad in self._setup_lines.get(key, "")],
+            # Download offered when the right jar or a Java of its own is missing.
+            "needs_download": not (version and lib and version == lib and local_java(self.folder)),
+            "install": self.installer.status(),
             "ui": f"http://localhost:{UI_PORT}",
         }
 
@@ -147,6 +157,12 @@ class PhotonVisionProcess(ManagedProcess):
         self._setup_lines = {}
         # Started from its own folder: its settings live in photonvision_config there.
         self.launch([str(java), "-jar", jar.name], self.folder)
+
+    def install(self) -> None:
+        """Download the missing pieces into the folder, in the background."""
+        if self.running:
+            raise CommandError("stop PhotonVision before downloading it again")
+        self.installer.start(self.folder)
 
     def on_line(self, line: str) -> None:
         for needle, why in KNOWN_FAILURES.items():

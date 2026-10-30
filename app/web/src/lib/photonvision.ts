@@ -51,6 +51,7 @@ async function act(path: string) {
 
 export const photonvision = {
   start: () => act("/photonvision/start"),
+  install: () => act("/photonvision/install"),
   stop: () => act("/photonvision/stop"),
 };
 

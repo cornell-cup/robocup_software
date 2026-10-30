@@ -11,6 +11,19 @@ uv run robocup-web --no-browser
 uv run robocup-web --host 0.0.0.0        # reachable from other machines (no login yet!)
 ```
 
+**Getting PhotonVision.** It is too big for git (the jar is over GitHub's 100 MB
+file limit), so the app downloads it: *Download PhotonVision* on the Field
+calibration page, or
+
+```powershell
+uv run setup-photonvision
+```
+
+Either one fetches the PhotonVision jar of the version our photonlibpy needs and a
+Temurin 21 Java to run it (some other Javas, Oracle's JDK 21 among them, ship an
+MSVC runtime too old for it) into the `photonvision` folder next to the repo,
+about 160 MB. Windows and Linux only: PhotonVision publishes no macOS build.
+
 **PhotonVision** can be started from the app instead of a terminal: the
 Field calibration page has a *Start PhotonVision* button (it connects by itself
 once PhotonVision is up), or pass `--with-photonvision`. The app looks for

@@ -185,6 +185,11 @@ def create_app(photonvision_dir: Path | None = None, start_photonvision: bool = 
         state.photon.start()
         return state.photon.status()
 
+    @app.post("/api/v1/photonvision/install")
+    def photon_install() -> dict[str, Any]:
+        state.photon.install()
+        return state.photon.status()
+
     @app.post("/api/v1/photonvision/stop")
     async def photon_stop() -> dict[str, Any]:
         # The calibration page's connection goes first: it would only time out.

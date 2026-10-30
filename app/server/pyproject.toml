@@ -16,6 +16,7 @@ dependencies = [
 
 [project.scripts]
 robocup-web = "robocup_web.app:main"
+setup-photonvision = "robocup_web.pv_install:install_main"
 
 [tool.uv.sources]
 vision-core = { workspace = true }

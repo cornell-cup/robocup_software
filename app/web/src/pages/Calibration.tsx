@@ -28,6 +28,7 @@ export function Calibration() {
   const svg = useRef<SVGSVGElement>(null);
   const pv = usePhotonVision();
   const pvs = pv.status;
+  const installing = pvs?.install.state === "starting" || pvs?.install.state === "working";
 
   // form, remembered between visits
   const [form, setForm] = useSavedState("calib.form", {
@@ -227,19 +228,36 @@ export function Calibration() {
                       <div className="pv-row"><span className="dot warn pulse" /><b>Starting PhotonVision…</b><span className="muted">about 20 s</span></div>
                       <div className="pv-log mono">{pv.log.slice(-4).map((line, i) => <div key={i}>{line}</div>)}</div>
                     </>
+                  ) : installing ? (
+                    <>
+                      <div className="pv-row"><span className="dot warn pulse" /><b>{pvs.install.step ?? "Downloading PhotonVision…"}</b></div>
+                      <div className="progress">
+                        <div className="bar" style={{ width: `${pvs.install.total ? ((pvs.install.got ?? 0) / pvs.install.total) * 100 : 0}%` }} />
+                      </div>
+                    </>
                   ) : pvs.installed ? (
                     <>
                       <div className="pv-row"><span className="dot" /><b>PhotonVision is not running</b></div>
                       <button className="btn primary block" disabled={pv.busy} onClick={() => { setAutoConnect(true); photonvision.start(); }}>Start PhotonVision</button>
                       <small className="dim">{pvs.jar} from {pvs.folder}</small>
+                      {pvs.needs_download && (
+                        <button className="link" disabled={pv.busy} onClick={photonvision.install}>
+                          {pvs.version_mismatch ? `Download PhotonVision ${pvs.photonlibpy}, the version this app needs` : "Download a Java known to work with it"}
+                        </button>
+                      )}
                     </>
                   ) : (
-                    <p className="small muted">
-                      PhotonVision isn't running here, and none was found in <span className="mono">{pvs.folder}</span>
-                      {pvs.jar ? " (no Java to run it with)" : ""}. Put its jar there to start it from this page. If it runs on
-                      another computer, just connect.
-                    </p>
+                    <>
+                      <div className="pv-row"><span className="dot" /><b>PhotonVision isn't installed</b></div>
+                      <button className="btn primary block" disabled={pv.busy} onClick={photonvision.install}>Download PhotonVision</button>
+                      <small className="dim">
+                        About 160 MB: PhotonVision {pvs.photonlibpy} and a Java to run it, into <span className="mono">{pvs.folder}</span>.
+                        If it runs on another computer, just connect.
+                      </small>
+                    </>
                   )}
+                  {pvs.install.state === "error" && <p className="note error">Download failed: {pvs.install.error}</p>}
+                  {pvs.install.state === "done" && !pvs.running && <p className="note">{pvs.install.step}</p>}
                   {pvs.failure && <p className="note error">PhotonVision stopped: {pvs.failure}.</p>}
                 </div>
               )}

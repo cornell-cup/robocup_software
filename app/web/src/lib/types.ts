@@ -168,6 +168,15 @@ export interface PhotonVisionStatus {
   state: "running" | "external" | "starting" | "stopped";
   failure: string | null;
   setup_hints: string[];
+  /** The right jar, or a Java of its own, is missing from the folder. */
+  needs_download: boolean;
+  install: {
+    state: "idle" | "starting" | "working" | "done" | "error";
+    step?: string | null;
+    got?: number | null;
+    total?: number | null;
+    error?: string | null;
+  };
   ui: string;
 }
 
