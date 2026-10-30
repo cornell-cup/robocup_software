@@ -67,7 +67,7 @@ function Header({ route }: { route: string }) {
           (pv.up ? (
             <a className="stat" href={`http://${location.hostname}:5800`} target="_blank" rel="noreferrer" title="Open PhotonVision's own UI">
               <span className="dot ok" />
-              PhotonVision
+              PhotonVision <span className="ext-arrow" aria-hidden="true">↗</span>
             </a>
           ) : (
             <a className="stat" href="#/calibration" title="Start it from Field calibration">

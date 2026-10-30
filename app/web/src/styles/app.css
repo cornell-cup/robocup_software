@@ -394,6 +394,11 @@ table.plain td {
 a.stat:hover {
   color: var(--text);
 }
+/* marks a link that opens another site in a new tab */
+.ext-arrow {
+  margin-left: -3px;
+  font-size: 13px;
+}
 @media (max-width: 760px) {
   .brand .word {
     display: none;
