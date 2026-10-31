@@ -28,8 +28,10 @@ WHEEL_ANGLES_DEG = [300, 60, 180]
 # Checked on the robot 2026-10-26: only Motor L needed flipping.
 WHEEL_SIGNS = [-1, 1, 1]
 
-# How strongly rotation mixes into each wheel relative to translation.
-ROTATION_GAIN = 0.6
+# How strongly rotation mixes into each wheel relative to translation. At 1.0 a
+# full turn drives every wheel at full effort, as full strafe does Motor 4; 0.6
+# turned at 0.24 effort on the slow speed, where these motors barely move.
+ROTATION_GAIN = 1.0
 
 WHEEL_ANGLES = [math.radians(angle) for angle in WHEEL_ANGLES_DEG]
 
