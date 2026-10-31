@@ -32,6 +32,7 @@ from .ball import VIEWS, BallCalibration
 from .calib import FieldCalibration
 from .photonvision import ENV_DIR, PhotonVisionProcess
 from .procs import CommandError
+from .robots import RealRobots
 from .sim import SimBridge, SimProcess
 from .tracking import (
     VIDEO_PORT,
@@ -48,6 +49,8 @@ DEFAULT_PORT = 5801  # next to PhotonVision's UI on 5800
 CALIB_STREAM_FPS = 15
 #: Tracker output to the Tracking page's field: about the tracker's own rate.
 TRACKING_WS_HZ = 30
+#: Robot link status to the Robots page.
+ROBOTS_WS_HZ = 5
 
 
 def _mjpeg_part(jpeg: bytes) -> bytes:
@@ -67,6 +70,7 @@ class App:
         self.ball = BallCalibration()
         self.tracker = TrackerProcess()
         self.feed = TrackingFeed()
+        self.robots = RealRobots()
 
 
 def create_app(photonvision_dir: Path | None = None, start_photonvision: bool = False) -> FastAPI:
@@ -93,6 +97,7 @@ def create_app(photonvision_dir: Path | None = None, start_photonvision: bool = 
             await asyncio.to_thread(state.calib.disconnect)
             await asyncio.to_thread(state.ball.disconnect)
             await asyncio.to_thread(state.photon.stop)
+            await asyncio.to_thread(state.robots.close)
             state.bridge.close()
             state.feed.close()
 
@@ -177,6 +182,66 @@ def create_app(photonvision_dir: Path | None = None, start_photonvision: bool = 
             sender.cancel()
             state.bridge.clients.discard(q)
             state.bridge.stop_driving(driven)
+
+    # -- real robots --------------------------------------------------------
+
+    @app.get("/api/v1/robots/status")
+    def robots_status() -> dict[str, Any]:
+        return state.robots.status()
+
+    @app.post("/api/v1/robots/add")
+    def robots_add(opts: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
+        state.robots.add(str(opts.get("name", "")))
+        return state.robots.status()
+
+    @app.post("/api/v1/robots/remove")
+    def robots_remove(opts: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
+        state.robots.remove(str(opts.get("name", "")))
+        return state.robots.status()
+
+    @app.post("/api/v1/robots/follow")
+    def robots_follow(opts: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
+        rid = opts.get("sim_robot")
+        try:
+            rid = None if rid is None else int(rid)
+        except (TypeError, ValueError):
+            raise CommandError("sim_robot must be a robot number, or null to drive by hand") from None
+        state.robots.follow(str(opts.get("name", "")), rid)
+        return state.robots.status()
+
+    @app.post("/api/v1/robots/scan")
+    async def robots_scan() -> dict[str, Any]:
+        return {"devices": await asyncio.to_thread(state.robots.scan)}
+
+    @app.websocket("/api/v1/robots/ws")
+    async def robots_ws(ws: WebSocket) -> None:
+        """Robot status out, ROBOTS_WS_HZ times a second; drive commands in
+        ({"type": "drive", "name", "forward", "left", "turn", "dribble"}).
+        A robot driven over this socket is stopped when the socket closes."""
+        await ws.accept()
+        driven: set[str] = set()
+
+        async def send() -> None:
+            while True:
+                await ws.send_text(json.dumps({"type": "status", **state.robots.status()}))
+                await asyncio.sleep(1.0 / ROBOTS_WS_HZ)
+
+        sender = asyncio.create_task(send())
+        try:
+            while True:
+                cmd = json.loads(await ws.receive_text())
+                try:
+                    if cmd.get("type") == "drive":
+                        driven.add(state.robots.drive(cmd))
+                    else:
+                        raise CommandError(f"unknown command type {cmd.get('type')!r}")
+                except CommandError as e:
+                    await ws.send_text(json.dumps({"type": "error", "error": str(e)}))
+        except (WebSocketDisconnect, json.JSONDecodeError):
+            pass
+        finally:
+            sender.cancel()
+            state.robots.stop(driven)
 
     # -- PhotonVision -------------------------------------------------------
 

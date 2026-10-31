@@ -1,0 +1,130 @@
+.robots-head {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.robots-head h1 {
+  margin: 0;
+  font-size: 22px;
+}
+.robot-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px;
+  overflow-y: auto;
+  min-height: 0;
+}
+.robots-empty {
+  max-width: 520px;
+  margin: 48px auto;
+  text-align: center;
+}
+.robots-empty h3 {
+  margin: 0 0 8px;
+}
+.robot-row {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius);
+  background: var(--bg);
+}
+.robot-row.moving {
+  border-color: var(--red-2);
+}
+.robot-row > header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.robot-row h2 {
+  margin: 0;
+  font-size: 18px;
+}
+.robot-row > header .btn {
+  margin-left: auto;
+}
+.sim-chips {
+  display: flex;
+  gap: 6px;
+}
+.sim-chip {
+  flex: 1;
+  height: 34px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line-2);
+  background: transparent;
+  font-weight: 600;
+  cursor: pointer;
+}
+.sim-chip.blue {
+  color: var(--team-blue);
+}
+.sim-chip.red {
+  color: var(--team-red);
+}
+.sim-chip:hover:not(:disabled) {
+  background: var(--panel-2);
+}
+.sim-chip:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.sim-chip.on {
+  background: #262626;
+  border-color: var(--red-2);
+}
+.follow-state,
+.readout {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 15px;
+  white-space: pre;
+}
+.name-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.found {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.found li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.found li .btn {
+  margin-left: auto;
+}
+.robots-page .keys,
+.drive-card .keys {
+  margin: 0;
+  font-size: 14px;
+  color: var(--dim);
+}
+/* the Drive card, on other pages */
+.drive-robot {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+.drive-robot-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}

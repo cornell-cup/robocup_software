@@ -283,3 +283,35 @@ export interface Recording {
   size_kb: number;
   modified: number;
 }
+
+// ── real robots (Robots page) ───────────────────────────────────────────
+
+export interface RealRobot {
+  name: string;
+  /** the Bluetooth link: searching, connecting, connected, retrying */
+  state: string;
+  connected: boolean;
+  error: string | null;
+  /** the newest command is not "stopped" */
+  moving: boolean;
+  command_age_s: number | null;
+  /** the sim robot it follows, or null when driven by hand */
+  follow: number | null;
+  /** following: whether the camera sees it right now (it only moves then) */
+  tracked: boolean | null;
+}
+
+export interface RealRobotsStatus {
+  robots: RealRobot[];
+  /** robot_node is publishing commands for real robots */
+  sim_up: boolean;
+}
+
+export interface RobotDrive {
+  type: "drive";
+  name: string;
+  forward: number;
+  left: number;
+  turn: number;
+  dribble: boolean;
+}

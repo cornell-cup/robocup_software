@@ -1,7 +1,7 @@
 # app: RoboCup Control (`robocup-web`)
 
 The robocup stack in a browser: the simulator (view it, drive robots, start and
-stop it), field calibration from PhotonVision, and ball colour profiles. One server; the pages and
+stop it), the real robots over Bluetooth, field calibration from PhotonVision, and ball colour profiles. One server; the pages and
 any script talk to it through the same API.
 
 ```powershell
@@ -56,6 +56,26 @@ cannot: the field, the simulator, and the ball colour profile.
 
 Run the pygame viewer **or** this page, not both: both send on the manual-command port
 (9093), and only one can own it. The page says so if it can't.
+
+**Robots** drives the real XRP robots over Bluetooth (PestoLink), several at once, with
+the same code as `python -m laptop` ([robot/README.md](../robot/README.md)):
+
+- **Add** a robot by its `ROBOT_NAME` (8 characters at most), or **Scan** for the ones
+  nearby. The server keeps a link to each and reconnects on its own; *Remove* stops and
+  disconnects it. Only one program can hold a robot's link, so quit `python -m laptop`
+  for a robot first.
+- **By hand**: pick what drives it -- the keyboard (`W A S D`, `Q E` turn, `Space`
+  dribbler, `1`–`3` speed) or a gamepad plugged into this computer (left stick moves,
+  right stick turns, A runs the dribbler). Each input drives one robot, so a keyboard and
+  two gamepads drive three robots.
+- **Follow sim**: the robot takes the commands robot_node computes for one sim robot, so
+  strategy, or a click / `W A S D` on the Simulator page, drives the real robot, closed-loop
+  through the camera. Start the sim with **Live camera** and map the robot's tag to that sim
+  robot (*Tag → robot*). It only moves while the camera sees it, and the tag's heading must
+  point at the dribbler (the tracker's *heading offset*).
+
+A robot stops on its own a quarter second after its commands stop: a closed tab, an
+unplugged gamepad, a sim that went away.
 
 **Tracking** runs `track-combined` (headless, publishing on ZMQ port 5556 for the sim):
 tag size, ball profile, *record this session* (to `vision/runs/`, for replaying), and under
@@ -124,6 +144,11 @@ HTTP 400 with `{"error": "..."}`.
 | GET | `/sim/log?after=N` | sim output lines after line N |
 | POST | `/sim/command` | one command, see below |
 | WS | `/sim/ws` | world state pushed ~30×/s; send commands as JSON text |
+| GET | `/robots/status` | `{"robots": [{"name", "state", "connected", "error", "moving", "command_age_s", "follow", "tracked"}], "sim_up"}` |
+| POST | `/robots/add`, `/robots/remove` | `{"name": "XRP-01"}` |
+| POST | `/robots/follow` | `{"name", "sim_robot": 0}` to follow a sim robot, `null` to drive it by hand |
+| POST | `/robots/scan` | `{"devices": [{"name", "rssi"}]}`, the Bluetooth devices nearby |
+| WS | `/robots/ws` | robot status pushed 5×/s; send `{"type": "drive", "name", "forward", "left", "turn", "dribble"}` |
 | GET | `/photonvision/status` | found jar / Java / versions, running, up, failure, setup hints |
 | POST | `/photonvision/start`, `/photonvision/stop` | stop only stops one this app started |
 | GET | `/photonvision/log?after=N` | PhotonVision's output lines after line N |
@@ -160,6 +185,10 @@ Sim commands (`/sim/command` or the socket):
 
 A robot being driven is stopped if its driver goes quiet for 0.4 s (closed tab,
 dropped connection), so keep sending `drive` at ~20 Hz while it should move.
+
+A real robot's `drive` (on `/robots/ws`) is in the robot's own frame: `forward` and `left`
+in -1..1 (front = dribbler), `turn` in -1..1 counter-clockwise. The same rule applies,
+with 0.25 s: keep sending while it should move.
 
 From Python, for example:
 

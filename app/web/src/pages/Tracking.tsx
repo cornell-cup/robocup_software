@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Card } from "../components/Card";
+import { DriveCard } from "../components/DriveCard";
 import { FieldView } from "../components/FieldView";
 import { Segmented } from "../components/Segmented";
 import { Toggle } from "../components/Toggle";
@@ -507,6 +508,8 @@ export function Tracking() {
             )}
           </Card>
         )}
+
+        <DriveCard />
 
         <Card title="Live positions" aside={live ? <span className="muted mono">{live.field.width} × {live.field.height} m</span> : undefined}>
           {live ? (
