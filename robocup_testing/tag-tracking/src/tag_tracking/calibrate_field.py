@@ -780,6 +780,17 @@ def _guided_origin(choice: str, field: Field, out: str, pick) -> tuple[float, fl
     return None
 
 
+def saved_screen(window: ui.Window, headline: str, lines: list[str]) -> None:
+    """The "saved" screen, with a button straight into the accuracy check --
+    the field (or its origin) just changed, so that is the thing to do next.
+    The camera must already be released: the check opens it itself."""
+    if ui.message(window, "Saved", lines, kind="ok", headline=headline,
+                  buttons=(("check", "Check the accuracy now"), ("done", "Done"))) == "check":
+        from .verify import guided as check
+
+        check(window)
+
+
 def _guided_move_origin(window: ui.Window, args, values, out: str, cap) -> bool:
     """Only move (0, 0): load the saved pose, set the origin, save."""
     if not Path(out).exists():
@@ -806,8 +817,7 @@ def _guided_move_origin(window: ui.Window, args, values, out: str, cap) -> bool:
     transform.save(out)
     where = "corner A" if origin is None else f"({origin[0]:g}, {origin[1]:g}) m from corner A"
     print(f"origin: {where}\nsaved {out}")
-    ui.message(window, "Saved", [f"(0,0) is now at {where}.", f"Saved to {out}."], kind="ok",
-               headline="Origin saved.")
+    saved_screen(window, "Origin saved.", [f"(0,0) is now at {where}.", f"Saved to {out}."])
     return True
 
 
@@ -909,8 +919,9 @@ def guided(window: ui.Window | None = None, args=None) -> bool:
                     initial=saved_origin(out), window=window))
                 result.transform = result.transform.with_origin(origin)
                 _save(result, args, field, layout, out)
-                ui.message(window, "Saved", [f"Saved to {out}.", guide.FIELD_NEXT], kind="ok",
-                           headline="Field calibration saved.")
+                cap.release()  # the check opens the camera itself
+                saved_screen(window, "Field calibration saved.",
+                             [f"Saved to {out}.", guide.FIELD_NEXT])
                 return True
             except ui.Cancelled:
                 continue
