@@ -201,11 +201,15 @@ class SimBridge:
             return
         if self._hellos and now >= self._hellos[0]:
             self._hellos.pop(0)
-            self._publish({"human_blue_ids": []})
+            self._publish_humans()
+        stopped = False
         for robot, t in list(self._driving.items()):
             if now - t > DRIVE_TIMEOUT_S:
                 self._publish({"direct": {str(robot): {"vx": 0.0, "vy": 0.0, "w": 0.0}}})
                 del self._driving[robot]
+                stopped = True
+        if stopped:
+            self._publish_humans()
 
     # -- commands from the browser or a script --------------------------------
 
@@ -213,6 +217,11 @@ class SimBridge:
         if self._manual is None:
             raise CommandError(self.manual_error or "manual-command port not open")
         self._manual.send_string(json.dumps(msg))
+
+    def _publish_humans(self) -> None:
+        """Tell strategy_node which robots someone is driving with keys, so it
+        leaves them alone rather than overriding the keys with its targets."""
+        self._publish({"human_blue_ids": sorted(self._driving)})
 
     def _robot(self, cmd: dict[str, Any]) -> int:
         n = self._num_robots()
@@ -238,20 +247,24 @@ class SimBridge:
             if mode is None:
                 raise CommandError(f"mode must be one of {', '.join(MODES)}")
             x, y = _finite(cmd, "x"), _finite(cmd, "y")
-            self._driving.pop(rid, None)
             self._publish({"targets": {str(rid): {"x": x, "y": y, "mode": mode}}})
+            if self._driving.pop(rid, None) is not None:
+                self._publish_humans()
         elif kind == "drive":
             rid = self._robot(cmd)
             vx = max(-1.0, min(1.0, _finite(cmd, "vx")))
             vy = max(-1.0, min(1.0, _finite(cmd, "vy")))
             w = max(-MAX_OMEGA, min(MAX_OMEGA, _finite(cmd, "w")))
+            new = rid not in self._driving
             self._driving[rid] = time.monotonic()
             self._publish({"direct": {str(rid): {"vx": vx, "vy": vy, "w": w}}})
+            if new:
+                self._publish_humans()
         elif kind == "kick":
             self._publish({"kick": {str(self._robot(cmd)): True}})
         elif kind == "strategy":
             on = bool(cmd.get("enabled"))
-            self._publish({"strategy_enabled": on, "human_blue_ids": []})
+            self._publish({"strategy_enabled": on, "human_blue_ids": sorted(self._driving)})
             self.controls["strategy"] = on
         elif kind == "dribble":
             on = bool(cmd.get("enabled"))
@@ -273,9 +286,13 @@ class SimBridge:
             raise CommandError(f"unknown command type {kind!r}")
 
     def stop_driving(self, robots: set[int]) -> None:
+        stopped = False
         for rid in robots:
             if self._driving.pop(rid, None) is not None and self._manual is not None:
                 self._publish({"direct": {str(rid): {"vx": 0.0, "vy": 0.0, "w": 0.0}}})
+                stopped = True
+        if stopped:
+            self._publish_humans()
 
 
 def _finite(cmd: dict[str, Any], key: str) -> float:

@@ -32,6 +32,7 @@ from config import (  # noqa: E402
     ARRIVAL_THRESH,
     COMMAND_PORT,
     DT,
+    FIELD_SCALE,
     KD,
     KP,
     LINEAR_DAMP,
@@ -82,6 +83,10 @@ def _body_command(vx: float, vy: float, w: float) -> tuple[float, float, float]:
     axis instead of per wheel: (forward, left, turn), each -1..1, turn
     counter-clockwise. For a real robot, whose firmware mixes its own wheels
     (robot/firmware/mixing.py).
+
+    Turn uses the 9 x 6 wheel spacing: a sim robot shrinks with a small field
+    (FIELD_SCALE), a real one does not, and the shrunk spacing would leave it
+    almost no turn (0.12 for full Q / E on a 1.9 m table).
     """
     speeds = [
         -math.sin(alpha) * vx + math.cos(alpha) * vy + WHEEL_DISTANCE * w
@@ -93,7 +98,7 @@ def _body_command(vx: float, vy: float, w: float) -> tuple[float, float, float]:
     def clip(v: float) -> float:
         return max(-1.0, min(1.0, v * scale))
 
-    return clip(vx), clip(vy), clip(WHEEL_DISTANCE * w)
+    return clip(vx), clip(vy), clip(WHEEL_DISTANCE / FIELD_SCALE * w)
 
 
 # ── controllers ───────────────────────────────────────────────────────────────

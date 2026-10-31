@@ -4,6 +4,7 @@ import { FieldView } from "../components/FieldView";
 import { Segmented } from "../components/Segmented";
 import { Toggle } from "../components/Toggle";
 import { api } from "../lib/api";
+import { useRobots } from "../lib/robots";
 import { sendSim, useSim } from "../lib/sim";
 import { usePolling } from "../lib/store";
 import { toasts } from "../lib/toast";
@@ -18,6 +19,7 @@ const MODE_COLORS: Record<Mode, string> = { pd: "#00ff80", time: "#dc50ff", mpc:
 
 export function Simulator() {
   const sim = useSim();
+  const { robots: realRobots } = useRobots();
   const { world, controls } = sim;
   const field = world?.field;
   const game = world?.game;
@@ -451,6 +453,17 @@ export function Simulator() {
               value={mode}
               onChange={setMode}
             />
+            {world?.robots?.[String(robot)]?.source === "vision" && (() => {
+              const follower = realRobots.find((r) => r.follow === robot);
+              return (
+                <p className="note">
+                  Robot {robot} is the camera's, so the sim won't move it. {follower
+                    ? <>Keys and clicks drive <b>{follower.name}</b>, which follows it{follower.tracked ? "" : ", once the camera sees it"}.</>
+                    : <>Keys and clicks move it only through a real robot set to <i>Follow sim</i> → {robot} on the <a href="#/robots">Robots</a> page.</>}
+                  {" "}In Keys, W moves it up the field, whichever way it faces.
+                </p>
+              );
+            })()}
             <button className="btn block" disabled={!sim.up} onClick={kick} title="Key K or Enter">Kick</button>
             <p className="keys">Keys: 1–4 controller, 5 strategy, 0 dribble, 9 ball reset, R RL kick, K kick.</p>
           </div>

@@ -84,7 +84,11 @@ rest.
   `--ignore-tags`, `--tag-map`, `--flip-x/y`. A sim started in a terminal with `--no-viz`
   shows up too.
 - Click the field to send the selected robot there (PD / time-optimal / MPC), or switch to
-  **Keys** and drive it with `W A S D`, `Q E` to rotate.
+  **Keys** and drive it with `W A S D`, `Q E` to rotate. Keys move it in field directions
+  (W = up the field), whichever way it faces, and while you drive a blue robot with keys
+  the strategy leaves it alone. A robot the camera owns doesn't move in the sim: keys and
+  clicks reach it only through a real robot set to *Follow sim* on the Robots page, and the
+  Drive card says so.
 - Strategy, dribble, ball-stuck reset and RL kick toggles; kick; score, clock, goals.
 - The same keys as the pygame window: `1`–`4` controller, `5` strategy, `0` dribble,
   `9` ball reset, `R` RL kick, `K` / `Enter` kick.
