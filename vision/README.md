@@ -147,6 +147,7 @@ ball steps in a browser.
 | `uv run calibrate-field` | Measures the field position: point PhotonVision's camera at your 4 tags | `calib/field_pose.json` |
 | `uv run calibrate-field --sequential` | Same, but one tag moved to each corner in turn (camera fixed) instead of 4 at once | `calib/field_pose.json` |
 | `uv run calibrate-field --pick-origin` | Re-pick where `(0,0)` is (click it on the live view) without recalibrating | `calib/field_pose.json` |
+| `uv run verify-calibration --tag-size M` | Checks the saved calibration against 9 tape-measured spots and reports the error in mm (also on the web app's Calibration page; `--synthetic` to test, `--synthetic-error shift\|scale` to see it catch a bad one) | `calib/verification/` |
 | `uv run track --calibrate-live` | Field in one session, then starts tracking. Add `--sequential` for one tag | `calib/field_pose.json` |
 | `uv run calibrate-ball` | Measures the ball's color: drag a box over it (local webcam) | `calib/ball_color.json` |
 | `uv run calibrate-camera` | Measures a local webcam's lens: wave a printed board at it. Only `track-ball` reads the result; the tag tools use PhotonVision's calibration | `calib/intrinsics.json` |

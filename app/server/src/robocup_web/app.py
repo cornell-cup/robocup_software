@@ -324,6 +324,23 @@ def create_app(photonvision_dir: Path | None = None, start_photonvision: bool = 
         path = state.calib.save()
         return {**state.calib.status(), "saved_to": str(path)}
 
+    @app.post("/api/v1/calib/check/start")
+    def calib_check_start(opts: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
+        state.calib.check_start(opts)
+        return state.calib.status()
+
+    @app.post("/api/v1/calib/check/action")
+    def calib_check_action(opts: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
+        state.calib.check_action(str(opts.get("action")))
+        return state.calib.status()
+
+    @app.get("/api/v1/calib/check/plot.png")
+    def calib_check_plot() -> FileResponse:
+        path = state.calib.check_plot()
+        if path is None:
+            raise CommandError("no accuracy check has been run yet")
+        return FileResponse(path, media_type="image/png", headers={"Cache-Control": "no-store"})
+
     @app.get("/api/v1/calib/stream.mjpg")
     async def calib_stream(request: Request) -> StreamingResponse:
         async def frames():

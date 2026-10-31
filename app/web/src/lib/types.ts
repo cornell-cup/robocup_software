@@ -108,6 +108,43 @@ export interface Detection {
   center: number[];
 }
 
+export type CheckGrade = "PASS" | "WARN" | "FAIL" | "SKIP";
+
+export interface CalibCheck {
+  active: boolean;
+  /** The last finished check, until another starts. */
+  summary: {
+    verdict: "PASS" | "WARN" | "FAIL";
+    values: {
+      pos_rms_mm: number;
+      pos_max_mm: number;
+      heading_max_deg: number;
+      off_plane_median_mm: number;
+      jitter_mm: number;
+      detection_min_pct: number;
+    };
+    worst_point: number[];
+    n_points: number;
+    n_skipped: number;
+    diagnosis: string[];
+    report: string;
+    checked_at: number;
+  } | null;
+  index?: number;
+  total?: number;
+  /** Field coordinates, metres, as the trackers report them. */
+  targets?: number[][];
+  /** The same spots in raw image pixels, for the overlay. */
+  targets_px?: number[][] | null;
+  count?: number;
+  frames?: number;
+  ready?: boolean;
+  message?: string;
+  live_mm?: number | null;
+  placement?: string;
+  results?: { x: number; y: number; skipped: boolean; err_mm: number | null; heading_err_deg: number | null; grade: CheckGrade }[];
+}
+
 export interface CalibStatus {
   state: "disconnected" | "connecting" | "connected" | "error";
   error: string | null;
@@ -163,6 +200,8 @@ export interface CalibStatus {
     x_axis: number[];
     y_axis: number[];
   };
+  /** The accuracy check (verify-calibration): one tag on 9 tape-measured spots. */
+  check?: CalibCheck;
   saved: {
     path: string;
     exists: boolean;

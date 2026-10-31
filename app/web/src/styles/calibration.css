@@ -171,3 +171,55 @@ tr.current td {
 .quality.poor {
   color: var(--error-text);
 }
+
+/* the accuracy check */
+.overlay .target {
+  fill: none;
+  stroke: #ff3df2;
+  stroke-width: 3;
+}
+.overlay .spot {
+  stroke: rgba(0, 0, 0, 0.7);
+  stroke-width: 1.5;
+}
+.overlay .spot.todo {
+  fill: rgba(255, 255, 255, 0.5);
+}
+.overlay .spot.pass {
+  fill: var(--ok);
+}
+.overlay .spot.warn {
+  fill: var(--warn);
+}
+.overlay .spot.fail {
+  fill: var(--red-2);
+}
+.overlay .spot.skip {
+  fill: var(--dim);
+}
+.spots .grade.pass {
+  color: var(--ok);
+}
+.spots .grade.warn {
+  color: var(--warn);
+}
+.spots .grade.fail {
+  color: var(--error-text);
+}
+.spots .grade.skip {
+  color: var(--dim);
+}
+.diagnosis {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 14px;
+  color: var(--muted);
+}
+.diagnosis li + li {
+  margin-top: 6px;
+}
+.check-plot {
+  width: 100%;
+  border-radius: var(--radius-sm);
+  background: white;
+}

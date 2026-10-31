@@ -52,6 +52,7 @@ export function Calibration() {
     tagSize: "", fieldW: "", fieldH: "", minFrames: 10,
     customLayout: false, layoutRows: [] as Row[],
     oneTag: false, perCorner: 30,
+    checkInset: false, checkTagId: "",
   });
   const set = <K extends keyof typeof form>(k: K, v: (typeof form)[K]) => setForm((f) => ({ ...f, [k]: v }));
 
@@ -74,6 +75,8 @@ export function Calibration() {
   const canSolve = !!st && (corners ? cornersDone : !st.setup?.sequential && st.captured >= minNeeded);
   const result = st?.result;
   const step = !connected ? 1 : result ? 3 : 2;
+  const check = st?.check;
+  const checking = !!check?.active;
   const fs = Math.max(size[0], size[1]) / 55; // label size, image px
 
   const wasConnected = useRef(false);
@@ -151,6 +154,31 @@ export function Calibration() {
     return () => window.removeEventListener("keydown", onKey);
   }, [corners?.ready, st?.capturing, !!corners]);
 
+  function startCheck() {
+    const tag = Number(form.tagSize);
+    if (!(tag > 0)) return toasts.push("error", "Enter the tag size first (black square edge, metres).");
+    const id = form.checkTagId.trim();
+    if (id !== "" && !(Number.isInteger(Number(id)) && Number(id) >= 0)) return toasts.push("error", "The tag id is a whole number, or leave it empty.");
+    run("/calib/check/start", { tag_size: tag, inset: form.checkInset ? 0.05 : 0, tag_id: id === "" ? null : Number(id) });
+  }
+
+  const checkAction = (action: "confirm" | "redo" | "skip" | "back" | "stop") =>
+    run("/calib/check/action", { action }, action === "confirm" && check?.index === (check?.total ?? 0) - 1 ? "Check finished: report saved" : undefined);
+
+  // The check: q or Enter confirms a spot, r redoes it, s skips it.
+  useEffect(() => {
+    if (!checking) return;
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement;
+      if (t.tagName === "INPUT" || t.tagName === "SELECT" || t.tagName === "TEXTAREA" || e.ctrlKey || e.metaKey || e.altKey) return;
+      if ((e.key === "q" || e.key === "Enter") && check?.ready) checkAction("confirm");
+      else if (e.key === "r") checkAction("redo");
+      else if (e.key === "s") checkAction("skip");
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [checking, check?.ready, check?.index]);
+
   async function save() {
     const s = await run("/calib/save", {});
     if (s?.saved_to) toasts.push("ok", `Saved to ${s.saved_to}\nTrackers pick it up the next time they start.`, 7000);
@@ -208,7 +236,11 @@ export function Calibration() {
               {st?.state === "connecting" ? "Connecting to PhotonVision…" : st?.state === "error" ? "Connection failed" : "Not connected"}
             </span>
           )}
-          {result && connected && <span className="head-hint">Click the picture to place the origin</span>}
+          {checking ? (
+            <span className="head-hint">Spot {(check?.index ?? 0) + 1} of {check?.total}: put the tag on the pink cross</span>
+          ) : (
+            result && connected && <span className="head-hint">Click the picture to place the origin</span>
+          )}
         </div>
 
         <div className={`picture${result && connected ? " pickable" : ""}`}>
@@ -234,6 +266,23 @@ export function Calibration() {
                     <text x={c[0]} y={c[1]} dx={fs * 0.45} fontSize={fs} className="det-label">{i + 1}</text>
                   </g>
                 ))}
+                {checking && check?.targets_px?.map((p, i) => {
+                  const r = check.results?.[i];
+                  if (i === check.index)
+                    return (
+                      <g key={`t${i}`} className="target">
+                        <circle cx={p[0]} cy={p[1]} r={fs * 0.9} />
+                        <line x1={p[0] - fs * 1.3} y1={p[1]} x2={p[0] + fs * 1.3} y2={p[1]} />
+                        <line x1={p[0]} y1={p[1] - fs * 1.3} x2={p[0]} y2={p[1] + fs * 1.3} />
+                      </g>
+                    );
+                  return (
+                    <g key={`t${i}`}>
+                      <circle cx={p[0]} cy={p[1]} r={fs * 0.32} className={`spot ${r ? r.grade.toLowerCase() : "todo"}`} />
+                      <text x={p[0]} y={p[1]} dx={fs * 0.55} fontSize={fs * 0.8} className="det-label">{i + 1}</text>
+                    </g>
+                  );
+                })}
                 {(st?.detections ?? []).map((d) => (
                   <g key={d.id}>
                     <polygon points={pts(d.corners)} className={`det${corners || isRef(d.id) ? " ref" : ""}`} />
@@ -511,6 +560,111 @@ export function Calibration() {
               )}
             </div>
           )}
+        </Card>
+
+        <Card title="Check the accuracy" step={4} active={checking} done={!!check?.summary && !checking}>
+          <div className="stack">
+            {!checking && (
+              <>
+                <p className="muted small">
+                  Tests the <b>saved</b> calibration with a tape measure. Mark 9 spots with tape, measured from (0, 0): the 4 corners, the middle of each edge and the centre. Then put one tag on each in turn and it says how far off each one reads, in mm.
+                </p>
+                <div className="row">
+                  <label className="field">
+                    <span>Tag size (m)</span>
+                    <input className="input mono" type="number" step="0.001" min="0.001" placeholder="e.g. 0.127" value={form.tagSize} onChange={(e) => set("tagSize", e.target.value)} />
+                  </label>
+                  <label className="field">
+                    <span>Tag id</span>
+                    <input className="input mono" type="number" min="0" placeholder="any" value={form.checkTagId} onChange={(e) => set("checkTagId", e.target.value)} />
+                  </label>
+                </div>
+                <small className="dim">Tag id: leave empty if only one tag will be in view.</small>
+                <div>
+                  <Toggle label="Edge marks 5 cm inside the edges" checked={form.checkInset} onChange={(on) => set("checkInset", on)} />
+                  <small className="dim">For when a wall stops the tag sitting centred on the field's edge.</small>
+                </div>
+                <button className="btn primary block" disabled={busy || !connected || !st?.saved.exists || !!st?.capturing} onClick={startCheck}>
+                  {check?.summary ? "Check again" : "Start the check"}
+                </button>
+                {!connected && <small className="dim">Connect to PhotonVision first (step 1).</small>}
+                {connected && !st?.saved.exists && <p className="note">Save a field calibration first: the check tests the saved one.</p>}
+              </>
+            )}
+
+            {check?.targets && (
+              <table className="plain spots">
+                <thead><tr><th>#</th><th>x (m)</th><th>y (m)</th><th>Off by</th></tr></thead>
+                <tbody>
+                  {check.targets.map((t, i) => {
+                    const r = check.results?.[i];
+                    return (
+                      <tr key={i} className={checking && i === check.index ? "current" : undefined}>
+                        <td className="mono">{i + 1}</td>
+                        <td className="mono">{t[0].toFixed(3)}</td>
+                        <td className="mono">{t[1].toFixed(3)}</td>
+                        <td className={`mono grade ${r ? r.grade.toLowerCase() : ""}`}>
+                          {r ? (r.skipped ? "skipped" : `${r.err_mm?.toFixed(0)} mm`) : checking && i === check.index ? "now" : ""}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+
+            {checking && check && check.targets && (
+              <>
+                <div className="corner-now">
+                  Spot <b>{(check.index ?? 0) + 1}/{check.total}</b>: put the tag's centre on
+                  <b className="mono"> ({check.targets[check.index ?? 0][0].toFixed(3)}, {check.targets[check.index ?? 0][1].toFixed(3)})</b>, {check.placement}, then let go.
+                </div>
+                <div className="progress">
+                  <div className="bar" style={{ width: `${Math.min(100, ((check.count ?? 0) / (check.frames ?? 1)) * 100)}%` }} />
+                </div>
+                <div className="progress-text">
+                  <span className="mono">{check.count}/{check.frames}</span>
+                  <span className={check.ready ? "" : "muted"}>
+                    {check.message}
+                    {check.live_mm != null && ` (${check.live_mm.toFixed(0)} mm off)`}
+                  </span>
+                </div>
+                <button className={`btn block${check.ready ? " primary" : ""}`} disabled={busy || !check.ready} onClick={() => checkAction("confirm")}>
+                  Confirm spot {(check.index ?? 0) + 1} <kbd>q</kbd>
+                </button>
+                <div className="row">
+                  <button className="btn sm" disabled={busy} onClick={() => checkAction("redo")}>Redo <kbd>r</kbd></button>
+                  <button className="btn sm" disabled={busy} onClick={() => checkAction("skip")}>Skip <kbd>s</kbd></button>
+                  <button className="btn sm" disabled={busy || check.index === 0} onClick={() => checkAction("back")}>Back a spot</button>
+                </div>
+                <button className="btn sm ghost" disabled={busy} onClick={() => checkAction("stop")}>Stop the check</button>
+              </>
+            )}
+
+            {check?.summary && !checking && (
+              <>
+                <div className={`quality ${check.summary.verdict === "PASS" ? "good" : check.summary.verdict === "WARN" ? "fair" : "poor"}`}>
+                  <span className={`dot ${check.summary.verdict === "PASS" ? "ok" : check.summary.verdict === "WARN" ? "warn" : "red"}`} />
+                  {check.summary.verdict === "PASS"
+                    ? "PASS: positions come out right."
+                    : check.summary.verdict === "WARN"
+                      ? "WARN: usable, but could be better."
+                      : "FAIL: positions are too far off. Recalibrate."}
+                </div>
+                <dl className="kv">
+                  <dt>Average error</dt><dd>{check.summary.values.pos_rms_mm.toFixed(1)} mm <span className="dim">(under 10 is good)</span></dd>
+                  <dt>Worst spot</dt><dd>{check.summary.values.pos_max_mm.toFixed(1)} mm <span className="dim">(under 20)</span></dd>
+                  <dt>Heading, worst</dt><dd>{check.summary.values.heading_max_deg.toFixed(1)}° <span className="dim">(under 2)</span></dd>
+                  {check.summary.n_skipped > 0 && <><dt>Skipped</dt><dd>{check.summary.n_skipped} spot(s)</dd></>}
+                </dl>
+                {check.summary.diagnosis.length > 0 && (
+                  <ul className="diagnosis">{check.summary.diagnosis.map((d) => <li key={d}>{d}</li>)}</ul>
+                )}
+                <img className="check-plot" src={`/api/v1/calib/check/plot.png?t=${check.summary.checked_at}`} alt="Error at each spot" />
+                <p className="src">Report: {check.summary.report}</p>
+              </>
+            )}
+          </div>
         </Card>
 
         <Card title="Saved calibration" aside={st?.saved.exists ? <><span className="dot ok" />Saved</> : <><span className="dot" />None</>}>

@@ -22,6 +22,7 @@ serve-tag = "tag_tracking.serve_tag:main"
 track = "tag_tracking.track:main"
 calibrate-camera = "tag_tracking.calibrate_camera:main"
 calibrate-field = "tag_tracking.calibrate_field:main"
+verify-calibration = "tag_tracking.verify:main"
 photon-sim = "tag_tracking.photon_sim:main"
 
 [tool.uv.sources]

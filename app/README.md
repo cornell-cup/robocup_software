@@ -47,6 +47,8 @@ A first tour, from nothing to real robots playing. Stop after any step.
 3. **Calibrate the camera field** (once, or after moving the camera). Field
    calibration page → **Connect** → enter the tag size and field size →
    **Start capture** → **Solve** → pick the origin → **Save calibration**.
+   Then prove it: **Check the accuracy** (step 4 on the same page) — tape 9 spots,
+   put a tag on each, and it reports how far off each one reads, in mm.
 4. **Make a ball profile** (once per ball and room). Ball profile page →
    **Connect** → name it → **Create profile** → drag a box over the ball → tune →
    **Save profile**.
@@ -153,6 +155,16 @@ connect while tracking.
 
 "Move the origin of the saved calibration" changes only the origin, like
 `calibrate-field --pick-origin`.
+
+4. **Check the accuracy** is `verify-calibration`, with buttons. It tests the *saved*
+   calibration: mark 9 spots with a tape measure, measured from `(0,0)` (the 4 corners,
+   the middle of each edge, the centre; **Edge marks 5 cm inside** if a wall is in the
+   way), enter the tag size, **Start the check**. A pink cross on the picture shows
+   where the tag goes; put its centre there, edges square to the field, let go until
+   the count fills, then **Confirm spot** (`q`/Enter; `r` redoes it, `s` skips it,
+   **Back a spot** redoes the one before). After the 9th it shows PASS / WARN / FAIL
+   (under 10 mm on average and 20 mm at worst is a pass), what the error pattern points
+   at, and the error plot, and writes the report to `vision/calib/verification/`.
 
 **Ball profile** is `calibrate-ball`, but sampling **PhotonVision's camera stream**:
 the same picture `track-combined` looks for the ball in, so the profile matches the

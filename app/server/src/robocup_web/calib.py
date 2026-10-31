@@ -5,7 +5,9 @@ The steps and the maths are calibrate_field's own -- connect to PhotonVision
 (photon.py), collect frames that see every reference tag, calibrate_field()
 them (or, one tag at a time, CornerSampler and solve_sequential(), as
 --sequential does), place the origin (pixel_to_field, with the same
-snapping), save field_pose.json -- only the window is new. Overlays are not drawn into the
+snapping), save field_pose.json -- only the window is new. The accuracy
+check after it is verify-calibration's CheckSession, fed the same detections:
+one tag on 9 tape-measured spots, each read back in mm. Overlays are not drawn into the
 picture: their pixel coordinates go to the browser, which draws them over the
 camera stream, so they stay sharp and clickable.
 
@@ -36,6 +38,16 @@ from tag_tracking.calibrate_field import (
     solve_sequential,
 )
 from tag_tracking.photon import PhotonStream, PhotonTags, blank_frame, open_photon
+from tag_tracking.verify import (
+    FRAMES_PER_POINT,
+    CheckSession,
+    Measurer,
+    finish,
+    load_saved,
+    out_dir,
+    placement,
+    point_grade,
+)
 from vision_core.field import (
     Field,
     ReferenceTagFieldTransform,
@@ -74,6 +86,10 @@ class FieldCalibration:
         self._field: Field | None = None
         self._origin: tuple[float, float] | None = None
         self._result_from = ""  # "calibrated" | "saved"
+        # accuracy check
+        self._check: CheckSession | None = None
+        self._checking = False
+        self._check_done: dict[str, Any] | None = None  # summary of the last finished one
 
     # -- PhotonVision -------------------------------------------------------
 
@@ -133,6 +149,8 @@ class FieldCalibration:
                 self._dets = r.detections
                 self._dets_t = now
                 self._rate = 0.9 * self._rate + 0.1 / max(now - last, 1e-3)
+                if self._checking and self._check is not None:
+                    self._check.add(r.detections)
                 if self._capturing and self._corners is not None:
                     self._corner_status = self._corners.add(r.detections)
                 elif self._capturing and self._setup is not None:
@@ -149,7 +167,7 @@ class FieldCalibration:
             self._thread.join(timeout=8.0)
         with self._lock:
             self._tags = self._stream = None
-            self._capturing = False
+            self._capturing = self._checking = False
             self.state, self.error = "disconnected", None
             self._dets = []
 
@@ -320,6 +338,105 @@ class FieldCalibration:
         out.save(path)
         return path
 
+    # -- accuracy check -----------------------------------------------------
+
+    def check_start(self, opts: dict[str, Any]) -> None:
+        """Start checking the SAVED calibration against tape-measured spots."""
+        tag_size = _positive(opts, "tag_size")
+        inset = float(opts.get("inset") or 0.0)
+        if not 0.0 <= inset < 1.0:
+            raise CommandError("the edge inset must be 0 to 1 m")
+        tag_id = opts.get("tag_id")
+        tag_id = None if tag_id in (None, "") else int(tag_id)
+        try:
+            transform, field, targets = load_saved(inset=inset)
+        except FileNotFoundError:
+            raise CommandError("save a field calibration first -- the check tests the saved "
+                               "one") from None
+        with self._lock:
+            tags = self._tags
+            if self.state != "connected" or tags is None:
+                raise CommandError("connect to PhotonVision first")
+            measurer = Measurer(tags.K, tags.dist, transform, field, tag_size)
+            self._check = CheckSession(measurer, targets, FRAMES_PER_POINT, None, tag_id)
+            self._capturing = False
+            self._checking = True
+            self._check_done = None
+
+    def check_action(self, action: str) -> None:
+        """confirm (keep this spot, next), redo, skip, back (the previous spot
+        again) or stop."""
+        with self._lock:
+            session = self._check
+            if session is None:
+                raise CommandError("start the check first")
+            if action == "confirm":
+                if not session.ready:
+                    raise CommandError("this spot hasn't got enough still frames yet")
+                session.confirm()
+            elif action == "redo":
+                session.redo()
+            elif action == "skip":
+                session.skip()
+            elif action == "back":
+                session.back()
+                self._checking = True
+            elif action == "stop":
+                self._checking = False
+                self._check = None
+                return
+            else:
+                raise CommandError("action must be confirm, redo, skip, back or stop")
+            if not session.done:
+                return
+            self._checking = False
+            tags = self._tags
+        if all(r.skipped for r in session.results):
+            with self._lock:
+                self._check = None
+            raise CommandError("every spot was skipped -- nothing to report")
+        m = session.measurer
+        summary, report = finish(
+            session.results, m.field, m.K, m.transform, out_dir(), tag_size=m.tag_size,
+            image_size=tags.size if tags else (0, 0),
+            lens_source=f"{tags.size[0]}x{tags.size[1]}, {tags.source}" if tags else "")
+        with self._lock:
+            self._check_done = {**summary, "report": str(report),
+                                "checked_at": time.time()}
+
+    def check_plot(self) -> Path | None:
+        p = out_dir() / "plot.png"
+        return p if p.exists() else None
+
+    def _check_status(self, tags: PhotonTags | None) -> dict[str, Any] | None:
+        session, done = self._check, self._check_done
+        if session is None and done is None:
+            return None
+        out: dict[str, Any] = {"active": self._checking, "summary": done}
+        if session is not None:
+            m = session.measurer
+            px = m.to_pixels(session.targets) if tags is not None else None
+            out.update({
+                "index": session.index,
+                "total": len(session.targets),
+                "targets": [[round(x, 4), round(y, 4)] for x, y in session.targets],
+                "targets_px": None if px is None else px.round(1).tolist(),
+                "count": session.count,
+                "frames": session.frames,
+                "ready": session.ready,
+                "message": session.message(),
+                "live_mm": None if session.live_mm is None else round(session.live_mm, 1),
+                "placement": placement(session.heading),
+                "field": [m.field.x0, m.field.y0, m.field.width, m.field.height],
+                "results": [{
+                    "x": r.x, "y": r.y, "skipped": r.skipped,
+                    "err_mm": None if r.skipped else round(r.err_mm, 1),
+                    "heading_err_deg": None if r.skipped else round(r.heading_err_deg, 2),
+                    "grade": point_grade(r),
+                } for r in session.results],
+            })
+        return out
+
     # -- status -------------------------------------------------------------
 
     def status(self) -> dict[str, Any]:
@@ -382,6 +499,10 @@ class FieldCalibration:
             }
             if tags is not None:
                 out["overlay"] = _overlay(transform, field, origin, tags)
+        with self._lock:
+            check = self._check_status(tags)
+        if check is not None:
+            out["check"] = _jsonable(check)
         out["saved"] = _saved_summary(field_pose_path())
         return out
 
@@ -443,6 +564,19 @@ def _saved_summary(path: Path) -> dict[str, Any]:
                 "modified": path.stat().st_mtime}
     except (OSError, ValueError, KeyError) as e:
         return {"path": str(path), "exists": True, "error": f"unreadable: {e}"}
+
+
+def _jsonable(v: Any) -> Any:
+    """NaN and numpy numbers out, for the JSON the page reads."""
+    if isinstance(v, dict):
+        return {k: _jsonable(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_jsonable(x) for x in v]
+    if isinstance(v, (float, np.floating)):
+        return None if not np.isfinite(v) else float(v)
+    if isinstance(v, np.integer):
+        return int(v)
+    return v
 
 
 def _num(opts: dict[str, Any], key: str) -> float:
