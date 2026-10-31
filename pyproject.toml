@@ -1,7 +1,7 @@
 [project]
 name = "robocup-software"
 version = "0.1.0"
-description = "Monorepo env: the simulator, strategy, vision tracking and web app in one .venv"
+description = "Monorepo env: the simulator, strategy, vision tracking, web app and robot driver in one .venv"
 # The <3.14 cap dates from pupil-apriltags, which is gone; photonlibpy resolves
 # on 3.14 too. Lift it once the rest of the stack (pygame, pymunk, torch) is
 # checked there.
@@ -20,6 +20,11 @@ dependencies = [
     "combined-tracking[zmq]",
     # app/server: the web app (`uv run robocup-web`)
     "robocup-web",
+    # robot/: drive a real XRP robot over Bluetooth, and flash its firmware
+    # (mirrors robot/laptop/requirements.txt; pygame is above). bleak is held to
+    # the 1.x line the robot code was tested on.
+    "bleak>=1.1.1,<2",
+    "mpremote>=1.29",
 ]
 
 [project.optional-dependencies]

@@ -1,5 +1,5 @@
 {
-  "include": ["sim", "strategy", "vision", "app/server"],
+  "include": ["sim", "strategy", "vision", "app/server", "robot"],
   "exclude": [".venv", "**/__pycache__", "**/node_modules", "archive"],
   "pythonVersion": "3.12",
   "venvPath": ".",
@@ -9,7 +9,12 @@
     { "root": "sim", "extraPaths": [".", "sim"] },
     { "root": "strategy", "extraPaths": [".", "sim"] },
     { "root": "vision" },
-    { "root": "app/server", "extraPaths": ["sim"] }
+    { "root": "app/server", "extraPaths": ["sim", "robot"] },
+    // MicroPython on the XRP: machine, bluetooth, XRPLib and time.ticks_ms
+    // only exist there
+    { "root": "robot/firmware", "extraPaths": ["robot/firmware", "robot/firmware/lib"],
+      "reportMissingImports": "none", "reportAttributeAccessIssue": "none" },
+    { "root": "robot", "extraPaths": ["robot"] }
   ],
 
   "reportUnknownVariableType": "none",

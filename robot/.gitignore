@@ -1,0 +1,7 @@
+# Per-robot settings, copied from firmware/config.example.py
+firmware/config.py
+
+__pycache__/
+*.pyc
+.venv/
+.DS_Store

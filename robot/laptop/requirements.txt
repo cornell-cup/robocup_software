@@ -1,0 +1,4 @@
+bleak==1.1.1
+pygame==2.6.1
+mpremote==1.29.0
+pyzmq>=24.0
