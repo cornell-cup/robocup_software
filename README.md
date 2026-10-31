@@ -24,7 +24,8 @@ something from [Play with it](#play-with-it).
 
 ## Set up step by step
 
-Once per computer. Windows PowerShell shown; the same works on Linux / macOS.
+Once per computer. Windows PowerShell shown; the same works on Linux / macOS,
+except that PhotonVision is built from source on a Mac (see the [web app README](app/README.md)).
 
 1. **Install uv** (it manages Python and every package):
    ```powershell
@@ -91,7 +92,37 @@ Simulator page pick *Robots and ball:* **Recording**.
 
 ### 3. Drive a real robot
 
-With a flashed robot switched on and this computer's Bluetooth on:
+**Upload the code** the first time, and again whenever a file in
+`robot/firmware/` changes. Plug the robot in with USB, switch it on, close any
+XRP editor tab, then:
+
+```powershell
+cd robot
+uv run mpremote cp firmware/lib/pestolink.py :lib/pestolink.py
+uv run mpremote cp firmware/config.py firmware/mixing.py firmware/robot.py firmware/main.py :
+uv run mpremote reset                       # restart the robot on the new code
+uv run python -m laptop --scan              # XRP-01 should be listed
+```
+
+If the first upload line says `lib` doesn't exist, run `uv run mpremote mkdir :lib`
+and repeat it. A new robot needs a few more steps first: see
+[`robot/README.md`](robot/README.md).
+
+**Drive it from the browser.** Unplug USB, keep the batteries on, turn on this
+computer's Bluetooth, then from the repo root:
+
+```powershell
+uv run robocup-web
+```
+
+1. Open http://localhost:5801 and go to the **Robots** page.
+2. Under *Add a robot*, type `XRP-01` and click **Add**. Wait for **Connected**.
+3. Set *Driven by:* to **Keyboard** or a gamepad.
+4. Click on the page, outside any text box, and drive: W A S D move, Q E turn,
+   Space dribbler, 1–3 speed.
+
+**Or from a terminal,** without the web app. Only one program can hold a robot's
+Bluetooth link, so close one before using the other.
 
 ```powershell
 cd robot
@@ -99,8 +130,6 @@ uv run python -m laptop XRP-01 --keyboard   # W A S D move, Q E turn, Space drib
 uv run python -m laptop XRP-01              # or a gamepad
 uv run python -m laptop XRP-01 XRP-02       # several robots, one gamepad each
 ```
-
-In the browser: **Robots** page → add `XRP-01` → *Driven by:* **Keyboard** or a gamepad.
 
 ### 4. Track the robots and the ball with the camera
 

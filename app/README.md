@@ -18,6 +18,14 @@ fits with the rest.
 3. **For the camera pages only:** get PhotonVision. In the header, click
    **Download** next to PhotonVision (about 160 MB, once), then **Start**. Or
    from a terminal: `uv run setup-photonvision`, then `uv run robocup-web --with-photonvision`.
+   **On a Mac** PhotonVision has no release, so the button says **Build** and
+   builds the matching version from source (`setup-photonvision` does the
+   same). Run `xcode-select --install` first; it fetches everything else, and
+   takes a while. PhotonVision doesn't officially support macOS, so if the
+   camera doesn't appear, give your terminal camera access in System Settings >
+   Privacy & Security. If it still doesn't, run PhotonVision on a Windows or
+   Linux machine with the camera plugged in there, and in step 4 set the
+   address to the Mac's IP instead of `127.0.0.1`.
 4. **For the camera pages only:** set PhotonVision up once in its own UI
    (header link, port 5800): add the camera, an AprilTag 36h11 pipeline, lens
    calibration, and NetworkTables Server Address `127.0.0.1`. Step by step:
@@ -64,8 +72,10 @@ A first tour, from nothing to real robots playing. Stop after any step.
 GitHub's 100 MB file limit), so the app downloads it: the jar of the version
 our photonlibpy needs, and a Temurin 21 Java to run it (some other Javas,
 Oracle's JDK 21 among them, ship an MSVC runtime too old for it), into the
-`photonvision` folder next to the repo. Windows and Linux only: PhotonVision
-publishes no macOS build. The app looks for that folder (the
+`photonvision` folder next to the repo. PhotonVision releases no macOS jar, so
+on a Mac the jar is built from source instead, with a build folder there that
+is deleted afterwards (kept with its `build.log` if the build fails). The app
+looks for that folder (the
 `photonvision-*.jar` plus a Java) in `--photonvision-dir`, else
 `$ROBOCUP_PHOTONVISION_DIR`, else `photonvision` next to the repo. It stops a
 PhotonVision it started when it exits, and leaves one started any other way

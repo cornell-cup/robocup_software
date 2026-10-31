@@ -69,7 +69,7 @@ function PhotonVisionStatus() {
     return (
       <span className="stat" title={inst.step ?? undefined}>
         <span className="dot warn pulse" />
-        Downloading PhotonVision{pct}
+        {pv.from_source ? "Building" : "Downloading"} PhotonVision{pct}
       </span>
     );
   }
@@ -81,12 +81,20 @@ function PhotonVisionStatus() {
       </span>
     );
   }
+  if (!pv.installed && pv.no_download) {
+    return (
+      <span className="stat" title={pv.no_download}>
+        <span className="dot" />
+        PhotonVision: no build for this computer
+      </span>
+    );
+  }
   if (!pv.installed) {
     return (
-      <span className="stat" title={`About 160 MB, into ${pv.folder}`}>
+      <span className="stat" title={pv.from_source ? `No Mac release, so this builds it from source, which takes a while, into ${pv.folder}` : `About 160 MB, into ${pv.folder}`}>
         <span className="dot" />
         PhotonVision not installed
-        <button className="btn sm primary stat-btn" disabled={busy} onClick={photonvision.install}>Download</button>
+        <button className="btn sm primary stat-btn" disabled={busy} onClick={photonvision.install}>{pv.from_source ? "Build" : "Download"}</button>
       </span>
     );
   }

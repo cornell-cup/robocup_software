@@ -340,19 +340,28 @@ export function Calibration() {
                       <div className="pv-row"><span className="dot" /><b>PhotonVision is not running</b></div>
                       <button className="btn primary block" disabled={pv.busy} onClick={() => { setAutoConnect(true); photonvision.start(); }}>Start PhotonVision</button>
                       <small className="dim">{pvs.jar} from {pvs.folder}</small>
-                      {pvs.needs_download && (
+                      {pvs.needs_download && !pvs.no_download && (
                         <button className="link" disabled={pv.busy} onClick={photonvision.install}>
                           {pvs.version_mismatch ? `Download PhotonVision ${pvs.photonlibpy}, the version this app needs` : "Download a Java known to work with it"}
                         </button>
                       )}
                     </>
+                  ) : pvs.no_download ? (
+                    <>
+                      <div className="pv-row"><span className="dot" /><b>PhotonVision can't run on this computer</b></div>
+                      <small className="dim">
+                        {pvs.no_download}. Plug the camera into that computer, point its NetworkTables server address at this one's IP, then connect.
+                      </small>
+                    </>
                   ) : (
                     <>
                       <div className="pv-row"><span className="dot" /><b>PhotonVision isn't installed</b></div>
-                      <button className="btn primary block" disabled={pv.busy} onClick={photonvision.install}>Download PhotonVision</button>
+                      <button className="btn primary block" disabled={pv.busy} onClick={photonvision.install}>{pvs.from_source ? "Build" : "Download"} PhotonVision</button>
                       <small className="dim">
-                        About 160 MB: PhotonVision {pvs.photonlibpy} and a Java to run it, into <span className="mono">{pvs.folder}</span>.
-                        If it runs on another computer, just connect.
+                        {pvs.from_source
+                          ? <>PhotonVision has no Mac release, so this builds {pvs.photonlibpy} from source, which takes a while, and gets a Java to run it, into <span className="mono">{pvs.folder}</span>. It isn't officially supported on a Mac.</>
+                          : <>About 160 MB: PhotonVision {pvs.photonlibpy} and a Java to run it, into <span className="mono">{pvs.folder}</span>.</>}
+                        {" "}If it runs on another computer, just connect.
                       </small>
                     </>
                   )}

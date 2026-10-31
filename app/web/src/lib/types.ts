@@ -232,6 +232,10 @@ export interface PhotonVisionStatus {
   setup_hints: string[];
   /** The right jar, or a Java of its own, is missing from the folder. */
   needs_download: boolean;
+  /** Why this machine can't download PhotonVision, else null. */
+  no_download: string | null;
+  /** macOS: no released jar, so the download builds it from source instead. */
+  from_source: boolean;
   install: {
     state: "idle" | "starting" | "working" | "done" | "error";
     step?: string | null;

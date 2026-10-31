@@ -23,7 +23,8 @@ from pathlib import Path
 from typing import Any
 
 from .procs import CommandError, ManagedProcess
-from .pv_install import Installer, local_java, photonlibpy_version
+from .pv_install import (Installer, builds_from_source, local_java, no_download_reason,
+                         photonlibpy_version)
 from .sim import REPO
 
 UI_PORT = 5800
@@ -139,6 +140,10 @@ class PhotonVisionProcess(ManagedProcess):
                             if bad in self._setup_lines.get(key, "")],
             # Download offered when the right jar or a Java of its own is missing.
             "needs_download": not (version and lib and version == lib and local_java(self.folder)),
+            # Set on a machine with no PhotonVision build: nothing to offer.
+            "no_download": no_download_reason(),
+            # macOS: the "download" builds it from source, and takes far longer.
+            "from_source": builds_from_source(),
             "install": self.installer.status(),
             "ui": f"http://localhost:{UI_PORT}",
         }

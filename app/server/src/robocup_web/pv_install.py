@@ -14,6 +14,11 @@ Two things go in the folder (see photonvision.py for which folder):
 Too big for git (the jar alone is over GitHub's 100 MB file limit), hence this.
 Anything already there is kept: a jar of the right version, or a Java in the
 folder, is not downloaded again.
+
+macOS is the exception: PhotonVision doesn't support it or release a jar for
+it, only builds one in CI, so here the jar is built from the release's source
+the same way. The build fetches what it needs into the folder, all but Apple's
+compiler, and deletes it after.
 """
 
 from __future__ import annotations
@@ -21,6 +26,9 @@ from __future__ import annotations
 import argparse
 import os
 import platform
+import re
+import shutil
+import subprocess
 import tarfile
 import threading
 import urllib.request
@@ -34,6 +42,11 @@ from .procs import CommandError
 JAR_URL = ("https://github.com/PhotonVision/photonvision/releases/download/"
            "v{version}/photonvision-v{version}-{platform}.jar")
 JRE_URL = "https://api.adoptium.net/v3/binary/latest/21/ga/{os}/{arch}/jre/hotspot/normal/eclipse"
+#: Building a jar on macOS: the versions PhotonVision's CI builds its jars with.
+SOURCE_URL = "https://github.com/PhotonVision/photonvision.git"
+JDK_URL = "https://api.adoptium.net/v3/binary/latest/17/ga/{os}/{arch}/jdk/hotspot/normal/eclipse"
+NODE_DIST = "https://nodejs.org/dist/latest-v22.x/"
+PNPM = "pnpm@10"
 CHUNK = 1 << 16
 
 
@@ -45,8 +58,42 @@ def target_platform() -> tuple[str, str, str]:
         return "winx64", "windows", "x64"
     if system == "Linux":
         return ("linuxarm64", "linux", "aarch64") if arm else ("linuxx64", "linux", "x64")
+    if system == "Darwin":
+        return ("macarm64", "mac", "aarch64") if arm else ("macx64", "mac", "x64")
     raise CommandError(f"PhotonVision publishes no build for {system} {platform.machine()}; "
                        f"run it on a Windows or Linux machine (or a coprocessor) instead")
+
+
+def no_download_reason() -> str | None:
+    """Why PhotonVision can't be downloaded for this machine, None if it can."""
+    try:
+        target_platform()
+    except CommandError as e:
+        return str(e)
+    return None
+
+
+def builds_from_source() -> bool:
+    """No released jar for this machine, so "downloading" means building it."""
+    return platform.system() == "Darwin"
+
+
+def check_build_tools() -> None:
+    """The one thing a build can't fetch. git and clang exist as stubs without
+    Apple's tools, so only xcode-select can tell."""
+    if subprocess.run(["xcode-select", "-p"], capture_output=True).returncode:
+        raise CommandError("building PhotonVision needs Apple's compiler: run "
+                           "xcode-select --install, then try again")
+
+
+def node_url(plat: str) -> str:
+    arch = "arm64" if plat == "macarm64" else "x64"
+    req = urllib.request.Request(NODE_DIST + "SHASUMS256.txt", headers={"User-Agent": "robocup-web"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        m = re.search(rf"node-v[\d.]+-darwin-{arch}\.tar\.gz", r.read().decode())
+    if not m:
+        raise CommandError(f"no Node 22 for {arch} at {NODE_DIST}")
+    return NODE_DIST + m.group()
 
 
 def photonlibpy_version() -> str:
@@ -58,7 +105,8 @@ def photonlibpy_version() -> str:
 
 def local_java(folder: Path) -> Path | None:
     exe = "java.exe" if os.name == "nt" else "java"
-    found = sorted(folder.glob(f"*/bin/{exe}"))
+    # On macOS a Java unpacks as a bundle, with bin/ under Contents/Home.
+    found = sorted([*folder.glob(f"*/bin/{exe}"), *folder.glob(f"*/Contents/Home/bin/{exe}")])
     return found[-1] if found else None
 
 
@@ -105,6 +153,8 @@ class Installer:
             jar = folder / f"photonvision-v{version}-{plat}.jar"
             if jar.exists():
                 step(state="working", step=f"{jar.name} is already there")
+            elif builds_from_source():
+                self._build(version, plat, os_name, arch, jar, step)
             else:
                 self._download(JAR_URL.format(version=version, platform=plat), jar,
                                f"PhotonVision {version}", step)
@@ -135,6 +185,59 @@ class Installer:
                 got += len(chunk)
                 step(got=got, total=total)
         part.replace(dest)
+
+    def _build(self, version: str, plat: str, os_name: str, arch: str, jar: Path, step) -> None:
+        """Build `jar` from PhotonVision's source at `version`, the way its CI
+        does. All of it happens in a build folder, left behind only on failure,
+        for its log."""
+        check_build_tools()
+        work = jar.parent / "build"
+        shutil.rmtree(work, ignore_errors=True)
+        work.mkdir()
+        log = work / "build.log"
+        jdk = self._tool(JDK_URL.format(os=os_name, arch=arch), work, "jdk", "Java 17 to build with", step)
+        jdk = jdk / "Contents" / "Home"
+        node = self._tool(node_url(plat), work, "node", "Node to build with", step)
+        pnpm = work / "pnpm"
+        path = [pnpm / "node_modules" / ".bin", node / "bin", jdk / "bin"]
+        env = {**os.environ, "JAVA_HOME": str(jdk), "GRADLE_USER_HOME": str(work / "gradle"),
+               "PATH": os.pathsep.join([*map(str, path), os.environ.get("PATH", "")])}
+        src = work / "photonvision"
+        self._run(["git", "clone", "--depth", "1", "--branch", f"v{version}", SOURCE_URL, str(src)],
+                  work, env, log, f"getting PhotonVision {version}'s source", step)
+        self._run([str(node / "bin" / "npm"), "install", "--prefix", str(pnpm), PNPM],
+                  work, env, log, "installing pnpm", step)
+        self._run(["./gradlew", "--no-daemon", "--console=plain", "photon-targeting:jar",
+                   "photon-server:shadowJar", f"-PArchOverride={plat}"],
+                  src, env, log, f"building PhotonVision {version}", step)
+        built = sorted((src / "photon-server" / "build" / "libs").glob("photonvision-*.jar"))
+        if not built:
+            raise CommandError(f"the build made no jar; see {log}")
+        built[-1].replace(jar)
+        shutil.rmtree(work, ignore_errors=True)
+
+    def _tool(self, url: str, work: Path, name: str, label: str, step) -> Path:
+        """Download and unpack a tar.gz into `work`; the folder inside it."""
+        home = work / name
+        home.mkdir()
+        archive = work / f"{name}.tar.gz"
+        self._download(url, archive, label, step)
+        step(step=f"unpacking {label}", got=None, total=None)
+        _unpack(archive, home)
+        archive.unlink()
+        return next(home.iterdir())
+
+    def _run(self, cmd: list[str], cwd: Path, env: dict[str, str], log: Path, label: str, step) -> None:
+        step(step=label, got=None, total=None)
+        with log.open("a") as out, subprocess.Popen(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE,
+                                                    stderr=subprocess.STDOUT, text=True,
+                                                    errors="replace") as p:
+            for line in p.stdout:
+                out.write(line)
+                if line.startswith("> Task "):
+                    step(step=f"{label} ({line[7:].strip()})")
+        if p.returncode:
+            raise CommandError(f"{label} failed; see {log}")
 
 
 def _unpack(archive: Path, folder: Path) -> None:
