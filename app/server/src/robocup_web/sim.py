@@ -251,13 +251,19 @@ class SimBridge:
             if self._driving.pop(rid, None) is not None:
                 self._publish_humans()
         elif kind == "drive":
+            # Field directions (vx right, vy up the field), or the robot's own
+            # (forward, left: W drives it the way it faces).
             rid = self._robot(cmd)
-            vx = max(-1.0, min(1.0, _finite(cmd, "vx")))
-            vy = max(-1.0, min(1.0, _finite(cmd, "vy")))
+            body = "forward" in cmd or "left" in cmd
+            vx = max(-1.0, min(1.0, _finite(cmd, "forward" if body else "vx")))
+            vy = max(-1.0, min(1.0, _finite(cmd, "left" if body else "vy")))
             w = max(-MAX_OMEGA, min(MAX_OMEGA, _finite(cmd, "w")))
             new = rid not in self._driving
             self._driving[rid] = time.monotonic()
-            self._publish({"direct": {str(rid): {"vx": vx, "vy": vy, "w": w}}})
+            direct: dict[str, Any] = {"vx": vx, "vy": vy, "w": w}
+            if body:
+                direct["frame"] = "robot"
+            self._publish({"direct": {str(rid): direct}})
             if new:
                 self._publish_humans()
         elif kind == "kick":

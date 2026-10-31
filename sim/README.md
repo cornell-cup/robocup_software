@@ -168,7 +168,8 @@ sim/
 // Manual target, strategy toggle, direct drive (MANUAL_PORT)
 { "targets": { "0": { "x": 4.5, "y": 3.0, "mode": "2005_INVERSION" } } }
 { "strategy_enabled": true }
-{ "direct": { "0": { "vx": 1.0, "vy": 0.0, "w": 0.0 } } }
+{ "direct": { "0": { "vx": 1.0, "vy": 0.0, "w": 0.0 } } }                     // field frame (viz_node)
+{ "direct": { "0": { "vx": 1.0, "vy": 0.0, "w": 0.0, "frame": "robot" } } }  // robot frame: vx forward, vy left (web Keys)
 
 // Wheel command (COMMAND_PORT)
 { "robot_id": 0, "wheel_speeds": [0.5, -0.3, 0.8] }

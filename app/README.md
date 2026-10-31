@@ -84,8 +84,8 @@ rest.
   `--ignore-tags`, `--tag-map`, `--flip-x/y`. A sim started in a terminal with `--no-viz`
   shows up too.
 - Click the field to send the selected robot there (PD / time-optimal / MPC), or switch to
-  **Keys** and drive it with `W A S D`, `Q E` to rotate. Keys move it in field directions
-  (W = up the field), whichever way it faces, and while you drive a blue robot with keys
+  **Keys** and drive it with `W A S D`, `Q E` to rotate. Keys drive it in its own frame,
+  as when driving a real robot by hand: W = the way it faces. While you drive a blue robot with keys
   the strategy leaves it alone. A robot the camera owns doesn't move in the sim: keys and
   clicks reach it only through a real robot set to *Follow sim* on the Robots page, and the
   Drive card says so.
@@ -219,7 +219,8 @@ Sim commands (`/sim/command` or the socket):
 
 ```json
 {"type": "target", "robot": 0, "x": 4.5, "y": 3.0, "mode": "pd"}      // mode: pd | time | mpc
-{"type": "drive", "robot": 0, "vx": 1.0, "vy": 0.0, "w": 0.0}         // vx, vy in [-1, 1]; w rad/s, |w| <= 5
+{"type": "drive", "robot": 0, "vx": 1.0, "vy": 0.0, "w": 0.0}         // field directions: vx right, vy up; [-1, 1]; w rad/s, |w| <= 5
+{"type": "drive", "robot": 0, "forward": 1.0, "left": 0.0, "w": 0.0}  // the robot's own frame (what the page's Keys send)
 {"type": "kick", "robot": 0}
 {"type": "strategy", "enabled": true}                                  // also: dribble, rl_kick, ball_stuck_reset
 ```

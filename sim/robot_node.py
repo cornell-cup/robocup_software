@@ -210,8 +210,10 @@ class RobotController:
         self.path_length: float = 0.0
         self.total_time: float = 0.0
         self._last_pos: np.ndarray | None = None
-        # MANUAL mode: world-frame (vx, vy, omega) received directly from operator
+        # MANUAL mode: (vx, vy, omega) received directly from operator, in the
+        # world frame, or the robot's own (x forward, y left) if direct_body
         self.direct_vel: tuple[float, float, float] | None = None
+        self.direct_body: bool = False
 
     def set_target(
         self,
@@ -229,9 +231,11 @@ class RobotController:
         if mode:
             self.mode = mode
 
-    def set_direct_vel(self, vx: float, vy: float, w: float) -> None:
-        """Switch to MANUAL mode and set world-frame velocity command."""
+    def set_direct_vel(self, vx: float, vy: float, w: float, body: bool = False) -> None:
+        """Switch to MANUAL mode and set a velocity command: world frame, or
+        with body the robot's own (vx forward, vy left)."""
         self.direct_vel = (vx, vy, w)
+        self.direct_body = body
         self.mode = "MANUAL"
         self.target = None
 
@@ -250,9 +254,11 @@ class RobotController:
         if self.mode == "MANUAL":
             if self.direct_vel is None:
                 return 0.0, 0.0, 0.0
-            world_vx, world_vy, w = self.direct_vel
+            vx, vy, w = self.direct_vel
+            if self.direct_body:
+                return vx, vy, w
             # Rotate world-frame velocity into the robot's body frame
-            local = _rot2d(np.array([world_vx, world_vy]), -angle)
+            local = _rot2d(np.array([vx, vy]), -angle)
             return local[0], local[1], w
 
         if self._last_pos is not None:
@@ -357,7 +363,9 @@ def main() -> None:
                 for rid_str, vel in data.get("direct", {}).items():
                     i = int(rid_str)
                     if 0 <= i < NUM_ROBOTS:
-                        robots[i].set_direct_vel(vel["vx"], vel["vy"], vel["w"])
+                        robots[i].set_direct_vel(
+                            vel["vx"], vel["vy"], vel["w"], vel.get("frame") == "robot"
+                        )
 
                 if data.get("type") == "ball_stuck_toggle":
                     _ = cmd_push.send_string(json.dumps({"type": "ball_stuck_toggle"}))

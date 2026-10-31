@@ -209,7 +209,8 @@ export function Simulator() {
       const { mode, robot, sim } = live.current;
       if (mode !== "keys" || !sim.up) return;
       const h = (c: string) => (held.current.has(c) ? 1 : 0);
-      sendSim({ type: "drive", robot, vx: h("d") - h("a"), vy: h("w") - h("s"), w: (h("q") - h("e")) * MAX_OMEGA });
+      // The robot's own frame, as when driving a real robot by hand: W = the way it faces.
+      sendSim({ type: "drive", robot, forward: h("w") - h("s"), left: h("a") - h("d"), w: (h("q") - h("e")) * MAX_OMEGA });
     }, 50);
     window.addEventListener("keydown", onDown);
     window.addEventListener("keyup", onUp);
@@ -303,7 +304,7 @@ export function Simulator() {
 
         <footer className="stage-foot">
           <span>
-            {mode === "keys" ? `W A S D moves robot ${robot}, Q and E rotate it` : `Click the field to send robot ${robot} there`}
+            {mode === "keys" ? `W A S D drive robot ${robot} the way it faces, Q and E rotate it` : `Click the field to send robot ${robot} there`}
           </span>
           <span className="mono">
             {hover
@@ -460,7 +461,7 @@ export function Simulator() {
                   Robot {robot} is the camera's, so the sim won't move it. {follower
                     ? <>Keys and clicks drive <b>{follower.name}</b>, which follows it{follower.tracked ? "" : ", once the camera sees it"}.</>
                     : <>Keys and clicks move it only through a real robot set to <i>Follow sim</i> → {robot} on the <a href="#/robots">Robots</a> page.</>}
-                  {" "}In Keys, W moves it up the field, whichever way it faces.
+                  {" "}In Keys, W drives it the way it faces (dribbler first).
                 </p>
               );
             })()}

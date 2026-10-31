@@ -90,7 +90,8 @@ export interface Pin {
 
 export type SimCommand =
   | { type: "target"; robot: number; x: number; y: number; mode: Mode }
-  | { type: "drive"; robot: number; vx: number; vy: number; w: number }
+  | { type: "drive"; robot: number; vx: number; vy: number; w: number }      // field directions
+  | { type: "drive"; robot: number; forward: number; left: number; w: number } // the robot's own frame
   | { type: "kick"; robot: number }
   | { type: "strategy" | "dribble" | "rl_kick" | "ball_stuck_reset"; enabled: boolean };
 
