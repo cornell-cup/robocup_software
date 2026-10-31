@@ -50,9 +50,13 @@ def sim_ids(text):
 
 
 async def scan():
-    from .robot_link import nearby
+    from .robot_link import describe_error, nearby
     print("Scanning for 5 s...")
-    for rssi, name in await nearby(5.0):
+    try:
+        found = await nearby(5.0)
+    except OSError as error:
+        sys.exit(describe_error(error))
+    for rssi, name in found:
         print("{:>4} dBm  {}".format(rssi, name))
 
 
