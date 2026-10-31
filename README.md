@@ -3,7 +3,8 @@
 Monorepo for the RoboCup project: a 2-D soccer simulator with autonomous team
 strategy, and a single-camera vision system that tracks real robots and the
 ball (AprilTags detected by PhotonVision). The two connect: the tracker can stream live positions into the sim, so a
-real robot plays against simulated ones.
+real robot plays against simulated ones. The real robots are three-omniwheel
+XRPs, driven from a laptop over Bluetooth (PestoLink).
 
 | Folder | What it is | Details |
 | --- | --- | --- |
@@ -11,6 +12,7 @@ real robot plays against simulated ones.
 | [`strategy/`](strategy/) | Team strategy and the RL kick skill | [`strategy/README.md`](strategy/README.md) |
 | [`vision/`](vision/) | Camera tracking of AprilTags (via PhotonVision) and a colored ball, in field metres | [`vision/README.md`](vision/README.md) |
 | [`app/`](app/) | Web app: simulator, field calibration and ball profiles in a browser (`uv run robocup-web`) | [`app/README.md`](app/README.md) |
+| [`robot/`](robot/) | The real XRP robot: MicroPython firmware, and a laptop driver (gamepad / keyboard → Bluetooth) | [`robot/README.md`](robot/README.md) |
 | [`archive/`](archive/) | The original Godot version of the sim, for reference | |
 
 This README is the map and quick reference. Each sub-README has the full flag
@@ -48,6 +50,10 @@ robocup_software/
 ├── app/                        # web app (`uv run robocup-web`)
 │   ├── server/                 # Python API (FastAPI); serves the built pages
 │   └── web/                    # the pages (React), built into server/.../static/
+├── robot/                      # the real XRP robot (from robocup-omnidirectional)
+│   ├── firmware/               # MicroPython for the XRP: robot.py, mixing.py, lib/pestolink.py
+│   ├── laptop/                 # `python -m laptop`: gamepad / keyboard -> PestoLink over BLE
+│   └── tests/                  # unit tests for the packet format and wheel mixing
 └── archive/godot/              # original Godot version of the sim, reference only
 ```
 
@@ -61,7 +67,15 @@ robocup_software/
                                                       │                    ↓              :9091 targets
                                               :9092 wheel cmds        viz_node                  ↓
                                                       └──────────── robot_node ←── :9093 clicks/keys
+                                                                         │
+                                                              :9094 body cmds (real robots)
+                                                                         ↓
+                                     XRP robots ←── Bluetooth ── python -m laptop --sim / robocup-web Robots page
 ```
+
+The loop closes through the camera: a real robot's tag is mirrored into the sim,
+strategy and robot_node compute its command as for any sim robot, and the robot
+gets that command over Bluetooth, only while the camera sees it.
 
 | Port | From → To | Carries |
 | --- | --- | --- |
@@ -69,11 +83,12 @@ robocup_software/
 | 9091 | strategy → robot | Autonomous targets |
 | 9092 | robot → sim | Wheel speed commands |
 | 9093 | viz → robot / strategy | Manual targets, strategy / RL / kick toggles |
+| 9094 | robot → real robots | Each robot's command per body axis (`python -m laptop --sim`, the web app's Robots page) |
 | 5556 | tracker → sim | Live camera tracking (`--zmq-pub` / `--vision`) |
 | 5810 | PhotonVision → tracker | NetworkTables: tag corners and lens calibration (the tracker is the server unless `--nt-server`) |
 | 1181 | PhotonVision → tracker | PhotonVision's raw camera stream (MJPEG), for the overlay and the ball |
 | 5800 | browser → PhotonVision | PhotonVision's UI: camera, pipeline, lens calibration |
-| 5801 | browser → robocup-web | This repo's web app: simulator, field calibration, ball profiles |
+| 5801 | browser → robocup-web | This repo's web app: simulator, real robots, field calibration, ball profiles |
 
 ## Setup
 
@@ -270,6 +285,29 @@ All commands are `uv run <command>`; add `--help` to any for its full flag list.
 
 Full list: [`vision/README.md`](vision/README.md#flags-that-matter).
 
+### Real robot (`robot`)
+
+Run from `robot/`. First-time wiring, flashing and the motor check are in
+[`robot/README.md`](robot/README.md); `uv sync` at the repo root replaces its
+venv / `pip install` step.
+
+| Command | What it does |
+| --- | --- |
+| `uv run python -m laptop XRP-07` | Drive robot `XRP-07` (its `ROBOT_NAME`) with the first gamepad |
+| `uv run python -m laptop XRP-07 --keyboard` | Same, with the keyboard (WASD, Q/E rotate, Space dribbler) |
+| `uv run python -m laptop --gamepad 1 XRP-07` | Use the second gamepad |
+| `uv run python -m laptop XRP-01 XRP-02` | Several robots, one gamepad each (with `--keyboard`: Tab switches robot) |
+| `uv run python -m laptop XRP-01 --sim 0` | `XRP-01` follows sim robot 0: strategy / sim clicks drive it, closed-loop through the camera |
+| `uv run python -m laptop --scan` | List nearby Bluetooth devices |
+| `uv run robocup-web`, then **Robots** | All of the above from the browser: add robots, drive by keyboard / gamepad, follow a sim robot |
+| `uv run mpremote cp firmware/config.py firmware/mixing.py firmware/robot.py firmware/main.py :` | Upload the firmware (plus `lib/pestolink.py` the first time; see the robot README) |
+| `uv run mpremote run firmware/motor_test.py + reset` | Spin each wheel to check wiring and direction |
+| `uv run python -m unittest discover -t . -s tests` | Unit tests: packet format, wheel mixing, the multi-robot fleet, sim following (no hardware) |
+
+`robot/` started as a copy of
+[robocup-omnidirectional](https://github.com/cornell-cup/robocup-omnidirectional)
+at commit `80eb3ad`; that repo has its history.
+
 ## Common workflows
 
 **Play a simulated game:**
@@ -305,6 +343,25 @@ record the session. See the
 [Vision Mirror section](sim/README.md#vision-mirror) for details and
 troubleshooting.
 
+**Real robots played by the strategy** (three terminals, or the web app):
+
+```bash
+# 1. tracker, as above
+# 2. sim, mirroring the camera; pin each robot's tag to a sim robot
+cd sim
+uv run python run_pipeline.py --vision tcp://localhost:5556 --ignore-tags 0,1,2,3 --tag-map 9:0,12:1
+# 3. the robots follow sim robots 0 and 1 over Bluetooth
+cd robot
+uv run python -m laptop XRP-01 XRP-02 --sim 0,1
+```
+
+Turn strategy on (key `5` in the sim window) and robots 0 and 1 play for real.
+Each moves only while the camera sees it. In the web app: start the tracker
+(Tracking), start the sim with **Live camera** (Simulator), then on **Robots** set
+each robot to **Follow sim**. The tag's heading must point at the robot's
+dribbler (the tracker's `--heading-offset`), and `MAX_EFFORT` in the robot's
+`config.py` caps its speed.
+
 ## Status and caveats
 
 - `strategy/plays/`, `tactics/`, `BT/tree.py` and `skills/navigate.py`
@@ -314,5 +371,8 @@ troubleshooting.
   `--field` changes the size.
 - With `--field`, robot/ball sizes and the strategy's tuned distances keep
   their 9 × 6 values.
-- There is no automated test suite; `selfcheck` and the `--synthetic` modes
-  are the closest thing.
+- There is no automated test suite beyond `robot/tests/`; `selfcheck` and the
+  `--synthetic` modes are the closest thing for the rest.
+- Real robots following the sim get robot_node's controller output as is: the
+  gains and the sim's drive model (`sim/config.py`, `TODO(hardware)`) were tuned
+  for the simulated robot, not measured on the XRP, so expect to tune them.
