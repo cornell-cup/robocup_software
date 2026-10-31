@@ -1,41 +1,76 @@
 # app: RoboCup Control (`robocup-web`)
 
-The robocup stack in a browser: the simulator (view it, drive robots, start and
-stop it), the real robots over Bluetooth, field calibration from PhotonVision, and ball colour profiles. One server; the pages and
-any script talk to it through the same API.
+The whole stack in a browser: run and watch the **simulator**, drive the **real
+robots** over Bluetooth, and set up the **camera** (PhotonVision, field
+calibration, ball colour, live tracking). One server on port 5801; the pages
+and any script use the same API. The [main README](../README.md) shows how it
+fits with the rest.
 
-```powershell
-uv run robocup-web                       # http://localhost:5801, opens a browser tab
-uv run robocup-web --with-photonvision   # and start PhotonVision as well
-uv run robocup-web --no-browser
-uv run robocup-web --host 0.0.0.0        # reachable from other machines (no login yet!)
-```
+## Set up
 
-**Getting PhotonVision.** It is too big for git (the jar is over GitHub's 100 MB
-file limit), so the app downloads it: *Download* next to PhotonVision in the
-header, on every page, or
+1. Do the repo setup once: `uv sync` at the repo root
+   ([main README](../README.md#set-up-step-by-step)). The pages are already
+   built and committed, so you need no Node.
+2. Start the app. It opens http://localhost:5801 in your browser:
+   ```powershell
+   uv run robocup-web
+   ```
+3. **For the camera pages only:** get PhotonVision. In the header, click
+   **Download** next to PhotonVision (about 160 MB, once), then **Start**. Or
+   from a terminal: `uv run setup-photonvision`, then `uv run robocup-web --with-photonvision`.
+4. **For the camera pages only:** set PhotonVision up once in its own UI
+   (header link, port 5800): add the camera, an AprilTag 36h11 pipeline, lens
+   calibration, and NetworkTables Server Address `127.0.0.1`. Step by step:
+   [PhotonVision setup](../vision/tag-tracking/README.md#photonvision-setup).
+   The header tells you what is still missing.
+5. **For the Robots page only:** a flashed XRP, and Bluetooth on this computer
+   ([robot/README.md](../robot/README.md), steps 1–4).
 
-```powershell
-uv run setup-photonvision
-```
+| Command | What it does |
+| --- | --- |
+| `uv run robocup-web` | Start the app and open a browser tab |
+| `uv run robocup-web --with-photonvision` | Also start PhotonVision (stopped again when the app exits) |
+| `uv run robocup-web --no-browser` | Don't open a tab |
+| `uv run robocup-web --host 0.0.0.0` | Reachable from other machines. There is no login: anyone who can reach it can drive the robots |
+| `uv run setup-photonvision` | Download PhotonVision and a Java for it, without the app |
 
-Either one fetches the PhotonVision jar of the version our photonlibpy needs and a
-Temurin 21 Java to run it (some other Javas, Oracle's JDK 21 among them, ship an
-MSVC runtime too old for it) into the `photonvision` folder next to the repo,
-about 160 MB. Windows and Linux only: PhotonVision publishes no macOS build.
+## Try it
 
-**PhotonVision** can be started from the app instead of a terminal: *Start*
-next to PhotonVision in the header, or pass `--with-photonvision`. The app looks for
-PhotonVision's folder -- the `photonvision-*.jar` plus a Java to run it with,
-e.g. a Temurin 21 JRE unzipped next to it -- in `--photonvision-dir`, else
-`$ROBOCUP_PHOTONVISION_DIR`, else a `photonvision` folder next to the repo. It
-stops a PhotonVision it started when it exits, and leaves one started any other
-way alone. Setup PhotonVision still needs (no NetworkTables address, no camera
-enabled) is read off its log and shown on the page.
+A first tour, from nothing to real robots playing. Stop after any step.
 
-PhotonVision's own UI stays where it is (port 5800): the camera, its pipeline
-and its lens calibration are set up there. This app does what PhotonVision
-cannot: the field, the simulator, and the ball colour profile.
+1. **Simulator, no hardware.** Simulator page → **Start simulator** → turn on
+   **Strategy (AI)**. Click the field to send the selected robot somewhere, or
+   pick **Keys** and drive it with W A S D.
+2. **Drive a real robot.** Robots page → type its name (e.g. `XRP-01`) → **Add**.
+   When it shows *Connected*, set *Driven by* to **Keyboard** and drive with
+   W A S D, Q E, Space for the dribbler.
+3. **Calibrate the camera field** (once, or after moving the camera). Field
+   calibration page → **Connect** → enter the tag size and field size →
+   **Start capture** → **Solve** → pick the origin → **Save calibration**.
+4. **Make a ball profile** (once per ball and room). Ball profile page →
+   **Connect** → name it → **Create profile** → drag a box over the ball → tune →
+   **Save profile**.
+5. **Track.** Tracking page → enter your tag size and ball profile → **Start tracking**.
+   You see the camera and the field live. The **Drive robots** card there lets
+   you drive while you watch.
+6. **Real robots in the sim.** Simulator page → *Robots and ball:* **Live camera**,
+   *Tag → robot* e.g. `9:0` → **Start simulator**. Then Robots page → set the
+   robot to **Follow sim** → robot 0, and turn on **Strategy (AI)**. The real
+   robot plays as robot 0, while the camera sees it.
+
+**PhotonVision, in more detail.** It is too big for git (the jar is over
+GitHub's 100 MB file limit), so the app downloads it: the jar of the version
+our photonlibpy needs, and a Temurin 21 Java to run it (some other Javas,
+Oracle's JDK 21 among them, ship an MSVC runtime too old for it), into the
+`photonvision` folder next to the repo. Windows and Linux only: PhotonVision
+publishes no macOS build. The app looks for that folder (the
+`photonvision-*.jar` plus a Java) in `--photonvision-dir`, else
+`$ROBOCUP_PHOTONVISION_DIR`, else `photonvision` next to the repo. It stops a
+PhotonVision it started when it exits, and leaves one started any other way
+alone. Setup PhotonVision still needs (no NetworkTables address, no camera
+enabled) is read off its log and shown on the page. Its own UI (port 5800)
+keeps the camera, its pipeline and its lens calibration; this app does the
+rest.
 
 ## Pages
 
@@ -75,7 +110,9 @@ the same code as `python -m laptop` ([robot/README.md](../robot/README.md)):
   point at the dribbler (the tracker's *heading offset*).
 
 A robot stops on its own a quarter second after its commands stop: a closed tab, an
-unplugged gamepad, a sim that went away.
+unplugged gamepad, a sim that went away. The **Tracking** page has a *Drive robots*
+card with the same by-hand driving, so you can drive while watching the camera; while
+the keyboard drives a robot, its keys go to the robot rather than to that page's shortcuts.
 
 **Tracking** runs `track-combined` (headless, publishing on ZMQ port 5556 for the sim):
 tag size, ball profile, *record this session* (to `vision/runs/`, for replaying), and under

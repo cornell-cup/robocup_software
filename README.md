@@ -1,22 +1,197 @@
 # robocup_software
 
-Monorepo for the RoboCup project: a 2-D soccer simulator with autonomous team
-strategy, and a single-camera vision system that tracks real robots and the
-ball (AprilTags detected by PhotonVision). The two connect: the tracker can stream live positions into the sim, so a
-real robot plays against simulated ones. The real robots are three-omniwheel
-XRPs, driven from a laptop over Bluetooth (PestoLink).
+Everything for Cornell Cup's RoboCup robots, in one repo:
 
-| Folder | What it is | Details |
+- a **simulator**: 3 v 3 soccer for three-omniwheel robots, with a team AI that
+  plays both sides;
+- **camera tracking**: one overhead camera finds the robots' AprilTags (through
+  PhotonVision) and the ball, in field metres;
+- the **real robots**: XRPs driven over Bluetooth, by hand or by the AI;
+- a **web app** that runs all of it from a browser.
+
+They connect: the camera mirrors the real robots into the sim, and the sim's AI
+can drive the real robots. Start with [Set up](#set-up-step-by-step), then pick
+something from [Play with it](#play-with-it).
+
+| Folder | What it is | Start here |
 | --- | --- | --- |
-| [`sim/`](sim/) | Simulator (Pymunk + Pygame + ZMQ) and robot controllers | [`sim/README.md`](sim/README.md) |
-| [`strategy/`](strategy/) | Team strategy and the RL kick skill | [`strategy/README.md`](strategy/README.md) |
-| [`vision/`](vision/) | Camera tracking of AprilTags (via PhotonVision) and a colored ball, in field metres | [`vision/README.md`](vision/README.md) |
-| [`app/`](app/) | Web app: simulator, field calibration and ball profiles in a browser (`uv run robocup-web`) | [`app/README.md`](app/README.md) |
-| [`robot/`](robot/) | The real XRP robot: MicroPython firmware, and a laptop driver (gamepad / keyboard → Bluetooth) | [`robot/README.md`](robot/README.md) |
+| [`app/`](app/) | The web app, `uv run robocup-web`: simulator, robots, camera setup in a browser | [`app/README.md`](app/README.md) |
+| [`sim/`](sim/) | The simulator: physics, robot controllers, Pygame window, camera mirror | [`sim/README.md`](sim/README.md) |
+| [`strategy/`](strategy/) | The team AI, and the learned (RL) kick | [`strategy/README.md`](strategy/README.md) |
+| [`vision/`](vision/) | Camera tracking of AprilTags and the ball, with PhotonVision | [`vision/README.md`](vision/README.md) |
+| [`robot/`](robot/) | The real XRP robots: firmware, and the laptop driver (gamepad, keyboard, sim) | [`robot/README.md`](robot/README.md) |
 | [`archive/`](archive/) | The original Godot version of the sim, for reference | |
 
-This README is the map and quick reference. Each sub-README has the full flag
-lists, calibration walkthroughs and troubleshooting.
+## Set up step by step
+
+Once per computer. Windows PowerShell shown; the same works on Linux / macOS.
+
+1. **Install uv** (it manages Python and every package):
+   ```powershell
+   winget install --id=astral-sh.uv   # or: pip install uv
+   ```
+2. **Get the code** and go into it:
+   ```powershell
+   git clone https://github.com/cornell-cup/robocup_software.git
+   cd robocup_software
+   ```
+3. **Install everything** into one environment, `.venv/` at the repo root
+   (Python 3.12 is downloaded if you don't have it):
+   ```powershell
+   uv sync                  # add --extra rl if you train or evaluate the RL kick
+   ```
+   Run it again after every `git pull`. From now on, run every command with
+   `uv run ...`, from any folder. There is no venv to activate, and no second
+   venv in any subfolder.
+4. **Check it works**, no hardware needed:
+   ```powershell
+   uv run selfcheck                 # the camera-to-field maths
+   uv run robocup-web               # opens the web app on http://localhost:5801
+   ```
+   In the web app, **Simulator** → **Start simulator**: robots appear on the field.
+
+That's enough for the simulator. The rest is only for what you use:
+
+| To use | Also set up | How |
+| --- | --- | --- |
+| The camera | PhotonVision, once per camera: download, pipeline, lens calibration | Web app header → **Download**, then **Start**; then [PhotonVision setup](vision/tag-tracking/README.md#photonvision-setup) |
+| The camera | The field and ball calibrations, once per room | Web app **Field calibration** and **Ball profile** pages ([app/README.md](app/README.md#try-it)) |
+| A real robot | Flash its firmware and check its motors, once per robot | [robot/README.md](robot/README.md), steps 1–4 |
+| The RL kick | The RL packages (large) | `uv sync --extra rl` |
+
+**VS Code:** open the repo root (`robocup_software`) as the folder and pick
+`.venv\Scripts\python.exe` as the interpreter; `pyrightconfig.json` does the rest.
+
+## Play with it
+
+Each one stands alone; the later ones build on the camera and robot setup above.
+
+### 1. Watch the AI play a simulated game (no hardware)
+
+In the browser: `uv run robocup-web` → **Simulator** → **Start simulator** →
+turn on **Strategy (AI)**. Click the field to send the selected robot
+somewhere, or pick **Keys** and drive it with W A S D, Q E.
+
+Or in a Pygame window:
+
+```powershell
+cd sim
+uv run python run_pipeline.py      # then: 5 = strategy on, click = send robot 0, 4 = drive it with W A S D
+```
+
+### 2. Replay a recorded camera session (no hardware)
+
+```powershell
+cd sim
+uv run python run_pipeline.py --vision ..\vision\test.jsonl --field 1.93 1.32
+```
+
+Robots and the ball move as they did on the real table. In the browser: on the
+Simulator page pick *Robots and ball:* **Recording**.
+
+### 3. Drive a real robot
+
+With a flashed robot switched on and this computer's Bluetooth on:
+
+```powershell
+cd robot
+uv run python -m laptop XRP-01 --keyboard   # W A S D move, Q E turn, Space dribbler
+uv run python -m laptop XRP-01              # or a gamepad
+uv run python -m laptop XRP-01 XRP-02       # several robots, one gamepad each
+```
+
+In the browser: **Robots** page → add `XRP-01` → *Driven by:* **Keyboard** or a gamepad.
+
+### 4. Track the robots and the ball with the camera
+
+PhotonVision running and set up, field and ball calibrated:
+web app **Tracking** page → tag size, ball profile → **Start tracking**. You see
+the camera and the field live; the *Drive robots* card there drives a robot
+while you watch.
+
+From a terminal (measure your tag's black square for `--tag-size`):
+
+```powershell
+cd vision
+uv run track-combined --ball-profile mine --tag-size 0.177
+```
+
+No camera? `uv run photon-sim` stands in for PhotonVision (tags only); see
+[vision/README.md](vision/README.md).
+
+### 5. Mirror the real robots into the sim
+
+The camera's robots and ball appear in the sim and play with the simulated ones.
+In the browser: start tracking (4), then **Simulator** → *Robots and ball:*
+**Live camera** → **Start simulator**. From two terminals:
+
+```powershell
+# terminal 1
+cd vision
+uv run track-combined --ball-profile mine --tag-size 0.177 --zmq-pub "tcp://*:5556"
+# terminal 2
+cd sim
+uv run python run_pipeline.py --vision tcp://localhost:5556 --ignore-tags 0,1,2,3 --field ..\vision\calib\field_pose.json
+```
+
+Each tag on the field claims the lowest free robot (the terminal prints
+`tag 9 -> robot 0`); `--tag-map 9:0` pins it. `--ignore-tags 0,1,2,3` keeps the
+field's corner tags from becoming robots. Add `--json-log runs\myrun.jsonl` to
+the tracker to record the session for (2). Details and troubleshooting:
+[sim/README.md](sim/README.md#vision-mirror).
+
+### 6. Let the AI play the real robots
+
+The loop closes through the camera: the sim sees the real robot, the AI and
+controllers compute its command, and the robot gets it over Bluetooth, only
+while the camera sees it.
+
+1. Do (5), pinning each robot's tag to a sim robot: `--tag-map 9:0,12:1`, or
+   *Tag → robot* on the Simulator page.
+2. Make the robots follow those sim robots: on the **Robots** page set each to
+   **Follow sim** → its robot number, or
+   ```powershell
+   cd robot
+   uv run python -m laptop XRP-01 XRP-02 --sim 0,1
+   ```
+3. Turn strategy on (Game card, or key `5`). Robots 0 and 1 play for real.
+
+Before the first run: the tag's heading must point at the robot's dribbler
+(the tracker's heading offset), and `MAX_EFFORT` in the robot's `config.py`
+caps its speed. Start slow. More in [robot/README.md](robot/README.md), step 7.
+
+## How it fits together
+
+```
+ vision/                                               sim/  and  strategy/
+ ───────                                               ────────────────────
+ PhotonVision → track-combined ── ZMQ :5556 ──→ simulation_node ── :9090 world state ──→ strategy_node
+                               (or .jsonl log)        ↑                    │                    │
+                                                      │                    ↓              :9091 targets
+                                              :9092 wheel cmds        viz_node                  ↓
+                                                      └──────────── robot_node ←── :9093 clicks/keys
+                                                                         │
+                                                              :9094 body cmds (real robots)
+                                                                         ↓
+                                     XRP robots ←── Bluetooth ── python -m laptop --sim / robocup-web Robots page
+```
+
+The loop closes through the camera: a real robot's tag is mirrored into the sim,
+strategy and robot_node compute its command as for any sim robot, and the robot
+gets that command over Bluetooth, only while the camera sees it.
+
+| Port | From → To | Carries |
+| --- | --- | --- |
+| 9090 | sim → robot, strategy, viz | World state JSON (ball + 6 robots; 0–2 blue, 3–5 red) |
+| 9091 | strategy → robot | Autonomous targets |
+| 9092 | robot → sim | Wheel speed commands |
+| 9093 | viz → robot / strategy | Manual targets, strategy / RL / kick toggles |
+| 9094 | robot → real robots | Each robot's command per body axis (`python -m laptop --sim`, the web app's Robots page) |
+| 5556 | tracker → sim | Live camera tracking (`--zmq-pub` / `--vision`) |
+| 5810 | PhotonVision → tracker | NetworkTables: tag corners and lens calibration (the tracker is the server unless `--nt-server`) |
+| 1181 | PhotonVision → tracker | PhotonVision's raw camera stream (MJPEG), for the overlay and the ball |
+| 5800 | browser → PhotonVision | PhotonVision's UI: camera, pipeline, lens calibration |
+| 5801 | browser → robocup-web | This repo's web app: simulator, real robots, field calibration, ball profiles |
 
 ## Repository layout
 
@@ -53,71 +228,26 @@ robocup_software/
 ├── robot/                      # the real XRP robot (from robocup-omnidirectional)
 │   ├── firmware/               # MicroPython for the XRP: robot.py, mixing.py, lib/pestolink.py
 │   ├── laptop/                 # `python -m laptop`: gamepad / keyboard -> PestoLink over BLE
-│   └── tests/                  # unit tests for the packet format and wheel mixing
+│   └── tests/                  # unit tests: packets, wheel mixing, fleet, sim following
 └── archive/godot/              # original Godot version of the sim, reference only
 ```
 
-## How it fits together
+## Reference
 
-```
- vision/                                               sim/  and  strategy/
- ───────                                               ────────────────────
- PhotonVision → track-combined ── ZMQ :5556 ──→ simulation_node ── :9090 world state ──→ strategy_node
-                               (or .jsonl log)        ↑                    │                    │
-                                                      │                    ↓              :9091 targets
-                                              :9092 wheel cmds        viz_node                  ↓
-                                                      └──────────── robot_node ←── :9093 clicks/keys
-                                                                         │
-                                                              :9094 body cmds (real robots)
-                                                                         ↓
-                                     XRP robots ←── Bluetooth ── python -m laptop --sim / robocup-web Robots page
-```
-
-The loop closes through the camera: a real robot's tag is mirrored into the sim,
-strategy and robot_node compute its command as for any sim robot, and the robot
-gets that command over Bluetooth, only while the camera sees it.
-
-| Port | From → To | Carries |
-| --- | --- | --- |
-| 9090 | sim → robot, strategy, viz | World state JSON (ball + 6 robots; 0–2 blue, 3–5 red) |
-| 9091 | strategy → robot | Autonomous targets |
-| 9092 | robot → sim | Wheel speed commands |
-| 9093 | viz → robot / strategy | Manual targets, strategy / RL / kick toggles |
-| 9094 | robot → real robots | Each robot's command per body axis (`python -m laptop --sim`, the web app's Robots page) |
-| 5556 | tracker → sim | Live camera tracking (`--zmq-pub` / `--vision`) |
-| 5810 | PhotonVision → tracker | NetworkTables: tag corners and lens calibration (the tracker is the server unless `--nt-server`) |
-| 1181 | PhotonVision → tracker | PhotonVision's raw camera stream (MJPEG), for the overlay and the ball |
-| 5800 | browser → PhotonVision | PhotonVision's UI: camera, pipeline, lens calibration |
-| 5801 | browser → robocup-web | This repo's web app: simulator, real robots, field calibration, ball profiles |
-
-## Setup
+### Setup details
 
 The whole repo uses **one environment**: `.venv/` at the repo root, set up by
 [uv](https://docs.astral.sh/uv/) from the root `pyproject.toml` and `uv.lock`.
-It has the simulator, the four tracking packages, and pyzmq for linking them.
 Python is 3.12 (pinned by `.python-version`; 3.13 also works). `pyproject.toml`
 still caps it below 3.14 until the rest of the stack (pygame, pymunk, torch) is
-checked there. uv downloads it if you don't have it.
+checked there.
 
 PhotonVision, which detects the AprilTags, is not part of this environment: it
 runs on its own (on a coprocessor or this machine) and the trackers read it
 over NetworkTables with `photonlibpy`, whose version must match the
-PhotonVision build. Set it up once as in
-[tag-tracking's PhotonVision setup](vision/tag-tracking/README.md#photonvision-setup);
-`uv run photon-sim` stands in for it when there is no hardware.
+PhotonVision build. The web app downloads the matching build for you.
 
-```powershell
-winget install --id=astral-sh.uv   # once, if you don't have uv (or: pip install uv)
-
-cd robocup_software
-uv sync                            # create/update .venv
-uv sync --extra rl                 # instead, if you train or evaluate the RL kick skill
-```
-
-Then run everything with `uv run ...`, from **any folder** in the repo. There is
-no venv to activate, and no second venv inside any subfolder.
-
-### uv commands and flags
+#### uv commands and flags
 
 | Command | What it does | When |
 | --- | --- | --- |
@@ -148,7 +278,7 @@ interpreter. The root `pyrightconfig.json` already points there and tells Pylanc
 where the sim's script-style imports (`config`, `strategy.*`) live. Open
 the repo root (`robocup_software`) as the VS Code folder.
 
-### Without uv (pip)
+#### Without uv (pip)
 
 Possible, but you manage the interpreter and install order yourself:
 
@@ -158,20 +288,20 @@ Possible, but you manage the interpreter and install order yourself:
 
 Use one venv for both if you want the tracker and sim to talk to each other.
 
-## Command reference
+### Command reference
 
 Run simulator commands from `sim/` (they use relative paths) and
 tracker commands from `vision/` (so `runs/...` logs land there). Both
 use the same root `.venv`. Commands below are written for uv; with an activated
 pip venv, drop the `uv run`.
 
-### Simulator
+#### Simulator
 
 | Command | What it does |
 | --- | --- |
 | `uv run python run_pipeline.py` | Full game: sim + strategy + robot controller + viewer |
 | `uv run python run_pipeline.py --no-viz` | Headless (CI / SSH) |
-| `uv run python run_pipeline.py --color red` | Strategy controls the red team |
+| `uv run python run_pipeline.py --color red` | The strategy's own team is red (it plans both teams either way) |
 | `uv run python run_pipeline.py --vision ../vision/test.jsonl` | Replay a recorded tracking session into the sim |
 | `uv run python run_pipeline.py --vision tcp://localhost:5556 --ignore-tags 0,1,2,3` | Mirror the live camera into the sim |
 | `uv run python run_pipeline.py --vision tcp://localhost:5556 --field ../vision/calib/field_pose.json` | Live, with the sim field at the real table's size |
@@ -179,7 +309,7 @@ pip venv, drop the `uv run`.
 | `uv run python ../strategy/strategy_node.py` | Strategy node alone |
 | `uv run python robot_node.py` | Controller node alone |
 | `uv run python viz_node.py` | Viewer alone |
-| `uv run robocup-web` | The simulator in a browser instead of the Pygame viewer: start/stop, click/WASD driving, toggles; plus field calibration ([details](app/README.md)) |
+| `uv run robocup-web` | The simulator in a browser instead of the Pygame viewer: start/stop, click/WASD driving, toggles; plus the real robots and the camera setup ([details](app/README.md)) |
 
 **`run_pipeline.py` flags** (the vision flags are passed through to `simulation_node.py`):
 
@@ -205,7 +335,7 @@ pip venv, drop the `uv run`.
 To give a standalone node a custom field size, set `ROBOCUP_FIELD="1.93 1.32"`
 in the environment (`run_pipeline.py` does this for you).
 
-### Viewer controls
+#### Viewer controls
 
 | Input | Action |
 | --- | --- |
@@ -219,7 +349,7 @@ in the environment (`run_pipeline.py` does this for you).
 | `0` | Toggle attacker dribbling |
 | `9` | Toggle ball-stuck reset |
 
-### RL kick skill
+#### RL kick skill
 
 Run from the repo root. Needs the RL extra: `uv sync --extra rl` once, or the
 `--extra rl` in each command below adds it. A trained policy is committed at
@@ -245,7 +375,7 @@ Run from the repo root. Needs the RL extra: `uv sync --extra rl` once, or the
 | `--seed-start N` | eval | First seed, kept apart from training seeds | `10000` |
 | `--stochastic` | eval | Sample actions instead of using the deterministic policy | off |
 
-### Tracker (`vision`)
+#### Tracker (`vision`)
 
 All commands are `uv run <command>`; add `--help` to any for its full flag list.
 
@@ -285,7 +415,7 @@ All commands are `uv run <command>`; add `--help` to any for its full flag list.
 
 Full list: [`vision/README.md`](vision/README.md#flags-that-matter).
 
-### Real robot (`robot`)
+#### Real robot (`robot`)
 
 Run from `robot/`. First-time wiring, flashing and the motor check are in
 [`robot/README.md`](robot/README.md); `uv sync` at the repo root replaces its
@@ -307,60 +437,6 @@ venv / `pip install` step.
 `robot/` started as a copy of
 [robocup-omnidirectional](https://github.com/cornell-cup/robocup-omnidirectional)
 at commit `80eb3ad`; that repo has its history.
-
-## Common workflows
-
-**Play a simulated game:**
-
-```bash
-cd sim
-uv run python run_pipeline.py
-```
-
-**Replay a recording, no camera:**
-
-```bash
-cd sim
-uv run python run_pipeline.py --vision ../vision/test.jsonl --field 1.93 1.32
-```
-
-**Live real robot vs. sim robots** (two terminals):
-
-```bash
-# 1. tracker (PhotonVision set up and its lens calibrated; calibrate-field / calibrate-ball once beforehand)
-cd vision
-uv run track-combined --ball-profile mine --tag-size 0.080 --zmq-pub "tcp://*:5556"
-
-# 2. sim
-cd sim
-uv run python run_pipeline.py --vision tcp://localhost:5556 --ignore-tags 0,1,2,3
-```
-
-Each tag seen on the field claims the lowest free robot (the terminal prints
-`tag 9 -> robot 0`). The strip along the bottom of the sim window shows link
-status, fps and latency. Add `--json-log runs/myrun.jsonl` to the tracker to
-record the session. See the
-[Vision Mirror section](sim/README.md#vision-mirror) for details and
-troubleshooting.
-
-**Real robots played by the strategy** (three terminals, or the web app):
-
-```bash
-# 1. tracker, as above
-# 2. sim, mirroring the camera; pin each robot's tag to a sim robot
-cd sim
-uv run python run_pipeline.py --vision tcp://localhost:5556 --ignore-tags 0,1,2,3 --tag-map 9:0,12:1
-# 3. the robots follow sim robots 0 and 1 over Bluetooth
-cd robot
-uv run python -m laptop XRP-01 XRP-02 --sim 0,1
-```
-
-Turn strategy on (key `5` in the sim window) and robots 0 and 1 play for real.
-Each moves only while the camera sees it. In the web app: start the tracker
-(Tracking), start the sim with **Live camera** (Simulator), then on **Robots** set
-each robot to **Follow sim**. The tag's heading must point at the robot's
-dribbler (the tracker's `--heading-offset`), and `MAX_EFFORT` in the robot's
-`config.py` caps its speed.
 
 ## Status and caveats
 

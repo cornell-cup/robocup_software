@@ -1,18 +1,29 @@
-# XRP Omniwheel Manual Control
+# robot: the real XRP robots
 
-Drive a three-omniwheel XRP robot from a laptop, with a **gamepad** plugged into
-the laptop or with the **laptop keyboard**. Steps 1–6 get one robot driving: wire
-it up, upload the code, drive it. Step 7 drives several at once, lets the
-simulator drive them, or does it all from the web app.
+Firmware and a laptop driver for our three-omniwheel XRP robots. The robot runs
+`firmware/` (MicroPython) and takes drive commands over Bluetooth (PestoLink).
+The laptop sends them: from a gamepad, the keyboard, the web app, or the
+simulator's strategy. The [main README](../README.md) shows how it fits with
+the sim and the camera.
 
 ```
-gamepad / keyboard --> laptop (python -m laptop) --Bluetooth--> XRP robot --> wheels
+gamepad / keyboard / web app / sim --> laptop --Bluetooth--> XRP robot --> wheels, dribbler
 ```
+
+- **Set up**, once per robot: steps 1–4 (wire, laptop, flash, check the motors),
+  and step 5 for a Bluetooth gamepad.
+- **Play:** step 6 drives one robot. Step 7 drives several, lets the simulator
+  drive them, or does it all from the browser.
 
 > **In robocup_software:** skip step 2. Run `uv sync` once at the repo root
 > (it installs bleak, pygame and mpremote into the shared `.venv`), then run
 > every command below from this `robot/` folder with `uv run` in front:
 > `uv run mpremote ...`, `uv run python -m laptop XRP-07`.
+
+USB and Bluetooth do different jobs: **USB** uploads code (`mpremote`) and
+powers the board; **Bluetooth** carries every drive command. Once the code is
+on the robot you can unplug USB. Drive on batteries: on USB power alone the
+motors are weak.
 
 ## What you need
 
@@ -39,8 +50,10 @@ robot from above, with the dribbler (front) pointing toward you**:
                  YOU
 ```
 
-The dribbler plugs into the pin set by `DRIBBLER_PIN` in `firmware/robot.py`
-(pin 16).
+The dribbler is switched by pin 16 (`DRIBBLER_PIN` in `firmware/robot.py`):
+the pin goes low to turn it on, high to turn it off. It is on/off only, no
+speed. Pin 16 can't power a motor itself: wire it to the motor driver or
+transistor that switches the dribbler motor. There is no kicker.
 
 ## 2. Set up the laptop (once)
 
@@ -66,11 +79,18 @@ commands below.
 3. **Name the robot.** Copy the settings file:
 
    ```sh
-   cp firmware/config.example.py firmware/config.py    # Windows: copy firmware\config.example.py firmware\config.py
+   cp firmware/config.example.py firmware/config.py    # PowerShell: Copy-Item firmware\config.example.py firmware\config.py
    ```
 
    Open `firmware/config.py` and set `ROBOT_NAME` to something unique, like
-   `XRP-07`. Only the first 8 characters count, so keep it short.
+   `XRP-07`. Only the first 8 characters count, so keep it short. It is
+   git-ignored: each robot keeps its own. Its settings:
+
+   | Setting | What it does | Start with |
+   |---------|--------------|------------|
+   | `ROBOT_NAME` | The Bluetooth name the laptop looks for (8 characters) | `XRP-01`, `XRP-02`, ... |
+   | `MAX_EFFORT` | Motor power limit, 0..1. Too low and the robot barely moves | `0.5`; raise to `0.8`–`1.0` once it drives right |
+   | `REVERSE_FORWARD` | `True` if W drives it backward while A / D and Q / E are right (Motor L and R swapped) | `False` |
 4. **Upload the code:**
 
    ```sh
@@ -79,9 +99,13 @@ commands below.
    mpremote reset
    ```
 
-   The robot now runs the drive code every time it is switched on.
+   If the first line says `lib` doesn't exist, run `mpremote mkdir :lib` and
+   repeat it. The robot now runs the drive code every time it is switched on.
+   Check the laptop can see it: `python -m laptop --scan` lists `XRP-07`
+   (ignore the `(no name)` devices around you).
 
-Run these upload commands again whenever you change a file in `firmware/`.
+Run these upload commands again whenever you change a file in `firmware/`
+(the code stays on the robot when it is switched off).
 
 ## 4. Check the motors
 
@@ -133,6 +157,10 @@ python -m laptop XRP-07 --keyboard   # with the keyboard
 
 It finds the robot over Bluetooth and connects; this can take a few seconds.
 Press **Ctrl+C** in the terminal (or **Esc** in the keyboard window) to stop.
+
+**Check the directions** the first time, keyboard window selected: **W** drives
+it dribbler first, **A** slides it left, **Q** turns it counter-clockwise seen
+from above. If something is off, see [Troubleshooting](#troubleshooting).
 
 **Gamepad**
 
@@ -191,7 +219,8 @@ robot **only moves while the camera sees it**, and stops when the sim stops.
 
 **From the browser.** The web app's **Robots** page (`uv run robocup-web`, then
 Robots) does all of this with buttons: add robots, drive each one with the
-keyboard or a gamepad, or have it follow a sim robot. Only one program can hold
+keyboard or a gamepad, or have it follow a sim robot. The **Tracking** page has a
+*Drive robots* card too, to drive while you watch the camera. Only one program can hold
 a robot's Bluetooth link: quit `python -m laptop` before using the page, and
 the other way round.
 
@@ -200,11 +229,15 @@ the other way round.
 - **`python -m laptop` says "not found nearby":** check the robot is switched on
   and the name matches `ROBOT_NAME` in `firmware/config.py`. Run
   `python -m laptop --scan` to list what the laptop can see.
-- **Robot switches off when you unplug USB:** the batteries are off or flat.
-  The robot can drive on USB power alone (handy for a first test on the desk),
-  but needs batteries to drive untethered.
-- **Wheels hum but the robot only moves at full stick:** low power. Charge the
-  batteries, or raise `MAX_EFFORT` (below).
+- **Robot switches off when you unplug USB:** the batteries are off or flat:
+  check the power switch, the charge and the battery plug. On USB the board
+  runs even with the switch off, which hides this.
+- **Wheels hum, twitch or barely move, or only one wheel seems to work:** too
+  little power. The motors are weak on USB power alone, so drive on batteries,
+  and raise `MAX_EFFORT` in `firmware/config.py` (try `0.8`–`1.0`). Press `3` in
+  the keyboard window for full speed. Note that W uses only the two front
+  wheels (Motor 4 rolls sideways), A / D drive Motor 4 hardest, and Q / E all
+  three: at low power the weaker ones stall first.
 - **`mpremote` says the port is busy or cannot connect:** close the XRP editor
   tab (and any other program using the robot), then try again.
 - **"Gamepad 0 not found":** switch the gamepad on with its HOME button and
@@ -217,7 +250,17 @@ the other way round.
   `REVERSE_FORWARD = True` in `firmware/config.py` and upload `config.py` and
   `robot.py` again.
 - **Too fast or too slow:** change `MAX_EFFORT` in `firmware/config.py`
-  (0 to 1, starts at 0.5) and upload again.
+  (0 to 1, starts at 0.5) and upload `config.py` again
+  (`mpremote cp firmware/config.py :` then `mpremote reset`).
+- **Space does nothing:** check the dribbler's wiring to pin 16 (see step 1),
+  and that it isn't on USB power alone.
+- **"Bluetooth is off on this computer":** turn Bluetooth on (Windows: Settings >
+  Bluetooth & devices).
+- **Follow sim: the robot never moves:** it only moves while the camera sees its
+  tag. The Robots page says why it is stopped.
+- **Follow sim: it drives the wrong way, but by hand it is right:** the tag's
+  heading doesn't point at the dribbler. Set the tracker's heading offset, or
+  check `--flip-x` / `--flip-y` on the sim.
 
 ## For developers
 
