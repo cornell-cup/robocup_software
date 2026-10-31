@@ -21,7 +21,7 @@ The pipeline runs four independent processes that communicate over ZMQ sockets:
 
 - **SimNode** runs the physics world and publishes robot positions/velocities.
 - **StrategyNode** subscribes to world state, runs autonomous strategy, and publishes target positions.
-- **RobotNode** reads world state, strategy targets, and manual targets, then pushes wheel speed commands.
+- **RobotNode** reads world state, strategy targets, and manual targets, then pushes wheel speed commands. It also publishes each command per body axis on `REAL_PORT`, so real robots can follow sim robots (see [robot/](../robot/)).
 - **VizNode** renders the field and lets the user set targets by clicking. Press **5** to toggle strategy on/off.
 
 ## Key Features
@@ -155,6 +155,7 @@ python viz_node.py                                     # # connects to sim, rend
 | `STRATEGY_PORT` | 9091 | StrategyNode → RobotNode | Autonomous strategy targets (JSON) |
 | `COMMAND_PORT` | 9092 | RobotNode → SimNode | Wheel speed commands (JSON) |
 | `MANUAL_PORT` | 9093 | VizNode → RobotNode | Manual targets + strategy toggle (JSON) |
+| `REAL_PORT` | 9094 | RobotNode → real robots | Every robot's command per body axis, for real XRPs that follow a sim robot (JSON) |
 
 ### Message Formats
 
@@ -174,7 +175,18 @@ python viz_node.py                                     # # connects to sim, rend
 
 // Wheel command (COMMAND_PORT)
 { "robot_id": 0, "wheel_speeds": [0.5, -0.3, 0.8] }
+
+// Real-robot commands (REAL_PORT), one message per world-state frame
+{ "t": 12.3, "robots": { "0": { "forward": 0.8, "left": -0.1, "turn": 0.05,
+                                "dribble": false, "tracked": true } } }
 ```
+
+`forward` / `left` / `turn` are the command robot_node would turn into wheel speeds,
+scaled the same way but expressed per body axis (-1..1, turn counter-clockwise), for a
+robot whose firmware mixes its own wheels. `dribble` is the sim's dribbler state for that
+robot (world state's `dribbling`). `tracked` is true while the camera sees that robot
+(`source: "vision"` and not `stale`); a real robot only follows the command then.
+`robot/laptop/sim_follow.py` and the web app's Robots page read this port.
 
 ## Vision Mirror
 

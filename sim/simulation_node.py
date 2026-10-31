@@ -312,6 +312,11 @@ def main() -> None:
                 winner = "draw"
             print(f"[SimNode] WINNER: {winner}")
 
+        # Whether each dribbler is on, whoever turned it on (strategy or a
+        # human): robot_node passes it on to real robots.
+        for rid, r in state["robots"].items():
+            r["dribbling"] = int(rid) in dribbling
+
         # Publish world state in the historical JSON format.
         out = {
             "t": state["t"],

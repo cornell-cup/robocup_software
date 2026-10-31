@@ -5,6 +5,7 @@ Robot Node — iterative control for each robot.
 Subscribes to world state    (VISION_PORT  ZMQ SUB).
 Subscribes to manual targets (MANUAL_PORT  ZMQ SUB).
 Pushes wheel commands to simulation (COMMAND_PORT ZMQ PUSH).
+Publishes the same commands per body axis for real robots (REAL_PORT ZMQ PUB).
 
 Implements the three controllers from robot.gd:
   2005_INVERSION    — PD Dynamic Inversion (robot.gd calculate_dynamic_inversion)
@@ -39,6 +40,7 @@ from config import (  # noqa: E402
     MPC_DT,
     MPC_HORIZON,
     NUM_ROBOTS,
+    REAL_PORT,
     ROBOT_MASS,
     STRATEGY_PORT,
     VISION_PORT,
@@ -72,6 +74,26 @@ def _inverse_kinematics(vx: float, vy: float, w: float) -> list[float]:
     if max_s > 1.0:
         speeds = [s / max_s for s in speeds]
     return speeds
+
+
+def _body_command(vx: float, vy: float, w: float) -> tuple[float, float, float]:
+    """
+    The same command as _inverse_kinematics, scaled the same way, but per body
+    axis instead of per wheel: (forward, left, turn), each -1..1, turn
+    counter-clockwise. For a real robot, whose firmware mixes its own wheels
+    (robot/firmware/mixing.py).
+    """
+    speeds = [
+        -math.sin(alpha) * vx + math.cos(alpha) * vy + WHEEL_DISTANCE * w
+        for alpha in WHEEL_ANGLES
+    ]
+    max_s = max(abs(s) for s in speeds)
+    scale = 1.0 / max_s if max_s > 1.0 else 1.0
+
+    def clip(v: float) -> float:
+        return max(-1.0, min(1.0, v * scale))
+
+    return clip(vx), clip(vy), clip(WHEEL_DISTANCE * w)
 
 
 # ── controllers ───────────────────────────────────────────────────────────────
@@ -210,6 +232,11 @@ class RobotController:
 
     def compute_wheels(self, rstate: dict[str, float]) -> list[float]:
         """Given robot state dict, return normalised wheel speeds [w0,w1,w2]."""
+        return _inverse_kinematics(*self.compute_command(rstate))
+
+    def compute_command(self, rstate: dict[str, float]) -> tuple[float, float, float]:
+        """Given robot state dict, return the body-frame command (vx, vy, ω)
+        that _inverse_kinematics turns into wheel speeds."""
         pos = np.array([rstate["x"], rstate["y"]])
         vel = np.array([rstate["vx"], rstate["vy"]])
         angle = rstate["angle"]
@@ -217,11 +244,11 @@ class RobotController:
         # ── MANUAL: direct velocity pass-through, no iteration needed ──────────
         if self.mode == "MANUAL":
             if self.direct_vel is None:
-                return [0.0, 0.0, 0.0]
+                return 0.0, 0.0, 0.0
             world_vx, world_vy, w = self.direct_vel
             # Rotate world-frame velocity into the robot's body frame
             local = _rot2d(np.array([world_vx, world_vy]), -angle)
-            return _inverse_kinematics(local[0], local[1], w)
+            return local[0], local[1], w
 
         if self._last_pos is not None:
             self.path_length += float(np.linalg.norm(pos - self._last_pos))
@@ -229,7 +256,7 @@ class RobotController:
         self.total_time += DT
 
         if self.target is None:
-            return [0.0, 0.0, 0.0]
+            return 0.0, 0.0, 0.0
 
         tgt = np.array(self.target)
         dist = float(np.linalg.norm(pos - tgt))
@@ -237,7 +264,7 @@ class RobotController:
         if dist < ARRIVAL_THRESH:
             avg = self.path_length / self.total_time if self.total_time > 0 else 0.0
             self.target = None
-            return [0.0, 0.0, 0.0]
+            return 0.0, 0.0, 0.0
 
         if self.target_angle is not None:
             ta = self.target_angle
@@ -247,8 +274,7 @@ class RobotController:
             ta = math.atan2(dy, dx) if math.hypot(dx, dy) > 0.05 else angle
 
         ctrl = _CONTROLLERS[self.mode]
-        vx, vy, w = ctrl(pos, tgt, vel, angle, ta)
-        return _inverse_kinematics(vx, vy, w)
+        return ctrl(pos, tgt, vel, angle, ta)
 
 
 # ── main loop ─────────────────────────────────────────────────────────────────
@@ -277,10 +303,15 @@ def main() -> None:
     cmd_push = ctx.socket(zmq.PUSH)
     _ = cmd_push.connect(f"tcp://localhost:{COMMAND_PORT}")
 
+    # Every robot's command again, per body axis, for real robots that follow
+    # a sim robot (robot/laptop/sim_follow.py, the web app's Robots page).
+    real_pub = ctx.socket(zmq.PUB)
+    _ = real_pub.bind(f"tcp://*:{REAL_PORT}")
+
     strategy_enabled = False
 
     print(
-        f"[RobotNode] vision←:{VISION_PORT}  manual←:{MANUAL_PORT}  cmds→:{COMMAND_PORT}  strategy←:{STRATEGY_PORT}"
+        f"[RobotNode] vision←:{VISION_PORT}  manual←:{MANUAL_PORT}  cmds→:{COMMAND_PORT}  strategy←:{STRATEGY_PORT}  real→:{REAL_PORT}"
     )
 
     while True:
@@ -352,19 +383,32 @@ def main() -> None:
         except zmq.Again:
             continue
 
+        real: dict[str, dict[str, object]] = {}
         for robot in robots:
             rid_str = str(robot.id)
             if rid_str not in state.get("robots", {}):
                 continue
-            wheel_speeds = robot.compute_wheels(state["robots"][rid_str])
+            rstate = state["robots"][rid_str]
+            command = robot.compute_command(rstate)
             _ = cmd_push.send_string(
                 json.dumps(
                     {
                         "robot_id": robot.id,
-                        "wheel_speeds": wheel_speeds,
+                        "wheel_speeds": _inverse_kinematics(*command),
                     }
                 )
             )
+            forward, left, turn = _body_command(*command)
+            real[rid_str] = {
+                "forward": round(forward, 3),
+                "left": round(left, 3),
+                "turn": round(turn, 3),
+                "dribble": bool(rstate.get("dribbling")),
+                # The camera sees this robot right now. A real robot only
+                # follows its command then: otherwise it would drive blind.
+                "tracked": rstate.get("source") == "vision" and not rstate.get("stale", True),
+            }
+        _ = real_pub.send_string(json.dumps({"t": state.get("t"), "robots": real}))
 
 
 # drain all pending target messages from a SUB socket.

@@ -23,6 +23,7 @@ VISION_PORT = 9090  # SimNode   → RobotNode + VizNode  (world state)
 STRATEGY_PORT = 9091  # StrategyNode → RobotNode        (autonomous targets)
 COMMAND_PORT = 9092  # RobotNode → SimNode              (wheel commands)
 MANUAL_PORT = 9093  # VizNode   → RobotNode            (manual click targets)
+REAL_PORT = 9094  # RobotNode → real robots (robot/laptop/sim_follow.py, the web app)
 
 # ── Field geometry (meters) ──────────────────────────────────────────────────
 # Default 9 x 6. ROBOCUP_FIELD overrides it for every node that imports this
