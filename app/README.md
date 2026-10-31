@@ -21,11 +21,22 @@ fits with the rest.
    **On a Mac** PhotonVision has no release, so the button says **Build** and
    builds the matching version from source (`setup-photonvision` does the
    same). Run `xcode-select --install` first; it fetches everything else, and
-   takes a while. PhotonVision doesn't officially support macOS, so if the
+   takes about 5 minutes and ~3 GB of free disk while it builds (deleted after;
+   the jar left is ~75 MB). The build patches the few things in PhotonVision's
+   source that stop it building or starting on macOS (`pv_install.py`), and the
+   app starts it with `-n` so it leaves the Mac's network settings alone.
+   PhotonVision doesn't officially support macOS, so if the
    camera doesn't appear, give your terminal camera access in System Settings >
-   Privacy & Security. If it still doesn't, run PhotonVision on a Windows or
+   Privacy & Security. An iPhone nearby may show up as a second camera
+   (Continuity Camera): the app picks the camera with a lens calibration, or
+   asks once on the Field calibration page. If it still doesn't, run PhotonVision on a Windows or
    Linux machine with the camera plugged in there, and in step 4 set the
    address to the Mac's IP instead of `127.0.0.1`.
+   After the first connection, the camera and its stream address are
+   remembered (`vision/calib/photonvision.json`, per machine): the Tracking and
+   Ball pages, and the command-line tools, find them without being told. Leave
+   the Stream URL and Camera name boxes empty; the stream's port is the one
+   PhotonVision announces, which changes when cameras are added or removed.
 4. **For the camera pages only:** set PhotonVision up once in its own UI
    (header link, port 5800): add the camera, an AprilTag 36h11 pipeline, lens
    calibration, and NetworkTables Server Address `127.0.0.1`. Step by step:

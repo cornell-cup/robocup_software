@@ -18,12 +18,15 @@ folder, is not downloaded again.
 macOS is the exception: PhotonVision doesn't support it or release a jar for
 it, only builds one in CI, so here the jar is built from the release's source
 the same way. The build fetches what it needs into the folder, all but Apple's
-compiler, and deletes it after.
+compiler, and deletes it after. A release's source does not build for macOS as
+it is; patch_source() and add_mac_natives() make the few changes it needs.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import os
 import platform
 import re
@@ -207,12 +210,17 @@ class Installer:
                   work, env, log, f"getting PhotonVision {version}'s source", step)
         self._run([str(node / "bin" / "npm"), "install", "--prefix", str(pnpm), PNPM],
                   work, env, log, "installing pnpm", step)
+        with log.open("a") as out:
+            for change in patch_source(src):
+                out.write(f"patched: {change}\n")
         self._run(["./gradlew", "--no-daemon", "--console=plain", "photon-targeting:jar",
-                   "photon-server:shadowJar", f"-PArchOverride={plat}"],
+                   "photon-server:shadowJar", *MAC_NATIVE_TASKS, f"-PArchOverride={plat}"],
                   src, env, log, f"building PhotonVision {version}", step)
         built = sorted((src / "photon-server" / "build" / "libs").glob("photonvision-*.jar"))
         if not built:
             raise CommandError(f"the build made no jar; see {log}")
+        step(step="adding PhotonVision's own Mac libraries to the jar")
+        add_mac_natives(built[-1], src)
         built[-1].replace(jar)
         shutil.rmtree(work, ignore_errors=True)
 
@@ -238,6 +246,87 @@ class Installer:
                     step(step=f"{label} ({line[7:].strip()})")
         if p.returncode:
             raise CommandError(f"{label} failed; see {log}")
+
+
+# --------------------------------------------------------------------------
+# What a release's source needs to build and run on macOS.
+# --------------------------------------------------------------------------
+
+#: Development builds a release pins and PhotonVision's Maven server has since
+#: deleted, so a build fails resolving them: the release each one is a commit
+#: or two past. These are the Rockchip/Rubik Pi NPU drivers (Java side only on
+#: a Mac -- their native halves are Linux ARM) and mrcal (which has a Mac build).
+_DEV_PINS = re.compile(r'((?:rknn|rubik|mrcal)Version\s*=\s*")dev-(v[\d.]+)-\d+-g[0-9a-f]+(")')
+
+#: Gradle tasks for photon-targeting's own C++ libraries on macOS. shadowJar
+#: only packs a native library whose platform name matches the build's, and
+#: on a Mac nothing does, so these are built on their own and added by
+#: add_mac_natives().
+MAC_NATIVE_TASKS = ("photon-targeting:photontargetingOsxuniversalReleaseSharedLibrary",
+                    "photon-targeting:photontargetingJNIOsxuniversalReleaseSharedLibrary")
+
+
+def patch_source(src: Path) -> list[str]:
+    """Make a release's source build and start on macOS. Returns what changed.
+    Each change is a no-op on source that no longer needs it."""
+    changes = []
+
+    def edit(rel: str, fn, what: str) -> None:
+        f = src / rel
+        if not f.exists():
+            return
+        old = f.read_text()
+        new = fn(old)
+        if new != old:
+            f.write_text(new)
+            changes.append(what)
+
+    edit("build.gradle", lambda t: _DEV_PINS.sub(r"\1\2\3", t),
+         "NPU/mrcal libraries pinned to their releases (the dev builds are gone)")
+    # The release Rubik driver's create() takes the model path only; the dev
+    # build added a model version. Rubik Pi hardware only, never run on a Mac.
+    edit("photon-core/src/main/java/org/photonvision/vision/objects/RubikObjectDetector.java",
+         lambda t: re.sub(r"RubikJNI\.create\(\s*([^,()]+\(\)\.toString\(\)),\s*"
+                          r"model\.properties\.version\(\)\.ordinal\(\)\)",
+                          r"RubikJNI.create(\1)", t),
+         "Rubik detector call matched to the release driver")
+    # Marked unsupported, so Main refuses to start; nothing else stops it.
+    edit("photon-targeting/src/main/java/org/photonvision/common/hardware/Platform.java",
+         lambda t: t.replace('MACOS("Mac OS", Platform::getUnknownModel, false, OSType.MACOS, false)',
+                             'MACOS("Mac OS", Platform::getUnknownModel, false, OSType.MACOS, true)'),
+         "macOS allowed to start")
+    return changes
+
+
+def add_mac_natives(jar: Path, src: Path) -> None:
+    """Put photon-targeting's Mac libraries into the jar, and into the
+    ResourceInformation.json index the loader extracts from (it loads only
+    what is listed there, checked by MD5)."""
+    libs = [src / "photon-targeting/build/libs/photontargeting/shared/osxuniversal/release"
+            / "libphotontargeting.dylib",
+            src / "photon-targeting/build/libs/photontargetingJNI/shared/osxuniversal/release"
+            / "libphotontargetingJNI.dylib"]
+    missing = [str(p) for p in libs if not p.exists()]
+    if missing:
+        raise CommandError(f"the build made no Mac library {', '.join(missing)}")
+    names = {f"osx/universal/shared/{p.name}": p for p in libs}
+    tmp = jar.with_name(jar.name + ".tmp")
+    with zipfile.ZipFile(jar) as zin, zipfile.ZipFile(tmp, "w", zipfile.ZIP_DEFLATED) as zout:
+        index = json.loads(zin.read("ResourceInformation.json"))
+        hashes = index["platforms"]["osx"]["architectures"]["universal"]["fileHashes"]
+        for name, p in names.items():
+            hashes["/" + name] = hashlib.md5(p.read_bytes()).hexdigest()
+        # The extraction folder is named after this hash: a new one, so a
+        # cache of an older build without these libraries is not reused.
+        index["hash"] = hashlib.md5(json.dumps(hashes, sort_keys=True).encode()).hexdigest()
+        for item in zin.infolist():
+            if item.filename == "ResourceInformation.json" or item.filename in names:
+                continue
+            zout.writestr(item, zin.read(item.filename))
+        zout.writestr("ResourceInformation.json", json.dumps(index))
+        for name, p in names.items():
+            zout.write(p, name)
+    tmp.replace(jar)
 
 
 def _unpack(archive: Path, folder: Path) -> None:

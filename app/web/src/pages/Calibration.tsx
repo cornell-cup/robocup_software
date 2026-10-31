@@ -106,9 +106,9 @@ export function Calibration() {
     }
   }
 
-  const connect = () =>
+  const connect = (camera?: string) =>
     run("/calib/connect", {
-      camera: form.camera.trim() || null,
+      camera: (camera ?? form.camera).trim() || null,
       nt_server: form.ntServer.trim() || null,
       stream: form.streamUrl.trim() || null,
       res: Number(form.resW) && Number(form.resH) ? [Number(form.resW), Number(form.resH)] : null,
@@ -382,10 +382,22 @@ export function Calibration() {
               <p className="muted small">
                 Point PhotonVision's <b>NetworkTables server address</b> at this machine, with an AprilTag 36h11 pipeline and a calibrated lens.
               </p>
-              <button className={`btn block${!pvs || pvs.up ? " primary" : ""}`} disabled={busy || st?.state === "connecting"} onClick={connect}>
+              <button className={`btn block${!pvs || pvs.up ? " primary" : ""}`} disabled={busy || st?.state === "connecting"} onClick={() => connect()}>
                 {st?.state === "connecting" ? "Connecting…" : pvs && !pvs.up ? "Connect (PhotonVision elsewhere)" : "Connect"}
               </button>
-              {st?.state === "error" && st.error && <p className="note error">{st.error}</p>}
+              {st?.state === "error" && st.cameras?.length ? (
+                <div className="stack">
+                  <p className="note">PhotonVision has several cameras. Which one looks at the field?</p>
+                  {st.cameras.map((name) => (
+                    <button key={name} className="btn block" disabled={busy} onClick={() => { set("camera", name); connect(name); }}>
+                      Use {name}
+                    </button>
+                  ))}
+                  <small className="dim">Remembered for next time, here and on the Tracking page.</small>
+                </div>
+              ) : (
+                st?.state === "error" && st.error && <p className="note error">{st.error}</p>
+              )}
               <button className="link" onClick={() => setAdvanced(!advanced)}>{advanced ? "Hide" : "Show"} connection options</button>
               {advanced && (
                 <>

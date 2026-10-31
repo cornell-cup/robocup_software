@@ -148,6 +148,8 @@ export interface CalibCheck {
 export interface CalibStatus {
   state: "disconnected" | "connecting" | "connected" | "error";
   error: string | null;
+  /** PhotonVision's cameras, when it has several and none was picked. */
+  cameras: string[] | null;
   capturing: boolean;
   captured: number;
   setup: {

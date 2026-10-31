@@ -12,6 +12,12 @@ MJPEG stream, which PhotonStream reads for the overlay and the ball tracker.
 The tags never depend on it -- track runs without one (--no-stream) and draws
 on a blank canvas instead.
 
+Which camera and which stream are worked out, not assumed: with several
+cameras, the one used last time (or the only one with a lens calibration);
+the stream on the port PhotonVision announces for it, since ports follow the
+order cameras were added in. What worked is remembered per machine in
+calib/photonvision.json, so the next run, and every other tool, finds them too.
+
 NetworkTables needs one server. By default it runs here, the way a roboRIO
 would on an FRC robot: set PhotonVision's "NetworkTables Server Address"
 (Settings > Networking) to this machine's IP, or 127.0.0.1 if PhotonVision runs
@@ -21,6 +27,9 @@ on this machine too. --nt-server connects to an existing server instead.
 from __future__ import annotations
 
 import argparse
+import json
+import re
+import socket
 import tempfile
 import threading
 import time
@@ -29,6 +38,8 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+
+from vision_core.paths import calib_path
 
 from .detect import TagDetection, diagonal_centre
 
@@ -47,6 +58,57 @@ COMMON_SIZES = [
     (1600, 896), (1600, 900), (1600, 1200), (1920, 1080), (1920, 1200),
     (2560, 1440), (3840, 2160),
 ]
+
+
+#: What worked last time on this machine: camera name and stream URL. Per
+#: machine (gitignored), like the camera numbers it records.
+LINK_FILE = "photonvision.json"
+#: A stream PhotonVision announces, by its cscore server name.
+_INPUT_SERVER = re.compile(r"_Port_(\d+)_Input_MJPEG_Server/streams$")
+
+
+def remembered() -> dict:
+    try:
+        return json.loads(calib_path(LINK_FILE).read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def remember(**values) -> None:
+    d = {**remembered(), **{k: v for k, v in values.items() if v is not None}}
+    try:
+        calib_path(LINK_FILE).parent.mkdir(parents=True, exist_ok=True)
+        calib_path(LINK_FILE).write_text(json.dumps(d, indent=2))
+    except OSError:
+        pass
+
+
+class SeveralCameras(SystemExit):
+    """PhotonVision publishes more than one camera and nothing says which.
+    `names` lets a front end offer them as a choice."""
+
+    def __init__(self, names: list[str]) -> None:
+        super().__init__(f"PhotonVision publishes several cameras ({', '.join(names)}); "
+                         f"pick one with --photon-camera")
+        self.names = names
+
+
+def _share_timesync() -> None:
+    """photonlibpy serves PhotonVision's time sync on UDP 5810 from every
+    process that opens a camera, on a thread it never stops. With two such
+    processes on one machine -- the web app's calibration page and a tracker
+    -- the second bind fails with a traceback that looks fatal and is not:
+    PhotonVision syncs with whichever answers, and only differences between
+    capture times are used here. So don't start a second one."""
+    from photonlibpy.timesync.timeSyncServer import inst
+
+    if inst._process is not None and inst._process.is_alive():
+        return
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        try:
+            s.bind(("0.0.0.0", inst.PORT))
+        except OSError:
+            inst.start = lambda: None  # another program here already serves it
 
 
 def add_photon_args(ap: argparse.ArgumentParser, *, stream_optional: bool = True) -> None:
@@ -154,7 +216,10 @@ class PhotonTags:
         # PhotonVision camera's topics visible, for _find_camera().
         self._topics = ntcore.MultiSubscriber(
             self._inst, ["/photonvision/"], ntcore.PubSubOptions(topicsOnly=True))
+        # The streams PhotonVision announces, for stream_ports().
+        self._streams = ntcore.MultiSubscriber(self._inst, ["/CameraPublisher/"])
         self.name = camera or self._find_camera(timeout_s)
+        _share_timesync()
         self._cam = PhotonCamera(self.name)
         table = self._inst.getTable("photonvision").getSubTable(self.name)
         self._intrinsics = table.getDoubleArrayTopic("cameraIntrinsics").subscribe([])
@@ -173,12 +238,10 @@ class PhotonTags:
         deadline = time.monotonic() + timeout_s
         print("waiting for PhotonVision on NetworkTables ...")
         while time.monotonic() < deadline:
-            names = self._camera_names()
-            if len(names) == 1:
-                return names[0]
-            if len(names) > 1:
-                raise SystemExit(f"PhotonVision publishes several cameras ({', '.join(names)}); "
-                                 f"pick one with --photon-camera")
+            if self._camera_names():
+                time.sleep(0.5)  # cameras announce one by one: let the rest arrive
+                names = self._camera_names()
+                return names[0] if len(names) == 1 else self._choose(names)
             time.sleep(0.1)
         if self.server is None:
             how = ("in its UI (http://<photonvision>:%d) open Settings > Networking and set "
@@ -189,6 +252,44 @@ class PhotonTags:
         raise SystemExit(f"no PhotonVision camera appeared on NetworkTables within "
                          f"{timeout_s:g} s.\nIs PhotonVision running, with a camera enabled? "
                          f"Then {how}.")
+
+    def _choose(self, names: list[str]) -> str:
+        """Several cameras: the one used last time, else the only one with a
+        lens calibration (an iPhone offered by macOS's Continuity Camera, say,
+        has none), else ask."""
+        last = remembered().get("camera")
+        if last in names:
+            print(f"PhotonVision publishes {', '.join(names)}; using '{last}', as last time")
+            return last
+        table = self._inst.getTable("photonvision")
+        subs = {n: table.getSubTable(n).getDoubleArrayTopic("cameraIntrinsics").subscribe([])
+                for n in names}
+        deadline = time.monotonic() + 1.5
+        calibrated: list[str] = []
+        while time.monotonic() < deadline:
+            calibrated = [n for n, sub in subs.items() if _camera_matrix(sub.get()) is not None]
+            if len(calibrated) == len(names):
+                break
+            time.sleep(0.1)
+        for sub in subs.values():
+            sub.close()
+        if len(calibrated) == 1:
+            print(f"PhotonVision publishes {', '.join(names)}; using '{calibrated[0]}', the "
+                  "only one with a lens calibration")
+            return calibrated[0]
+        raise SeveralCameras(names)
+
+    def stream_ports(self, timeout_s: float = 1.5) -> list[int]:
+        """The ports of the raw camera streams PhotonVision announces (its
+        "Input" MJPEG servers), lowest first. Announced by port, not by camera:
+        with several cameras, which is which is not said."""
+        deadline = time.monotonic() + timeout_s
+        while True:
+            ports = sorted({int(m.group(1)) for t in self._inst.getTopics("/CameraPublisher/")
+                            if (m := _INPUT_SERVER.search(t.getName()))})
+            if ports or time.monotonic() >= deadline:
+                return ports
+            time.sleep(0.1)
 
     def _wait_for_intrinsics(self, timeout_s: float) -> tuple[np.ndarray, np.ndarray]:
         deadline = time.monotonic() + timeout_s
@@ -277,10 +378,16 @@ class PhotonStream:
 
     def __init__(self, url: str, size: tuple[int, int] | None, timeout_s: float = 5.0) -> None:
         """`size` None keeps the stream's own resolution: for uses that need
-        the picture but not the pipeline's pixel space (ball colour sampling)."""
+        the picture but not the pipeline's pixel space (ball colour sampling).
+
+        PhotonVision serves its stream shrunk by default (105x60 from a
+        1024x576 pipeline, seen on a real one), and full size only when the
+        URL asks: so `size` is asked for, unless the URL already says."""
         self.url = url
         self._timeout_s = timeout_s
         ms = int(timeout_s * 1000)
+        if size is not None and "resolution=" not in url:
+            url += ("&" if "?" in url else "?") + f"resolution={int(size[0])}x{int(size[1])}"
         self._cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG, [
             cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, ms, cv2.CAP_PROP_READ_TIMEOUT_MSEC, ms])
         if not self._cap.isOpened():
@@ -356,32 +463,60 @@ class PhotonStream:
             self._cap.release()
 
 
-def stream_url(args, tags: PhotonTags) -> str | None:
-    if args.stream:
-        return args.stream
-    host = tags.host()
-    return f"http://{host}:{STREAM_PORT}/stream.mjpg" if host else None
+def stream_urls(args, tags: PhotonTags | None, host: str | None = None) -> list[str]:
+    """The stream URLs worth trying, best first: --stream; the one that worked
+    last time for this camera; the ports PhotonVision announces (first one
+    first); the default port."""
+    host = host or (tags.host() if tags is not None else None) or "127.0.0.1"
+    urls = [getattr(args, "stream", None)]
+    last = remembered()
+    if last.get("stream") and (tags is None or last.get("camera") == tags.name):
+        urls.append(last["stream"])
+    ports = tags.stream_ports() if tags is not None else []
+    urls += [f"http://{host}:{p}/stream.mjpg" for p in ports]
+    urls.append(f"http://{host}:{STREAM_PORT}/stream.mjpg")
+    return list(dict.fromkeys(u for u in urls if u))
+
+
+def open_stream(urls: list[str], size: tuple[int, int] | None,
+                given: str | None = None) -> PhotonStream:
+    """The first of `urls` that opens. `given` (the one a person typed) not
+    being it is said out loud: a Stream URL saved weeks ago, from before
+    PhotonVision's cameras changed order, is the usual reason."""
+    errors = []
+    for url in urls:
+        try:
+            stream = PhotonStream(url, size)
+        except OSError as e:
+            errors.append(str(e))
+            continue
+        if given and url != given:
+            print(f"warning: the stream at {given} did not open; using {url}, where PhotonVision "
+                  f"serves it now (clear the Stream URL setting to stop seeing this)")
+        print(f"camera stream: {url}")
+        return stream
+    raise OSError("; ".join(errors) or "no stream URL to try")
 
 
 def open_photon(args, *, need_stream: bool) -> tuple[PhotonTags, PhotonStream | None]:
     """PhotonTags plus its stream, from add_photon_args()' flags. Without
-    `need_stream`, a stream that will not open is a warning, not an error."""
+    `need_stream`, a stream that will not open is a warning, not an error.
+    The camera and stream that worked are remembered for next time."""
     tags = PhotonTags(args.photon_camera, args.nt_server, args.photon_res)
+    remember(camera=tags.name)
     if getattr(args, "no_stream", False):
         return tags, None
-    url = stream_url(args, tags)
     try:
-        if url is None:
-            raise OSError("cannot tell where PhotonVision runs -- pass --stream URL")
-        stream = PhotonStream(url, tags.size)
-        print(f"camera stream: {url}")
-        return tags, stream
+        stream = open_stream(stream_urls(args, tags), tags.size, getattr(args, "stream", None))
     except OSError as e:
         if need_stream:
-            raise SystemExit(f"{e}\n(the ball tracker needs the picture; check the URL "
-                             f"in PhotonVision's camera view, and pass --stream)") from None
+            raise SystemExit(f"could not open PhotonVision's camera stream ({e}).\n"
+                             f"Is its camera enabled in PhotonVision's UI (port {UI_PORT})? "
+                             f"Otherwise pass the stream's address with --stream.") from None
         print(f"warning: {e} -- tags only, drawn on a blank canvas")
         return tags, None
+    remember(camera=tags.name, stream=stream.url, size=list(tags.size))
+    return tags, stream
 
 
 def blank_frame(size: tuple[int, int]) -> np.ndarray:

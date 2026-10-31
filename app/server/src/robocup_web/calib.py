@@ -71,6 +71,8 @@ class FieldCalibration:
         self._stop = threading.Event()
         self.state = "disconnected"  # connecting | connected | error
         self.error: str | None = None
+        #: PhotonVision's cameras, when it has several and the page must ask which.
+        self.cameras: list[str] | None = None
         self._dets: list = []
         self._dets_t = 0.0
         self._rate = 0.0
@@ -97,7 +99,7 @@ class FieldCalibration:
         with self._lock:
             if self.state in ("connecting", "connected"):
                 raise CommandError("already connected -- disconnect first")
-            self.state, self.error = "connecting", None
+            self.state, self.error, self.cameras = "connecting", None, None
         res = opts.get("res")
         args = SimpleNamespace(
             photon_camera=(opts.get("camera") or None),
@@ -116,6 +118,7 @@ class FieldCalibration:
         except BaseException as e:  # open_photon exits with its message on failure
             with self._lock:
                 self.state, self.error = "error", str(e) or type(e).__name__
+                self.cameras = getattr(e, "names", None)
             return
         if self._stop.is_set():  # disconnected while it was still connecting
             if stream is not None:
@@ -446,6 +449,7 @@ class FieldCalibration:
             out: dict[str, Any] = {
                 "state": self.state,
                 "error": self.error,
+                "cameras": self.cameras,
                 "capturing": self._capturing,
                 "captured": len(self._views),
                 "setup": None if self._setup is None else {
