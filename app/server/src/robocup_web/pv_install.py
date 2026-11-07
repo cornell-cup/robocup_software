@@ -47,6 +47,30 @@ SOURCE_URL = "https://github.com/PhotonVision/photonvision.git"
 JDK_URL = "https://api.adoptium.net/v3/binary/latest/17/ga/{os}/{arch}/jdk/hotspot/normal/eclipse"
 NODE_DIST = "https://nodejs.org/dist/latest-v22.x/"
 PNPM = "pnpm@10"
+#: rubik_jni has no published version 2026.3.4 can compile against. It drives
+#: an AI chip on one Linux board, so a Mac never calls it; this only has to
+#: compile. Same signatures as the classes in the released jar.
+RUBIK_STUB = """\
+package org.photonvision.rubik;
+
+import org.opencv.core.RotatedRect;
+
+public class RubikJNI {
+    public static class RubikResult {
+        public int class_id;
+        public float conf;
+        public RotatedRect rect;
+    }
+
+    public static native long create(String modelPath, int version);
+
+    public static native void destroy(long ptr);
+
+    public static native RubikResult[] detect(long ptr, long imagePtr, double boxThresh, double nmsThresh);
+
+    public static native boolean isQuantized(long ptr);
+}
+"""
 CHUNK = 1 << 16
 
 
@@ -84,6 +108,31 @@ def check_build_tools() -> None:
     if subprocess.run(["xcode-select", "-p"], capture_output=True).returncode:
         raise CommandError("building PhotonVision needs Apple's compiler: run "
                            "xcode-select --install, then try again")
+
+
+def _replace(path: Path, old: str, new: str) -> None:
+    text = path.read_text()
+    if old not in text:
+        raise CommandError(f"can't fix PhotonVision's source: no {old!r} in {path}")
+    path.write_text(text.replace(old, new))
+
+
+def fix_source(src: Path, version: str) -> None:
+    """Make a release's source buildable today. 2026.3.4 pinned development
+    versions of three libraries whose files PhotonVision has since deleted from
+    its Maven server. The releases named here hold classes identical to the
+    ones in its released jar; for rubik_jni, see RUBIK_STUB."""
+    if version != "2026.3.4":
+        return
+    _replace(src / "build.gradle", "dev-v2026.0.1-1-g89b2888", "v2026.0.1")  # rknn_jni
+    _replace(src / "build.gradle", "dev-v2026.0.0-1-g239d80e", "v2026.0.0")  # photon-mrcal
+    _replace(src / "photon-core" / "build.gradle",
+             'implementation("org.photonvision:rubik_jni-java:$rubikVersion") {\n'
+             "        transitive = false\n"
+             "    }\n", "")
+    stub = src / "photon-core" / "src" / "main" / "java" / "org" / "photonvision" / "rubik" / "RubikJNI.java"
+    stub.parent.mkdir(parents=True)
+    stub.write_text(RUBIK_STUB)
 
 
 def node_url(plat: str) -> str:
@@ -205,6 +254,7 @@ class Installer:
         src = work / "photonvision"
         self._run(["git", "clone", "--depth", "1", "--branch", f"v{version}", SOURCE_URL, str(src)],
                   work, env, log, f"getting PhotonVision {version}'s source", step)
+        fix_source(src, version)
         self._run([str(node / "bin" / "npm"), "install", "--prefix", str(pnpm), PNPM],
                   work, env, log, "installing pnpm", step)
         self._run(["./gradlew", "--no-daemon", "--console=plain", "photon-targeting:jar",
