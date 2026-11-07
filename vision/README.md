@@ -1,7 +1,7 @@
 # vision: camera tracking
 
 The camera side of the stack. It finds the robots' AprilTags and the ball in one
-overhead camera and reports them in **metres, in field coordinates**, with
+overhead camera (or [several, for a bigger field](#several-cameras)) and reports them in **metres, in field coordinates**, with
 filtered velocity. The simulator and strategy consume these positions; see the
 [root README](../README.md) for how the pieces fit together.
 
@@ -86,6 +86,90 @@ numbers real.
 
    No robot tag handy? Run `uv run serve-tag`, open the URL it prints on your
    phone, and point the camera at it. Its 80 mm tag is `--tag-size 0.080`.
+
+<a id="several-cameras"></a>
+
+## Several cameras: a bigger field
+
+One camera only covers so much field from the ceiling. Two (or more) cameras
+side by side along the field's length cover more. Each camera is calibrated on
+its own into **the same field coordinates**. The tracker then follows each
+camera separately and blends them into one set of positions. Everything
+downstream (the simulator, strategy, the web app) gets the same document as
+with one camera, with the whole field's size in it.
+
+The method is the one RoboCup Small Size League teams use (TIGERs Mannheim,
+ER-Force): per-camera filters, then a weighted sum. Each camera's estimate is
+predicted to one common instant and weighted by how much it can be trusted
+there. A camera counts for less near its image edges, further from the tag,
+and while it is only coasting. Near its image border its weight fades out
+smoothly, so a robot driving from one camera to the other is blended across,
+not switched. See [`combined-tracking/src/combined_tracking/merge.py`](combined-tracking/src/combined_tracking/merge.py).
+
+**1. Mount the cameras.** Mount them side by side along the field's width (x),
+both looking straight down, with views overlapping by at least ~0.3 m. Measure
+the overlap at robot-top height, not on the floor. Different makes are fine;
+each gets its own lens calibration in PhotonVision. Give each camera a clear
+nickname there (e.g. `left`, `right`), with `left` on the -x end.
+
+**2. Reference tags.** Put tags at the 4 field corners (ids 0-3), plus a pair
+on each seam between two cameras, at the near and far edge (ids 10 and 11 at
+x = W/2 for two cameras). Each camera then sees its own 4 tags, and both
+cameras see the seam pair. That shared pair is what makes their poses agree.
+
+**3. Calibrate each camera.** Easiest: the web app's **Field calibration**
+page. Set **Cameras over the field** to 2, connect to one camera, pick the
+section it covers, then capture, solve and save. Repeat for the other camera.
+Each one is saved as `field_pose_<camera>.json`. A camera calibrated after the
+first starts from the first one's origin, and the page warns if they differ.
+Then **Check the overlap** watches all the cameras at once: a tag sitting still
+where two views overlap should read under 10 mm apart.
+
+Or from a terminal, with the same `--field`, `--tag-size` and origin for every
+camera. `--part K` is the section this camera covers, counting from the -x end:
+
+```powershell
+uv run calibrate-field --split 2 --part 1 --photon-camera left  --field W H --tag-size 0.177
+uv run calibrate-field --split 2 --part 2 --photon-camera right --field W H --tag-size 0.177
+```
+
+This writes `calib/field_pose_left.json` and `calib/field_pose_right.json`.
+Instead of fixed tags, `--sequential` works too: one tag carried to this
+camera's 4 positions in turn.
+
+**4. Track:**
+
+```powershell
+uv run track-combined --photon-camera left --photon-camera right --tag-size 0.177 --ball-profile myball
+```
+
+On the Tracking page, type `left, right` in the PhotonVision camera box. Flags
+that differ per camera are given once per camera, in the same order:
+`--field-pose`, `--stream`, `--photon-res`, and `--ball-profile` (cameras of
+different makes see colour differently). PhotonVision streams its cameras on
+ports 1181, 1183, ... in its own order. The tracker assumes that order matches
+yours and prints each URL, so check them, and pass `--stream` per camera if
+they are wrong.
+
+**5. Check the overlap.** The window header (and `stats.camera_disagreement_m`
+in the output) shows how far apart the two cameras put each tag they both see.
+A tag held still in the overlap should be under ~1 cm. If it is more, no merge
+can hide it: the robot slides by that much crossing over. Recalibrate, and
+check `--tag-height`. A tag-height error shifts the two cameras in opposite
+directions, about 1 cm apart per 1 cm of error. The tracker warns once per tag
+past 2 cm.
+
+**Without hardware:** `photon-sim` can be several cameras. `--fast` skips
+rendering, so it keeps up 30 fps. `--save-poses` writes each camera's true pose:
+
+```powershell
+uv run photon-sim --fast --cameras left right --field 2.6 1.2 --tag-size 0.12 --cam-height 2.6 --save-poses runs/sim
+uv run track-combined --photon-camera left --photon-camera right --tag-size 0.12 --ball-profile myball --field-pose runs/sim/field_pose_left.json --field-pose runs/sim/field_pose_right.json
+```
+
+The moving tag (id 9) is truly at `orbit_trajectory(field)(t)` with `t` the
+wall-clock time, so a `--json-log` can be checked against the truth. Tests:
+`uv run python -m unittest discover -s vision/combined-tracking/tests`.
 
 ## Where to run from
 
