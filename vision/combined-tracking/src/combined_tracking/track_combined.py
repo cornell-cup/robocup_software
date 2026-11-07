@@ -1,6 +1,10 @@
-"""Live tracking of the robot's AprilTag and the ball, together, one camera.
+"""Live tracking of the robot's AprilTag and the ball, together, from one or more cameras.
 
     uv run track-combined --ball-profile test --tag-size 0.080
+
+    # two cameras, each over its part of a bigger field (calibrated with
+    # calibrate-field --split 2 --photon-camera NAME, once per camera):
+    uv run track-combined --photon-camera left --photon-camera right ...
 
 One camera, owned by PhotonVision. The tags come from PhotonVision itself
 (tag_tracking.photon) into the per-tag Kalman filter from tag-tracking; the
@@ -25,6 +29,16 @@ Keys:
     q / Esc  quit            g  grid on/off           t  trails on/off
     m        mask overlay    w  wall / floor          r  reset trails/tracks
     - / =    min ball concentration
+
+Several cameras (--photon-camera once per camera): each runs all of the above
+on its own -- its own field pose (vision/calib/field_pose_<camera>.json by
+default, all in one field frame), tag filter, ball filter and ball profile, on
+its own clock -- and merge.py blends their tracks into one set, as if one
+camera saw the whole field. The output is the same document either way, with
+the whole field's size in it, so the simulator and anything else reading it
+need not know. What it adds is stats.cameras (each camera's own numbers) and
+stats.camera_disagreement_m: for every tag two cameras see at once, how far
+apart they put it -- the live check that their calibrations agree.
 
 With --no-window there is no window and no keys: nothing is drawn at all, and
 Ctrl+C quits. That is the mode for when the only reader is another program
@@ -57,7 +71,12 @@ from ball_tracking.track_ball import GHOST_COLOR as BALL_GHOST_COLOR
 from tag_tracking.detect import for_tracking
 from tag_tracking.filter import SPEED_EPS as TAG_SPEED_EPS
 from tag_tracking.filter import TagFieldState, TagTracker
-from tag_tracking.photon import add_photon_args, open_photon
+from tag_tracking.photon import (
+    add_photon_args,
+    camera_names,
+    close_photon_cameras,
+    open_photon_cameras,
+)
 from tag_tracking.pose import TagFieldPose, tag_field_pose
 from tag_tracking.track import GHOST_COLOR as TAG_GHOST_COLOR
 from tag_tracking.track import VELOCITY_COLOR, draw_tag_marks
@@ -80,6 +99,8 @@ from vision_core.planview import (
     side_by_side,
 )
 
+from .merge import BallMerger, CameraBall, CameraGeometry, CameraTags, TagMerger
+
 TAG_TRAIL_LEN = 90
 BALL_TRAIL_LEN = 120
 HEADER_H = 38  # px, the band above the camera image
@@ -96,6 +117,11 @@ TAG_STALE_S = 0.25
 #: --mjpeg: frames a second sent to a viewer. Encoding every frame costs more
 #: than drawing it, and a person watching needs far fewer.
 VIDEO_FPS = 15
+#: Several cameras: each one's outline on the plan view, and its name on its picture.
+FOOTPRINT_COLORS = [(255, 200, 80), (80, 200, 255), (200, 120, 255), (120, 255, 160)]
+#: Several cameras: a pose file's field size or origin this far (m) from the
+#: first camera's is a different field frame, not rounding.
+POSE_MATCH_M = 1e-3
 
 
 # --------------------------------------------------------------------------
@@ -116,13 +142,15 @@ def draw_combined_readout(
     intr_source: str,
     fps: float,
     tag_rows: int = 1,
+    head: str | None = None,
 ) -> np.ndarray:
     """Header (what's calibrated, fps), then one line per tag, then the ball.
 
     Returns `frame` with a header band above it and the readout band below, so
     no text covers the camera image. The bottom band has room for `tag_rows`
     tag lines (more if more tags are on screen); pass the most seen so far so
-    the window does not change size every time a tag comes and goes.
+    the window does not change size every time a tag comes and goes. `head`
+    replaces the one-camera header line (several cameras say their own).
     """
     w = frame.shape[1]
     n_tag_lines = max(len(tag_states), tag_rows, 1)
@@ -131,11 +159,13 @@ def draw_combined_readout(
     frame = cv2.copyMakeBorder(frame, HEADER_H, strip_h, 0, 0,
                                cv2.BORDER_CONSTANT, value=(0, 0, 0))
     h = frame.shape[0]
-    head = (
-        f"{transform.source}  |  tag {tag_size * 1000:.0f}mm  |  "
-        f"ball '{ball_name}' r={ball_radius_m * 1000:.0f}mm  |  "
-        f"fx {K[0, 0]:.0f} ({intr.hfov_of(K, w):.0f} deg HFOV, {intr_source})  |  {fps:4.1f} fps"
-    )
+    if head is None:
+        head = (
+            f"{transform.source}  |  tag {tag_size * 1000:.0f}mm  |  "
+            f"ball '{ball_name}' r={ball_radius_m * 1000:.0f}mm  |  "
+            f"fx {K[0, 0]:.0f} ({intr.hfov_of(K, w):.0f} deg HFOV, {intr_source})  |  "
+            f"{fps:4.1f} fps"
+        )
     cv2.putText(frame, head, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.48,
                 (220, 220, 220), 1, cv2.LINE_AA)
 
@@ -199,12 +229,22 @@ def draw_combined_plan(
     tag_trails: dict[int, deque],
     ball_state: BallFieldState | None,
     ball_trail: deque,
-    transform: CameraFieldTransform,
+    transform: CameraFieldTransform | list,
     show_trails: bool,
+    footprints: list[tuple[str, list[tuple[float, float]]]] | None = None,
 ) -> np.ndarray:
-    """One plan-view panel with every tag and the ball on it."""
+    """One plan-view panel with every tag and the ball on it. `transform` may
+    be one per camera; `footprints` outlines what each camera sees."""
     panel = plan.base()
-    plan.draw_camera(panel, transform)
+    for i, (name, outline) in enumerate(footprints or []):
+        pts = np.array([plan.to_px(x, y) for x, y in outline], np.int32)
+        col = FOOTPRINT_COLORS[i % len(FOOTPRINT_COLORS)]
+        cv2.polylines(panel, [pts], True, col, 1, cv2.LINE_AA)
+        top = min(outline, key=lambda p: -p[1])
+        cv2.putText(panel, name, plan.to_px(*top), cv2.FONT_HERSHEY_SIMPLEX, 0.4,
+                    col, 1, cv2.LINE_AA)
+    for t in (transform if isinstance(transform, list) else [transform]):
+        plan.draw_camera(panel, t)
 
     if show_trails:
         for tid, trail in tag_trails.items():
@@ -574,6 +614,197 @@ def _new_ball_tracker(args, color, transform, K, field) -> BallTracker:
     )
 
 
+def camera_footprint(transform: CameraFieldTransform, K: np.ndarray, size: tuple[int, int],
+                     z: float = 0.0, steps: int = 8) -> list[tuple[float, float]]:
+    """What one camera sees of the plane `z` metres above the field: its image
+    border traced onto that plane, in field (x, y). Points whose ray misses the
+    plane are left out."""
+    w, h = size
+    border = ([(w * i / steps, 0.0) for i in range(steps)]
+              + [(float(w), h * i / steps) for i in range(steps)]
+              + [(w * (steps - i) / steps, float(h)) for i in range(steps)]
+              + [(0.0, h * (steps - i) / steps) for i in range(steps)])
+    cam = transform.camera_origin_in_field()
+    Kinv = np.linalg.inv(K)
+    out = []
+    for u, v in border:
+        ray = transform.direction_to_field(Kinv @ np.array([u, v, 1.0]))[0]
+        if abs(ray[2]) < 1e-9:
+            continue
+        s = (z - cam[2]) / ray[2]
+        if s > 0:
+            p = cam + s * ray
+            out.append((float(p[0]), float(p[1])))
+    return out
+
+
+class CameraPipeline:
+    """One camera's whole tracking chain: its PhotonVision tags and stream,
+    its field pose, its own tag and ball filters, on its own clock. With one
+    camera this is exactly what track-combined always ran; with several, one
+    of these per camera, and merge.py combines what they report."""
+
+    def __init__(self, args, tags, stream, transform: CameraFieldTransform, color,
+                 field: Field, synthetic: bool) -> None:
+        self.tags, self.stream = tags, stream
+        self.name: str = tags.name
+        self.color = color
+        self.size: tuple[int, int] = tags.size
+        self.K, self.dist, self.intr_source = tags.K, tags.dist, tags.source
+        # Whole-frame undistortion: the ball detector searches the entire
+        # image, so it (and the overlay drawn on top of it) need to share one
+        # undistorted pinhole space with the tag corners -- see
+        # vision_core.intrinsics.undistort_maps.
+        self.undistort_maps = intr.undistort_maps(self.K, self.dist, *self.size)
+        self.tag_tracker = TagTracker(field, sigma_a=args.tag_sigma_a,
+                                      sigma_alpha_deg=args.tag_sigma_alpha,
+                                      max_coast_s=args.tag_coast)
+        self.off_plane = OffPlaneWatch(synthetic=synthetic)
+        self.set_transform(args, transform, field)
+
+        self.last_t = time.perf_counter()
+        self.fps = 0.0
+        self.frame: np.ndarray | None = None  # newest, undistorted, not drawn on
+        self.t_capture: float | None = None  # time.time() of that frame
+        self.tag_last_t: float | None = None  # PhotonVision's clock: last result's capture
+        self.tag_last_perf = self.last_t  # ours, when that result was taken in
+        self.t_tags: float | None = None  # time.time() instant tag_states are for
+        self.dets: list = []
+        self.tag_poses: list[TagFieldPose] = []
+        self.tag_states: list[TagFieldState] = []
+        self.tag_latency_ms = 0.0
+        self.tag_skipped = 0
+        self.ball_state: BallFieldState | None = None
+        self.tag_ms = 0.0
+        self.ball_ms = 0.0
+
+    def set_transform(self, args, transform: CameraFieldTransform, field: Field) -> None:
+        """A new field pose (the w key's made-up field): the ball filter is
+        built around it, so it starts over too."""
+        self.transform = transform
+        self.geometry = CameraGeometry(self.name, transform, self.K, self.size)
+        self.ball_tracker = _new_ball_tracker(args, self.color, transform, self.K, field)
+
+    def reset(self, args, field: Field) -> None:
+        self.tag_tracker.reset()
+        # BallTracker has no reset() -- rebuilding it is the reset. Leaving this
+        # out makes `r` clear the tag tracks while silently keeping the ball
+        # track, which may be exactly the thing you pressed `r` to get rid of.
+        self.ball_tracker = _new_ball_tracker(args, self.color, self.transform, self.K, field)
+
+    def step(self, got: tuple[np.ndarray, float, float], args, field: Field,
+             seeds: dict[int, TagFieldState] | None = None) -> None:
+        """One stream frame: the ball steps on it, and the tags on whatever
+        PhotonVision result arrived since. `seeds`, the merged tracks of
+        several cameras, start this camera's new tracks moving (see
+        TagTracker.update)."""
+        frame, self.t_capture, t_perf = got
+        # dt between *captures*, not between loop iterations: when the stream
+        # drops a frame, the ball filter is told the real gap.
+        dt = t_perf - self.last_t
+        self.last_t = t_perf
+        if dt > 0:  # the first frame can predate the loop's clock
+            self.fps = 0.9 * self.fps + 0.1 / dt
+        if self.undistort_maps is not None:
+            frame = cv2.remap(frame, *self.undistort_maps, cv2.INTER_LINEAR)
+        self.frame = frame
+
+        t0 = time.perf_counter()
+        result = self.tags.poll()
+        if result is not None:
+            # Tags step by PhotonVision's capture times, not this loop's:
+            # results arrive on their own schedule, not with the frames.
+            tag_dt = 0.0 if self.tag_last_t is None else max(0.0, result.t - self.tag_last_t)
+            self.tag_last_t, self.tag_last_perf = result.t, t0
+            self.t_tags = result.t_wall
+            self.tag_latency_ms = result.latency_ms
+            self.tag_skipped += result.skipped
+            self.dets = for_tracking(result.detections, self.K, self.dist, args.tag_size)
+            self.tag_poses = [
+                tag_field_pose(d, self.transform, field, args.heading_offset, K=self.K,
+                               tag_height=args.tag_height)
+                for d in self.dets
+            ]
+            self.tag_states = self.tag_tracker.update(self.tag_poses, tag_dt, seeds)
+            self.off_plane.add(self.tag_poses)
+        elif self.tag_last_t is not None and t0 - self.tag_last_perf > TAG_STALE_S:
+            # PhotonVision went quiet. Step on as if it saw nothing, so the
+            # tracks coast and drop; both clocks move by the gap, which keeps
+            # the next result's dt right.
+            gap = t0 - self.tag_last_perf
+            self.tag_last_t += gap
+            self.tag_last_perf = t0
+            if self.t_tags is not None:
+                self.t_tags += gap
+            self.dets, self.tag_poses = [], []
+            self.tag_states = self.tag_tracker.update([], gap)
+        t1 = time.perf_counter()
+        self.ball_state = self.ball_tracker.update(frame, dt)
+        t2 = time.perf_counter()
+        self.tag_ms, self.ball_ms = (t1 - t0) * 1000.0, (t2 - t1) * 1000.0
+
+    def draw(self, field: Field, show_grid: bool, show_mask: bool,
+             label: tuple[int, int, int] | None = None) -> np.ndarray:
+        """This camera's picture with its own overlays: the field as it sees
+        it, its tags, its ball. `label` puts its name in the corner."""
+        assert self.frame is not None
+        frame = self.frame.copy() if label is not None else self.frame
+        draw_field(frame, field, self.transform, self.K, show_grid)
+        for d, pose in zip(self.dets, self.tag_poses):
+            draw_tag_marks(frame, d, pose, color_for(pose.tag_id))
+        draw_ball_marks(frame, self.ball_tracker, self.ball_state, show_mask)
+        if label is not None:
+            text = f"{self.name}  {self.fps:4.1f} fps"
+            cv2.rectangle(frame, (0, 0), (16 + 11 * len(text), 30), (0, 0, 0), -1)
+            cv2.putText(frame, text, (8, 21), cv2.FONT_HERSHEY_SIMPLEX, 0.6, label, 2,
+                        cv2.LINE_AA)
+        return frame
+
+    def stats(self) -> dict:
+        return {
+            "fps": self.fps,
+            "photon_latency_ms": self.tag_latency_ms,
+            "photon_skipped": self.tag_skipped,
+            "capture_dropped": self.stream.dropped,
+            "tags_seen": [s.tag_id for s in self.tag_states if s.visible],
+            "ball_visible": bool(self.ball_state is not None and self.ball_state.visible),
+        }
+
+
+def load_camera_poses(paths: list[Path], names: list[str], use_origin: bool,
+                      field_arg) -> tuple[list[ReferenceTagFieldTransform], Field]:
+    """Every camera's measured pose, and the one field they all share.
+
+    They must all be in the same field frame -- same field size, same origin
+    -- or one camera's (1, 0) is another's (1.3, 0) and merging them is
+    meaningless; that is refused here, not discovered later as jumping robots.
+    """
+    missing = [(n, p) for n, p in zip(names, paths) if not p.exists()]
+    if missing:
+        raise SystemExit(
+            "no field pose for camera(s) " + ", ".join(f"'{n}' ({p})" for n, p in missing)
+            + f"\ncalibrate each one: uv run calibrate-field --split {len(names)} "
+              f"--photon-camera NAME --part K ... (or pass --field-pose once per camera)")
+    poses = [ReferenceTagFieldTransform.load(p, use_origin=use_origin) for p in paths]
+    for n, p, t in zip(names[1:], paths[1:], poses[1:]):
+        a, b = poses[0], t
+        if (a.field_size is not None and b.field_size is not None
+                and not np.allclose(a.field_size, b.field_size, atol=POSE_MATCH_M)):
+            raise SystemExit(f"camera '{n}' ({p.name}) was calibrated for a "
+                             f"{b.field_size[0]:g} x {b.field_size[1]:g} m field, camera "
+                             f"'{names[0]}' ({paths[0].name}) for {a.field_size[0]:g} x "
+                             f"{a.field_size[1]:g}: recalibrate them with the same --field")
+        oa, ob = a.origin, b.origin
+        if (oa is None) != (ob is None) or (oa is not None and not np.allclose(
+                oa, ob, atol=POSE_MATCH_M)):
+            raise SystemExit(f"camera '{n}' ({p.name}) has origin {ob}, camera "
+                             f"'{names[0]}' ({paths[0].name}) has {oa}: they must share one. "
+                             f"Re-pick it with calibrate-field --pick-origin --origin X Y "
+                             f"--out <file> for each (or pass --corner-origin)")
+    field = resolve_field(field_arg, paths[0])
+    return poses, field
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(
         description=__doc__.splitlines()[0],
@@ -601,9 +832,11 @@ def main() -> None:
                          "the robot really did leave, and slower re-acquire after "
                          "it is picked up and moved")
     # -- ball-specific ---------------------------------------------------
-    ap.add_argument("--ball-profile", default="test",
+    ap.add_argument("--ball-profile", default=None, action="append",
                     help="named color profile from calib/ball_color.json "
-                         "(default 'test'; make one with 'uv run calibrate-ball')")
+                         "(default 'test'; make one with 'uv run calibrate-ball'). With "
+                         "several cameras, once for all of them or once per camera: "
+                         "cameras of different makes see the ball's colour differently")
     ap.add_argument("--ball-radius", type=float, default=None,
                     help="override the profile's ball RADIUS, in metres")
     ap.add_argument("--ball-sigma-a", type=float, default=3.0,
@@ -645,9 +878,11 @@ def main() -> None:
     ap.add_argument("--pitch", type=float, default=90.0,
                     help="floor mode: camera downward tilt from horizontal, degrees "
                          "(90 = straight down, directly over the field centre)")
-    ap.add_argument("--field-pose", type=str, default=None,
+    ap.add_argument("--field-pose", type=str, default=None, action="append",
                     help="measured field pose to load (default vision/calib/field_pose.json, "
-                         "written by calibrate-field)")
+                         "written by calibrate-field). With several cameras, once per "
+                         "camera, in --photon-camera order (default "
+                         "vision/calib/field_pose_<camera>.json)")
     ap.add_argument("--corner-origin", action="store_true",
                     help="ignore any custom origin saved by calibrate-field and report "
                          "positions from the first field corner, as before")
@@ -700,7 +935,7 @@ def main() -> None:
                          "shows through --mjpeg. Keys change only what is drawn, so "
                          "without a window or --mjpeg only r, q and the ball "
                          "concentration do anything")
-    add_photon_args(ap, stream_optional=False)
+    add_photon_args(ap, stream_optional=False, multi=True)
     args = ap.parse_args()
     if args.zmq_pub:
         import_zmq()  # fail now, not after PhotonVision has been connected to
@@ -717,66 +952,101 @@ def main() -> None:
         print(f"{color_file()}: {', '.join(sorted(profiles)) or '(none yet)'}")
         return
 
-    color = load_profile(args.ball_profile)
-    if args.ball_radius is not None:
-        color.radius_m = float(args.ball_radius)
+    names = camera_names(args)
+    n_cams = len(names)
+    multi = n_cams > 1
+    profile_names = args.ball_profile or ["test"]
+    if len(profile_names) == 1:
+        profile_names = profile_names * n_cams
+    elif len(profile_names) != n_cams:
+        raise SystemExit(f"--ball-profile was given {len(profile_names)} times for {n_cams} "
+                         f"cameras: once for all of them, or once per --photon-camera")
+    colors = []
+    for pname in profile_names:
+        color = load_profile(pname)
+        if args.ball_radius is not None:
+            color.radius_m = float(args.ball_radius)
+        colors.append(color)
+    color = colors[0]  # for the one-camera readout
 
     mode = args.mode
-    pose_path = Path(args.field_pose) if args.field_pose else field_pose_path()
-    field = resolve_field(args.field, None if args.synthetic_field else pose_path)
-    using_calibrated = pose_path.exists() and not args.synthetic_field
-    if using_calibrated:
-        transform = ReferenceTagFieldTransform.load(
-            pose_path, use_origin=not args.corner_origin)
-        print(f"loaded calibrated field pose from {pose_path}")
+    if not multi:
+        pose_path = Path(args.field_pose[-1]) if args.field_pose else field_pose_path()
+        field = resolve_field(args.field, None if args.synthetic_field else pose_path)
+        using_calibrated = pose_path.exists() and not args.synthetic_field
+        if using_calibrated:
+            transforms = [ReferenceTagFieldTransform.load(
+                pose_path, use_origin=not args.corner_origin)]
+            print(f"loaded calibrated field pose from {pose_path}")
+        else:
+            transforms = [build_transform(args, field, mode)]
     else:
-        transform = build_transform(args, field, mode)
-    if getattr(transform, "origin", None) is not None:
-        field = field.relative_to(transform.origin)
-        print(f"custom origin: (0, 0) is ({transform.origin[0]:g}, {transform.origin[1]:g}) m "
+        if args.synthetic_field:
+            raise SystemExit("several cameras need their measured field poses: the made-up "
+                             "field only places one camera (drop --synthetic-field)")
+        if args.field_pose and len(args.field_pose) != n_cams:
+            raise SystemExit(f"--field-pose was given {len(args.field_pose)} times for "
+                             f"{n_cams} cameras: once per --photon-camera, or not at all")
+        pose_paths = ([Path(p) for p in args.field_pose] if args.field_pose
+                      else [field_pose_path(n) for n in names])
+        transforms, field = load_camera_poses(pose_paths, names, not args.corner_origin,
+                                              args.field)
+        using_calibrated = True
+        for n, p in zip(names, pose_paths):
+            print(f"camera '{n}': field pose from {p}")
+    origin = getattr(transforms[0], "origin", None)
+    if origin is not None:
+        field = field.relative_to(origin)
+        print(f"custom origin: (0, 0) is ({origin[0]:g}, {origin[1]:g}) m "
               f"from the first corner (--corner-origin to ignore)")
         # On screen too, so a custom zero is never a surprise.
-        transform.source += f", origin ({transform.origin[0]:g}, {transform.origin[1]:g})"
+        for t in transforms:
+            t.source += f", origin ({origin[0]:g}, {origin[1]:g})"
 
-    # The stream reads on its own thread from here on, keeping only the newest
+    # Each stream reads on its own thread from here on, keeping only the newest
     # frame, so a frame is never older than the one PhotonVision sent last.
-    tags, stream = open_photon(args, need_stream=True)
+    opened = open_photon_cameras(args, need_stream=True)
     http_server = None
     zmq_pub = None
     json_log_file = None
+    video = None
 
     try:
-        w, h = tags.size
-        K, dist, intr_source = tags.K, tags.dist, tags.source
+        cams = [CameraPipeline(args, tags, stream, t, c, field, not using_calibrated)
+                for (tags, stream), t, c in zip(opened, transforms, colors)]
+        tag_merger = TagMerger(field, tag_height=args.tag_height, tag_size=args.tag_size)
+        ball_merger = BallMerger(field)
+        if multi:
+            footprints = [(c.name, camera_footprint(c.transform, c.K, c.size, args.tag_height))
+                          for c in cams]
+            tile_h = max(c.size[1] for c in cams)
+        else:
+            footprints = None
+            tile_h = cams[0].size[1]
 
-        tag_tracker = TagTracker(field, sigma_a=args.tag_sigma_a,
-                                 sigma_alpha_deg=args.tag_sigma_alpha,
-                                 max_coast_s=args.tag_coast)
-        ball_tracker = _new_ball_tracker(args, color, transform, K, field)
-
-        plan = PlanView(field, height=h, mode=mode)
+        plan = PlanView(field, height=tile_h, mode=mode)
         readout_rows = 1  # most tag lines shown so far; the bottom band only grows
         tag_trails: dict[int, deque] = defaultdict(lambda: deque(maxlen=TAG_TRAIL_LEN))
         ball_trail: deque = deque(maxlen=BALL_TRAIL_LEN)
 
         show_grid, show_trails, show_mask = True, True, True
-        fps = 0.0
-        off_plane = OffPlaneWatch(synthetic=not using_calibrated)
         seq = 0
         ball_dropouts = 0
         run_id = time.strftime("%Y%m%d-%H%M%S")
         frame_no = 0
 
-        # Whole-frame undistortion: the ball detector searches the entire
-        # image, so it (and the overlay drawn on top of it) need to share one
-        # undistorted pinhole space with the tag corners -- see
-        # vision_core.intrinsics.undistort_maps.
-        undistort_maps = intr.undistort_maps(K, dist, w, h)
-
-        print(f"\nfield {field.width:g} x {field.height:g} m, {transform.source}")
+        print(f"\nfield {field.width:g} x {field.height:g} m")
+        for c in cams:
+            print(f"camera '{c.name}': {c.transform.source}; intrinsics: {c.intr_source}"
+                  + (f"; ball '{c.color.name}'" if multi else ""))
         print(f"tag size {args.tag_size * 1000:.1f} mm, "
               f"ball '{color.name}' r={color.radius_m * 1000:.0f} mm")
-        print(f"intrinsics: {intr_source}")
+        if multi:
+            for (n, outline), c in zip(footprints, cams):
+                if outline:
+                    xs, ys = [p[0] for p in outline], [p[1] for p in outline]
+                    print(f"camera '{n}' sees x {min(xs):+.2f}..{max(xs):+.2f}, "
+                          f"y {min(ys):+.2f}..{max(ys):+.2f} m at tag height")
         if json_out is not None:
             print(f"writing live state to {json_out} every frame")
         if json_log_path is not None:
@@ -803,67 +1073,52 @@ def main() -> None:
             print("window open -- q or Esc to quit\n")
             cv2.namedWindow(win, cv2.WINDOW_AUTOSIZE)
 
-        last_t = time.perf_counter()
-        tag_last_t = None  # PhotonVision's clock: the last result's capture time
-        tag_last_perf = last_t  # ours, when that result was taken in
-        t_tags = None  # time.time() instant tag_states are for (t_tags in the doc)
-        dets: list = []
-        tag_poses: list[TagFieldPose] = []
-        tag_states: list[TagFieldState] = []
-        tag_latency_ms = 0.0
-        tag_skipped = 0
+        warned_disagree: set[int] = set()
+        tag_states: list[TagFieldState] = []  # the last merge's
         try:
             while True:
-                got = stream.read()
-                if got is None:
-                    print("PhotonVision's stream stopped sending frames")
-                    break
-                frame, t_capture, t_perf = got
+                if not multi:
+                    # One camera: block on its stream, exactly as always.
+                    got = cams[0].stream.read()
+                    if got is None:
+                        print("PhotonVision's stream stopped sending frames")
+                        break
+                    cams[0].step(got, args, field)
+                else:
+                    # Several: take whichever have a new frame, never waiting
+                    # on one while another has something.
+                    stepped = False
+                    seeds = {s.tag_id: s for s in tag_states}
+                    for c in cams:
+                        got = c.stream.try_read()
+                        if got is not None:
+                            c.step(got, args, field, seeds)
+                            stepped = True
+                    failed = [c.name for c in cams if c.stream.failed]
+                    if failed:
+                        print(f"PhotonVision's stream stopped sending frames for camera(s) "
+                              f"{', '.join(failed)}")
+                        break
+                    if not stepped:
+                        time.sleep(0.002)
+                        continue
+                    if any(c.frame is None for c in cams):
+                        continue  # not every camera has a picture yet
                 frame_no += 1
-                # dt between *captures*, not between loop iterations: when the
-                # stream drops a frame, the ball filter is told the real gap.
-                dt = t_perf - last_t
-                last_t = t_perf
-                if dt > 0:  # the first frame can predate the loop's clock
-                    fps = 0.9 * fps + 0.1 / dt
+                t_perf = time.perf_counter()
 
-                if undistort_maps is not None:
-                    frame = cv2.remap(frame, *undistort_maps, cv2.INTER_LINEAR)
+                tag_states, t_tags = tag_merger.merge(
+                    [CameraTags(c.geometry, c.tag_states, c.t_tags) for c in cams])
+                ball_state, _t_ball = ball_merger.merge(
+                    [CameraBall(c.geometry, c.ball_state, c.t_capture) for c in cams])
+                t_capture = max(c.t_capture for c in cams if c.t_capture is not None)
+                for tid, d in tag_merger.disagreement.items():
+                    if d > 0.02 and tid not in warned_disagree:
+                        warned_disagree.add(tid)
+                        print(f"warning: the cameras put tag {tid} {d * 100:.1f} cm apart where "
+                              f"they overlap (want under ~1 cm): their field poses disagree "
+                              f"-- recalibrate, and check --tag-height")
 
-                t0 = time.perf_counter()
-                result = tags.poll()
-                if result is not None:
-                    # Tags step by PhotonVision's capture times, not this loop's:
-                    # results arrive on their own schedule, not with the frames.
-                    tag_dt = 0.0 if tag_last_t is None else max(0.0, result.t - tag_last_t)
-                    tag_last_t, tag_last_perf = result.t, t0
-                    t_tags = result.t_wall
-                    tag_latency_ms = result.latency_ms
-                    tag_skipped += result.skipped
-                    dets = for_tracking(result.detections, K, dist, args.tag_size)
-                    tag_poses = [
-                        tag_field_pose(d, transform, field, args.heading_offset, K=K,
-                                       tag_height=args.tag_height)
-                        for d in dets
-                    ]
-                    tag_states = tag_tracker.update(tag_poses, tag_dt)
-                elif tag_last_t is not None and t0 - tag_last_perf > TAG_STALE_S:
-                    # PhotonVision went quiet. Step on as if it saw nothing, so
-                    # the tracks coast and drop; both clocks move by the gap,
-                    # which keeps the next result's dt right.
-                    gap = t0 - tag_last_perf
-                    tag_last_t += gap
-                    tag_last_perf = t0
-                    if t_tags is not None:
-                        t_tags += gap
-                    dets, tag_poses = [], []
-                    tag_states = tag_tracker.update([], gap)
-                t1 = time.perf_counter()
-                ball_state = ball_tracker.update(frame, dt)
-                t2 = time.perf_counter()
-
-                if result is not None:
-                    off_plane.add(tag_poses)
                 # None is the tracker idling (nothing reached --ball-min-conc),
                 # which is a frame without the ball as much as a coasting one is.
                 if ball_state is not None and ball_state.visible:
@@ -891,21 +1146,27 @@ def main() -> None:
                           flush=True)
                 if publishing:
                     stats = {
-                        "fps": fps,
-                        "tag_ms": (t1 - t0) * 1000.0,
-                        "ball_ms": (t2 - t1) * 1000.0,
-                        "capture_dropped": stream.dropped,
-                        "photon_latency_ms": tag_latency_ms,
-                        "photon_skipped": tag_skipped,
+                        # The slowest camera's rate: the merged picture is no
+                        # fresher than its stalest part.
+                        "fps": min(c.fps for c in cams),
+                        "tag_ms": sum(c.tag_ms for c in cams),
+                        "ball_ms": sum(c.ball_ms for c in cams),
+                        "capture_dropped": sum(c.stream.dropped for c in cams),
+                        "photon_latency_ms": max(c.tag_latency_ms for c in cams),
+                        "photon_skipped": sum(c.tag_skipped for c in cams),
                         "ball_dropouts": ball_dropouts,
                         # what the keys have set, for a --control driver to show
                         "view": {"grid": show_grid, "trails": show_trails, "mask": show_mask,
                                  "mode": mode, "ball_min_conc": args.ball_min_conc},
                     }
+                    if multi:
+                        stats["cameras"] = {c.name: c.stats() for c in cams}
+                        stats["camera_disagreement_m"] = {
+                            str(tid): d for tid, d in tag_merger.disagreement.items()}
                     doc = build_state_doc(field, tag_states, ball_state, seq=seq,
                                           run_id=run_id, frame=frame_no,
                                           t_capture=t_capture, t_tags=t_tags,
-                                          tag_max_coast_s=tag_tracker.max_coast_s,
+                                          tag_max_coast_s=args.tag_coast,
                                           stats=stats)
                     if json_out is not None:
                         write_json_state(json_out, doc)
@@ -926,16 +1187,22 @@ def main() -> None:
                 # every millisecond spent on overlays first is latency_ms.
                 if headless and video is None and control is None:
                     continue
-                draw_field(frame, field, transform, K, show_grid)
-                for d, pose in zip(dets, tag_poses):
-                    draw_tag_marks(frame, d, pose, color_for(pose.tag_id))
-                draw_ball_marks(frame, ball_tracker, ball_state, show_mask)
                 readout_rows = max(readout_rows, len(tag_states))
-                shown = draw_combined_readout(frame, tag_states, ball_state, field, transform,
-                                              K, args.tag_size, color.name, color.radius_m,
-                                              intr_source, fps, tag_rows=readout_rows)
+                if not multi:
+                    c = cams[0]
+                    shown = draw_combined_readout(
+                        c.draw(field, show_grid, show_mask), tag_states, ball_state, field,
+                        c.transform, c.K, args.tag_size, color.name, color.radius_m,
+                        c.intr_source, c.fps, tag_rows=readout_rows)
+                else:
+                    shown = draw_combined_readout(
+                        tile_cameras(cams, field, show_grid, show_mask, tile_h), tag_states,
+                        ball_state, field, cams[0].transform, cams[0].K, args.tag_size,
+                        color.name, color.radius_m, "", 0.0, tag_rows=readout_rows,
+                        head=multi_header(cams, tag_merger.disagreement, args.tag_size))
                 panel = draw_combined_plan(plan, tag_states, tag_trails, ball_state,
-                                           ball_trail, transform, show_trails)
+                                           ball_trail, [c.transform for c in cams],
+                                           show_trails, footprints)
                 composite = side_by_side(shown, panel)
                 if composite.shape[1] != args.display_width:
                     k = args.display_width / composite.shape[1]
@@ -968,43 +1235,43 @@ def main() -> None:
                 elif key == ord("r"):
                     tag_trails.clear()
                     ball_trail.clear()
-                    tag_tracker.reset()
-                    # BallTracker has no reset() -- rebuilding it is the reset.
-                    # Leaving this out makes `r` clear the tag tracks while
-                    # silently keeping the ball track, which may be exactly the
-                    # thing you pressed `r` to get rid of.
-                    ball_tracker = _new_ball_tracker(args, color, transform, K, field)
+                    for c in cams:
+                        c.reset(args, field)
+                    tag_merger.reset()
+                    ball_merger.reset()
                 elif key == ord("w"):
                     if using_calibrated:
-                        print(f"field is calibrated ({transform.source}); "
+                        print(f"field is calibrated ({cams[0].transform.source}); "
                               "pass --synthetic-field to demo the made-up field instead")
                     else:
                         mode = "floor" if mode == "wall" else "wall"
-                        transform = build_transform(args, field, mode)
-                        plan = PlanView(field, height=h, mode=mode)
+                        cams[0].set_transform(args, build_transform(args, field, mode), field)
+                        plan = PlanView(field, height=tile_h, mode=mode)
                         tag_trails.clear()
                         ball_trail.clear()
-                        tag_tracker.reset()
-                        ball_tracker = _new_ball_tracker(args, color, transform, K, field)
-                        off_plane = OffPlaneWatch(synthetic=True)
-                        print(f"transform: {transform.source}")
-                elif key in (ord("-"), ord("=")):
-                    step = -5.0 if key == ord("-") else 5.0
-                    args.ball_min_conc = float(np.clip(args.ball_min_conc + step, 0.0, 255.0))
-                    ball_tracker.detector.min_concentration = args.ball_min_conc
-                    print(f"min ball concentration {args.ball_min_conc:.0f}")
-                elif key == StdinKeys.SET_CONC and value is not None:
-                    args.ball_min_conc = float(np.clip(value, 0.0, 255.0))
-                    ball_tracker.detector.min_concentration = args.ball_min_conc
+                        cams[0].tag_tracker.reset()
+                        cams[0].off_plane = OffPlaneWatch(synthetic=True)
+                        print(f"transform: {cams[0].transform.source}")
+                elif key in (ord("-"), ord("=")) or (key == StdinKeys.SET_CONC
+                                                     and value is not None):
+                    if key == StdinKeys.SET_CONC:
+                        args.ball_min_conc = float(np.clip(value, 0.0, 255.0))
+                    else:
+                        step = -5.0 if key == ord("-") else 5.0
+                        args.ball_min_conc = float(np.clip(args.ball_min_conc + step, 0.0, 255.0))
+                    for c in cams:
+                        c.ball_tracker.detector.min_concentration = args.ball_min_conc
                     print(f"min ball concentration {args.ball_min_conc:.0f}")
         except KeyboardInterrupt:
             # The only way out with --no-window, and fine with a window too.
             print("\ninterrupted -- shutting down")
 
     finally:
-        stream.stop()
-        print(f"stream thread dropped {stream.dropped} frame(s) the tracker "
-              "was too busy to take")
+        for tags, stream in opened:
+            if stream is not None:
+                print(f"camera '{tags.name}': stream thread dropped {stream.dropped} frame(s) "
+                      "the tracker was too busy to take")
+        close_photon_cameras(opened)
         if http_server is not None:
             http_server.stop()
         if zmq_pub is not None:
@@ -1013,9 +1280,37 @@ def main() -> None:
             json_log_file.close()
         if video is not None:
             video.stop()
-        tags.close()
         if not headless:
             cv2.destroyAllWindows()
+
+
+def tile_cameras(cams: list[CameraPipeline], field: Field, show_grid: bool, show_mask: bool,
+                 height: int) -> np.ndarray:
+    """Every camera's picture, with its own overlays, side by side at one
+    height, in --photon-camera order."""
+    tiles = []
+    for i, c in enumerate(cams):
+        img = c.draw(field, show_grid, show_mask, label=FOOTPRINT_COLORS[i % len(FOOTPRINT_COLORS)])
+        if img.shape[0] != height:
+            k = height / img.shape[0]
+            img = cv2.resize(img, (max(1, round(img.shape[1] * k)), height),
+                             interpolation=cv2.INTER_AREA if k < 1 else cv2.INTER_LINEAR)
+        tiles.append(img)
+    return np.hstack(tiles)
+
+
+def multi_header(cams: list[CameraPipeline], disagreement: dict[int, float],
+                 tag_size: float) -> str:
+    """The several-camera header: each camera's rate, and how far apart the
+    cameras put the tags they share -- the number that says the calibrations
+    agree (want it under ~1 cm)."""
+    rates = "  ".join(f"{c.name} {c.fps:4.1f} fps" for c in cams)
+    if disagreement:
+        worst = max(disagreement.items(), key=lambda kv: kv[1])
+        seam = f"overlap: cams agree to {worst[1] * 100:.1f} cm (tag {worst[0]})"
+    else:
+        seam = "overlap: no tag in two cameras right now"
+    return f"{len(cams)} cameras  |  {rates}  |  tag {tag_size * 1000:.0f}mm  |  {seam}"
 
 
 if __name__ == "__main__":
