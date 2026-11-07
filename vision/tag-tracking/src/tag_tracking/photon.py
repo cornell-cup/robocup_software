@@ -199,11 +199,18 @@ class PhotonTags:
         except BaseException:
             self.close()  # a caller that carries on must not inherit the server
             raise
-        self.size: tuple[int, int] = (int(res[0]), int(res[1])) if res else guess_size(self.K)
+        # The resolution the camera runs at, which the corners and K are in:
+        # given, else the mode PhotonVision announces for it, else a guess
+        # from K -- a poor one when the calibration's principal point sits far
+        # off-centre (cy 896 of 1080 read as 1440 tall, seen on a real one).
+        announced = None if res else self._announced_size()
+        self.size: tuple[int, int] = (
+            (int(res[0]), int(res[1])) if res else announced or guess_size(self.K))
         self.source = f"PhotonVision '{self.name}' calibration"
+        how = ("" if res else " (PhotonVision's camera mode)" if announced
+               else " (guessed from the calibration; --photon-res to set)")
         print(f"PhotonVision camera '{self.name}': fx {self.K[0, 0]:.1f}, "
-              f"{self.size[0]}x{self.size[1]}"
-              + ("" if res else " (guessed from the calibration; --photon-res to set)"))
+              f"{self.size[0]}x{self.size[1]}{how}")
         self._warned_not_tags = False
 
     # -- connecting -------------------------------------------------------
@@ -278,6 +285,21 @@ class PhotonTags:
                   "only one with a lens calibration")
             return calibrated[0]
         raise SeveralCameras(names)
+
+    def _announced_size(self, timeout_s: float = 2.0) -> tuple[int, int] | None:
+        """The video mode PhotonVision announces for this camera, e.g.
+        "1920x1080 BGR 120 fps", as (width, height); None if it says nothing."""
+        sub = self._inst.getStringTopic(f"/CameraPublisher/{self.name}/mode").subscribe("")
+        try:
+            deadline = time.monotonic() + timeout_s
+            while time.monotonic() < deadline:
+                m = re.match(r"\s*(\d+)\s*x\s*(\d+)", sub.get())
+                if m:
+                    return int(m.group(1)), int(m.group(2))
+                time.sleep(0.05)
+            return None
+        finally:
+            sub.close()
 
     def stream_ports(self, timeout_s: float = 1.5) -> list[int]:
         """The ports of the raw camera streams PhotonVision announces (its
@@ -473,9 +495,27 @@ def stream_urls(args, tags: PhotonTags | None, host: str | None = None) -> list[
     if last.get("stream") and (tags is None or last.get("camera") == tags.name):
         urls.append(last["stream"])
     ports = tags.stream_ports() if tags is not None else []
-    urls += [f"http://{host}:{p}/stream.mjpg" for p in ports]
+    announced = [f"http://{host}:{p}/stream.mjpg" for p in ports]
+    if tags is not None and len(announced) > 1:
+        # Streams are announced by port, not by camera; but each one's own
+        # size is its camera's mode, so this camera's comes first. (A camera
+        # PhotonVision lost serves a small "Camera Lost" card, never matching.)
+        announced.sort(key=lambda u: native_size(u) != tuple(tags.size))
+    urls += announced
     urls.append(f"http://{host}:{STREAM_PORT}/stream.mjpg")
     return list(dict.fromkeys(u for u in urls if u))
+
+
+def native_size(url: str, timeout_s: float = 3.0) -> tuple[int, int] | None:
+    """The size a stream sends when nobody asks for one, or None if it won't open."""
+    ms = int(timeout_s * 1000)
+    cap = cv2.VideoCapture(url, cv2.CAP_FFMPEG, [
+        cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, ms, cv2.CAP_PROP_READ_TIMEOUT_MSEC, ms])
+    try:
+        ok, frame = cap.read() if cap.isOpened() else (False, None)
+        return (frame.shape[1], frame.shape[0]) if ok else None
+    finally:
+        cap.release()
 
 
 def open_stream(urls: list[str], size: tuple[int, int] | None,
