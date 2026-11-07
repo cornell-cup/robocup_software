@@ -209,6 +209,14 @@ tr.current td {
 .spots .grade.skip {
   color: var(--dim);
 }
+
+/* the overlap check: one chip per camera, lit while it is sending tags */
+.cam-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-right: 10px;
+}
 .diagnosis {
   margin: 0;
   padding-left: 18px;

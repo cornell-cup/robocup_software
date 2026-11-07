@@ -24,6 +24,25 @@ function quality(r: NonNullable<CalibStatus["result"]>) {
   return deg < 0.3 && mm < 3 ? "good" : deg < 1 && mm < 10 ? "fair" : "poor";
 }
 
+/** The 4 reference tags around one camera's section of a field split between
+ * `n` cameras along x (calibrate_field.split_part_layout): corners are ids 0-3,
+ * the pair on the seam between sections s and s+1 is 10+2(s-1) (near, y = 0)
+ * and 11+2(s-1) (far). In the order one tag is carried round them. */
+function splitPartLayout(w: number, h: number, n: number, k: number): Row[] {
+  const id = (b: number, far: boolean) =>
+    b === 0 ? (far ? 3 : 0) : b === n ? (far ? 2 : 1) : 10 + 2 * (b - 1) + (far ? 1 : 0);
+  const x0 = (w * (k - 1)) / n, x1 = (w * k) / n;
+  return [
+    { id: id(k - 1, false), x: x0, y: 0 },
+    { id: id(k, false), x: x1, y: 0 },
+    { id: id(k, true), x: x1, y: h },
+    { id: id(k - 1, true), x: x0, y: h },
+  ];
+}
+const grade = (mm: number) => (mm < 10 ? "good" : mm < 20 ? "fair" : "poor");
+/** The spots table's colours for a grade. */
+const GRADE_CLASS = { good: "pass", fair: "warn", poor: "fail" } as const;
+
 /** What CornerSampler.add() reported, said for the page. */
 const CORNER_MSG: Record<string, string> = {
   no_tag: "no tag visible",
@@ -53,15 +72,21 @@ export function Calibration() {
     customLayout: false, layoutRows: [] as Row[],
     oneTag: false, perCorner: 30,
     checkInset: false, checkTagId: "",
+    split: 1, part: 1, overlapHeight: "",
   });
   const set = <K extends keyof typeof form>(k: K, v: (typeof form)[K]) => setForm((f) => ({ ...f, [k]: v }));
 
   const connected = st?.state === "connected";
   const size = st?.camera?.size ?? [1280, 720];
   const fw = Number(form.fieldW), fh = Number(form.fieldH);
-  const defaultLayout: Row[] = fw > 0 && fh > 0
-    ? [{ id: 0, x: 0, y: 0 }, { id: 1, x: fw, y: 0 }, { id: 2, x: fw, y: fh }, { id: 3, x: 0, y: fh }]
-    : [];
+  const split = form.split > 1 ? form.split : 1;
+  const part = Math.min(Math.max(1, form.part), split);
+  const multi = split > 1;
+  const defaultLayout: Row[] = !(fw > 0 && fh > 0)
+    ? []
+    : multi
+      ? splitPartLayout(fw, fh, split, part)
+      : [{ id: 0, x: 0, y: 0 }, { id: 1, x: fw, y: 0 }, { id: 2, x: fw, y: fh }, { id: 3, x: 0, y: fh }];
   const layout = form.customLayout && form.layoutRows.length ? form.layoutRows : defaultLayout;
   const seen = new Set((st?.detections ?? []).map((d) => d.id));
   const refIds = st?.setup ? Object.keys(st.setup.layout).map(Number) : layout.map((r) => r.id);
@@ -91,6 +116,20 @@ export function Calibration() {
       /* server restarting */
     }
   }, 300);
+
+  // The server keeps which camera of several this is: it decides the tags to
+  // capture and the file to save. Tell it whenever the form and it differ.
+  const splitSent = useRef("");
+  useEffect(() => {
+    if (!st || st.capturing) return;
+    const want = `${split}/${part}`;
+    if (`${st.split}/${st.part}` === want || splitSent.current === want) return;
+    splitSent.current = want;
+    api.post<CalibStatus>("/calib/split", { split, part })
+      .then(setSt)
+      .catch((e) => toasts.error(e))
+      .finally(() => { splitSent.current = ""; });
+  }, [split, part, st?.split, st?.part, st?.capturing]);
 
   async function run(path: string, body: unknown = {}, ok?: string) {
     setBusy(true);
@@ -135,8 +174,20 @@ export function Calibration() {
       min_frames: form.minFrames,
       sequential: form.oneTag,
       frames_per_corner: form.perCorner,
-      layout: Object.fromEntries(layout.map((r) => [String(r.id), [r.x, r.y]])),
+      // The server works out the default layout itself (one camera's
+      // section of several, too); only a custom one is sent.
+      layout: form.customLayout && form.layoutRows.length
+        ? Object.fromEntries(layout.map((r) => [String(r.id), [r.x, r.y]]))
+        : null,
     });
+  }
+
+  function startOverlap() {
+    const tag = Number(form.tagSize);
+    if (!(tag > 0)) return toasts.push("error", "Enter the tag size first (black square edge, metres).");
+    const h = form.overlapHeight.trim() === "" ? 0 : Number(form.overlapHeight);
+    if (!(h >= 0 && h < 2)) return toasts.push("error", "Tag height is 0 (on the floor) to 2 m.");
+    run("/calib/overlap/start", { tag_size: tag, tag_height: h });
   }
 
   const corner = (action: "confirm" | "retry" | "back") => run("/calib/corner", { action });
@@ -206,6 +257,16 @@ export function Calibration() {
   }
 
   const q = result ? quality(result) : "";
+  const fileName = (p?: string) => (p ? p.split(/[\\/]/).pop() ?? p : "");
+  const ownFile = fileName(st?.saved.path);
+  // Several cameras: the others' saved calibrations, and whether this one's
+  // origin matches theirs (the tracker refuses cameras that disagree).
+  const otherCams = (st?.cameras ?? []).filter((c) => fileName(c.path) !== ownFile && c.exists && !c.error);
+  const sameXY = (a?: number[] | null, b?: number[] | null) =>
+    (!a && !b) || (!!a && !!b && Math.abs(a[0] - b[0]) < 1e-3 && Math.abs(a[1] - b[1]) < 1e-3);
+  const theirOrigin = otherCams[0]?.origin ?? null;
+  const originDiffers = multi && !!result && otherCams.length > 0 && !sameXY(theirOrigin, result.origin);
+  const overlap = st?.overlap;
   const pvUi = st?.camera?.host ? `http://${st.camera.host === "127.0.0.1" ? location.hostname : st.camera.host}:5800` : null;
 
   return (
@@ -406,6 +467,31 @@ export function Calibration() {
           <div className="stack">
             <div className="row">
               <label className="field">
+                <span>Cameras over the field</span>
+                <select className="input" value={split} disabled={st?.capturing} onChange={(e) => setForm((f) => ({ ...f, split: Number(e.target.value), part: Math.min(f.part, Number(e.target.value)) }))}>
+                  {[1, 2, 3, 4].map((n) => <option key={n} value={n}>{n === 1 ? "1 (whole field)" : n}</option>)}
+                </select>
+              </label>
+              {multi && (
+                <label className="field">
+                  <span>This camera covers</span>
+                  <select className="input" value={part} disabled={st?.capturing} onChange={(e) => set("part", Number(e.target.value))}>
+                    {Array.from({ length: split }, (_, i) => (
+                      <option key={i} value={i + 1}>section {i + 1}{i === 0 ? " (x = 0 end)" : i === split - 1 ? " (far end)" : ""}</option>
+                    ))}
+                  </select>
+                </label>
+              )}
+            </div>
+            {multi && (
+              <small className="dim">
+                The field is split along its width into {split} sections, one per camera. Calibrate each camera here in turn
+                (connect to it, pick its section, capture, save): each is saved as <span className="mono">field_pose_&lt;camera&gt;.json</span>.
+                Reference tags: the corners (0-3) and a pair on each seam (10 and 11 on the first, at the near and far edge).
+              </small>
+            )}
+            <div className="row">
+              <label className="field">
                 <span>Tag size (m)</span>
                 <input className="input mono" type="number" step="0.001" min="0.001" placeholder="e.g. 0.177" value={form.tagSize} onChange={(e) => set("tagSize", e.target.value)} disabled={st?.capturing} />
               </label>
@@ -431,8 +517,10 @@ export function Calibration() {
               <Toggle label="One tag at a time" checked={form.oneTag} onChange={(on) => set("oneTag", on)} disabled={st?.capturing} />
               <small className="dim">
                 {form.oneTag
-                  ? "Put one tag at each corner in turn, in the order below (counterclockwise seen from above). Any tag id works."
-                  : "Four tags with these ids, all in view at once."}
+                  ? `Put one tag at each ${multi ? "position of this section" : "corner"} in turn, in the order below (counterclockwise seen from above). Any tag id works.`
+                  : multi
+                    ? "This section's four tags, with these ids, all in view at once."
+                    : "Four tags with these ids, all in view at once."}
               </small>
             </div>
 
@@ -559,7 +647,19 @@ export function Calibration() {
                 <button className="btn sm" disabled={busy || originX === "" || originY === ""} onClick={() => run("/calib/origin", { mode: "field", x: Number(originX), y: Number(originY) })}>Set</button>
               </div>
               <small className="dim">{connected ? "Or click the picture. Clicks snap to corners, edge midpoints and the centre." : "Connect to click the origin on the picture."}</small>
-              <button className="btn primary block" disabled={busy} onClick={save}>Save calibration</button>
+              {originDiffers && (
+                <div className="note error">
+                  {fileName(otherCams[0].path)} uses origin {theirOrigin ? `(${theirOrigin[0]}, ${theirOrigin[1]})` : "first corner"}.
+                  Every camera must share one, or tracking refuses to merge them.
+                  <button className="link" disabled={busy} onClick={() => run("/calib/origin", theirOrigin ? { mode: "field", x: theirOrigin[0], y: theirOrigin[1] } : { mode: "corner" })}>
+                    Use the same origin
+                  </button>
+                </div>
+              )}
+              <button className="btn primary block" disabled={busy || (multi && !connected)} onClick={save}>
+                {multi ? `Save as ${ownFile || "field_pose_<camera>.json"}` : "Save calibration"}
+              </button>
+              {multi && !connected && <small className="dim">Connect to the camera to save: its file is named after it.</small>}
             </div>
           ) : (
             <div className="stack">
@@ -578,6 +678,7 @@ export function Calibration() {
                 <p className="muted small">
                   Tests the <b>saved</b> calibration with a tape measure. Mark 9 spots with tape, measured from (0, 0): the 4 corners, the middle of each edge and the centre. Then put one tag on each in turn and it says how far off each one reads, in mm.
                 </p>
+                {multi && <small className="dim">One of several cameras: only the spots this camera can see are checked.</small>}
                 <div className="row">
                   <label className="field">
                     <span>Tag size (m)</span>
@@ -676,18 +777,117 @@ export function Calibration() {
           </div>
         </Card>
 
+        {multi && (
+          <Card title="Check the overlap" step={5} active={!!overlap} done={!!overlap?.tags.length && (overlap.worst_mm ?? 99) < 10}>
+            <div className="stack">
+              {!overlap ? (
+                <>
+                  <p className="muted small">
+                    With every camera calibrated and saved, this watches them all at once. Put a tag where two cameras overlap
+                    (the seam tags 10 and 11 already are) and it shows how far apart each camera puts it.
+                    Under 10 mm is good. More, and a robot jumps by that much when it crosses from one camera to the other.
+                  </p>
+                  <div className="row">
+                    <label className="field">
+                      <span>Tag size (m)</span>
+                      <input className="input mono" type="number" step="0.001" min="0.001" placeholder="e.g. 0.177" value={form.tagSize} onChange={(e) => set("tagSize", e.target.value)} />
+                    </label>
+                    <label className="field">
+                      <span>Tag height (m)</span>
+                      <input className="input mono" type="number" step="0.001" min="0" placeholder="0, on the floor" value={form.overlapHeight} onChange={(e) => set("overlapHeight", e.target.value)} />
+                    </label>
+                  </div>
+                  <small className="dim">Height: 0 for a tag on the floor; the shell height for one on a robot, to check at the height robots are tracked at.</small>
+                  <button className="btn primary block" disabled={busy || !connected || !st?.saved.exists || otherCams.length === 0 || !!st?.capturing || checking} onClick={startOverlap}>
+                    Start the overlap check
+                  </button>
+                  {connected && !st?.saved.exists && <p className="note">Save this camera's calibration first.</p>}
+                  {connected && st?.saved.exists && otherCams.length === 0 && <p className="note">Calibrate and save another camera first.</p>}
+                </>
+              ) : (
+                <>
+                  <dl className="kv">
+                    <dt>Cameras</dt>
+                    <dd>{overlap.cameras.map((c) => (
+                      <span key={c} className="cam-chip"><span className={`dot ${overlap.live.includes(c) ? "ok" : "red"}`} />{c} </span>
+                    ))}</dd>
+                  </dl>
+                  {overlap.tags.length === 0 ? (
+                    <p className="muted small">No tag seen by two cameras yet. Put one where their views overlap.</p>
+                  ) : (
+                    <>
+                      <div className={`quality ${grade(overlap.worst_mm ?? 0)}`}>
+                        <span className={`dot ${grade(overlap.worst_mm ?? 0) === "good" ? "ok" : grade(overlap.worst_mm ?? 0) === "fair" ? "warn" : "red"}`} />
+                        {grade(overlap.worst_mm ?? 0) === "good"
+                          ? "The cameras agree: robots will cross over smoothly."
+                          : grade(overlap.worst_mm ?? 0) === "fair"
+                            ? "Usable, but robots will shift a little crossing over. Recalibrating may tighten it."
+                            : "The cameras disagree. Recalibrate the worse one, and check the field size and tag positions."}
+                      </div>
+                      <table className="plain spots">
+                        <thead><tr><th>Tag</th><th>Apart</th><th>Readings</th><th>Seen by</th></tr></thead>
+                        <tbody>
+                          {overlap.tags.map((t) => (
+                            <tr key={t.id}>
+                              <td className="mono">{t.id}</td>
+                              <td className={`mono grade ${GRADE_CLASS[grade(t.apart_mm)]}`}>{t.apart_mm.toFixed(1)} mm</td>
+                              <td className="mono">{t.n}</td>
+                              <td className="small">{t.now ? Object.keys(t.now).join(", ") : <span className="dim">not now</span>}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      <small className="dim">"Apart" is the median of the last 30 readings, tag {overlap.tag_size} m, at {overlap.tag_height} m height.</small>
+                    </>
+                  )}
+                  <button className="btn sm ghost" disabled={busy} onClick={() => run("/calib/overlap/stop")}>Stop the overlap check</button>
+                </>
+              )}
+            </div>
+          </Card>
+        )}
+
         <Card title="Saved calibration" aside={st?.saved.exists ? <><span className="dot ok" />Saved</> : <><span className="dot" />None</>}>
           {st?.saved.exists ? (
             <>
               <dl className="kv">
+                {multi && <><dt>File</dt><dd className="mono">{ownFile}</dd></>}
                 <dt>Field</dt><dd>{st.saved.field ? `${st.saved.field[0]} × ${st.saved.field[1]} m` : "–"}</dd>
                 <dt>Origin</dt><dd>{st.saved.origin ? `(${st.saved.origin[0]}, ${st.saved.origin[1]}) m` : "first corner"}</dd>
                 <dt>Saved</dt><dd>{fmtTime(st.saved.modified)}</dd>
               </dl>
               <p className="src">{st.saved.error ?? st.saved.source}</p>
             </>
+          ) : st?.saved.needs_camera ? (
+            <p className="muted small">Connect to a camera to see its saved calibration.</p>
           ) : (
             <p className="muted small">Nothing saved yet. Trackers use a made-up field until you save one.</p>
+          )}
+          {multi && (
+            <>
+              <table className="plain">
+                <thead><tr><th>Camera</th><th>Field</th><th>Origin</th><th>Saved</th></tr></thead>
+                <tbody>
+                  {(st?.cameras ?? []).length === 0 ? (
+                    <tr><td colSpan={4} className="dim">No camera calibrated yet</td></tr>
+                  ) : (st?.cameras ?? []).map((c) => (
+                    <tr key={c.path} className={fileName(c.path) === ownFile ? "current" : undefined}>
+                      <td className="mono">{c.name}</td>
+                      <td className="mono">{c.field ? `${c.field[0]}×${c.field[1]}` : "–"}</td>
+                      <td className="mono">{c.error ? "unreadable" : c.origin ? `(${c.origin[0]}, ${c.origin[1]})` : "corner"}</td>
+                      <td className="small">{c.modified ? new Date(c.modified * 1000).toLocaleDateString() : "–"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {st?.cameras_agree && !st.cameras_agree.field && <p className="note error">The cameras were calibrated for different field sizes. Recalibrate with the same size.</p>}
+              {st?.cameras_agree && !st.cameras_agree.origin && <p className="note error">The cameras use different origins. Give them the same one (step 3) and save each.</p>}
+              {(st?.cameras ?? []).length >= 2 && st?.cameras_agree?.field && st.cameras_agree.origin && (
+                <small className="dim">
+                  Track with all of them: on the Tracking page, PhotonVision camera <span className="mono">{(st?.cameras ?? []).map((c) => c.name).join(", ")}</span>.
+                </small>
+              )}
+            </>
           )}
         </Card>
       </aside>

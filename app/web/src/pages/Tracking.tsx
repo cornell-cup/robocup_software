@@ -260,6 +260,17 @@ export function Tracking() {
               <span className="info mono" title="Camera frames the tracker was too busy to take / PhotonVision results it skipped for a newer one / ball dropouts so far">
                 dropped {live.stats.capture_dropped ?? 0} · skipped {live.stats.photon_skipped ?? 0} · ball lost {live.stats.ball_dropouts ?? 0}
               </span>
+              {live.stats.cameras && (() => {
+                const apart = Object.entries(live.stats.camera_disagreement_m ?? {});
+                const worst = apart.reduce<[string, number] | null>((w, [id, m]) => (!w || m > w[1] ? [id, m] : w), null);
+                const names = Object.keys(live.stats.cameras);
+                return (
+                  <span className="info mono" title="Several cameras: how far apart they put the tags two of them see right now (want under 10 mm)">
+                    <span className={`dot ${!worst ? "" : worst[1] < 0.01 ? "ok" : worst[1] < 0.02 ? "warn" : "red"}`} />
+                    {names.length} cameras · {worst ? `agree to ${(worst[1] * 1000).toFixed(0)} mm (tag ${worst[0]})` : "no tag in two at once"}
+                  </span>
+                );
+              })()}
               {st?.process.options.recording && <span className="info rec"><span className="dot red" />Recording</span>}
               <span className="push">
                 <Segmented<View>
@@ -448,7 +459,7 @@ export function Tracking() {
 
                   <div className="opt-group">
                     <h3>PhotonVision</h3>
-                    <label className="field"><span>Camera</span><input className="input" placeholder={calibConn.camera?.trim() || "the only camera"} value={form.photonCamera} onChange={(e) => set("photonCamera", e.target.value)} /></label>
+                    <label className="field"><span>Camera</span><input className="input" placeholder={calibConn.camera?.trim() || "the only camera; several: left, right"} title="Several cameras over one field: their names, comma-separated, each calibrated on the Field calibration page" value={form.photonCamera} onChange={(e) => set("photonCamera", e.target.value)} /></label>
                     <label className="field"><span>NetworkTables server</span><input className="input mono" placeholder="run it here" value={form.ntServer} onChange={(e) => set("ntServer", e.target.value)} /></label>
                     <label className="field"><span>Stream URL</span><input className="input mono" placeholder="PhotonVision's :1181/stream.mjpg" value={form.stream} onChange={(e) => set("stream", e.target.value)} /></label>
                     <div className="row">

@@ -25,6 +25,7 @@ from typing import Any
 
 import zmq
 from ball_tracking.ball_color import load_all
+from vision_core.field import field_pose_path
 
 from .procs import CommandError, ManagedProcess
 from .sim import REPO, TRACKER_ZMQ_PORT
@@ -107,7 +108,24 @@ class TrackerProcess(ManagedProcess):
             if opts["mode"] not in ("floor", "wall"):
                 raise CommandError("made-up field mode is floor or wall")
             cmd += ["--mode", opts["mode"]]
-        if opts.get("field_pose"):
+        # Several cameras: "left, right" in the camera box, each with its own
+        # vision/calib/field_pose_<camera>.json (calibrate-field --split), and
+        # streams likewise comma-separated, in the same order, if given.
+        cameras = [c.strip() for c in str(opts.get("photon_camera") or "").split(",") if c.strip()]
+        streams = [s.strip() for s in str(opts.get("stream") or "").split(",") if s.strip()]
+        if len(set(cameras)) != len(cameras):
+            raise CommandError("each PhotonVision camera only once")
+        multi = len(cameras) > 1
+        if multi:
+            if streams and len(streams) != len(cameras):
+                raise CommandError(f"{len(cameras)} cameras: give a stream URL for each, "
+                                   f"comma-separated in the same order, or none")
+            missing = [c for c in cameras if not field_pose_path(c).is_file()]
+            if missing:
+                raise CommandError(
+                    f"no field pose for camera {', '.join(missing)}: calibrate each with "
+                    f"uv run calibrate-field --split {len(cameras)} --photon-camera NAME --part K")
+        elif opts.get("field_pose"):
             # Only calibration files: the page can be reached from other machines.
             pose = (CALIB_DIR / Path(str(opts["field_pose"])).name)
             if pose.suffix != ".json" or not pose.is_file():
@@ -124,12 +142,19 @@ class TrackerProcess(ManagedProcess):
             if not 1024 <= port <= 65535 or port in (TRACKER_ZMQ_PORT, VIDEO_PORT, 5800, 5801, 1181):
                 raise CommandError(f"HTTP port {port} is out of range or already used by the app")
             cmd += ["--serve-http", str(port)]
-        for key, flag in (("photon_camera", "--photon-camera"), ("nt_server", "--nt-server"),
-                          ("stream", "--stream")):
-            v = str(opts.get(key) or "").strip()
-            if v:
-                cmd += [flag, v]
-        if opts.get("photon_res"):
+        for cam in cameras:
+            cmd += ["--photon-camera", cam]
+        if not multi:  # one camera: the URL as typed, commas and all
+            one = str(opts.get("stream") or "").strip()
+            streams = [one] if one else []
+        for url in streams:
+            cmd += ["--stream", url]
+        v = str(opts.get("nt_server") or "").strip()
+        if v:
+            cmd += ["--nt-server", v]
+        # One resolution box: it can only describe one camera. Several (maybe
+        # different) cameras have theirs worked out from their own calibrations.
+        if opts.get("photon_res") and not multi:
             try:
                 w, h = (int(x) for x in opts["photon_res"])
             except (TypeError, ValueError):
@@ -143,8 +168,10 @@ class TrackerProcess(ManagedProcess):
         self.launch(cmd, VISION_DIR, stdin=True)
         self.options = {"tag_size": tag_size, "ball_profile": profile,
                         "recording": str(recording) if recording else None,
-                        "synthetic_field": bool(opts.get("synthetic_field"))
-                        or not (CALIB_DIR / "field_pose.json").is_file()}
+                        "cameras": cameras,
+                        "synthetic_field": not multi and (
+                            bool(opts.get("synthetic_field"))
+                            or not (CALIB_DIR / "field_pose.json").is_file())}
 
     def control(self, cmd: dict[str, Any]) -> None:
         """The window's keys, for a tracker with no window: {"key": "g"} (g

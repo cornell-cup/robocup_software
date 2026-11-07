@@ -11,14 +11,24 @@ one tag on 9 tape-measured spots, each read back in mm. Overlays are not drawn i
 picture: their pixel coordinates go to the browser, which draws them over the
 camera stream, so they stay sharp and clickable.
 
-PhotonVision is talked to from one worker thread only; everything the API
-reads goes through the lock.
+Several cameras over one field (`split` > 1, as calibrate-field --split):
+each is calibrated here in turn, against the 4 reference tags around its own
+section (`part`), and saved as field_pose_<camera>.json; a new one starts
+from the origin the others use, since they must share it. The overlap check
+then connects to the other cameras too (same NetworkTables connection) and
+shows, live, how far apart each camera puts a tag they can all see -- the
+number that says the calibrations agree.
+
+PhotonVision is talked to from one worker thread only, except that the
+overlap check's extra cameras are opened from the API thread (it waits for
+their lens calibration); everything the API reads goes through the lock.
 """
 
 from __future__ import annotations
 
 import threading
 import time
+from collections import deque
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -34,10 +44,15 @@ from tag_tracking.calibrate_field import (
     FieldCalibrationResult,
     SequentialCalibrationResult,
     calibrate_field,
+    camera_pose_files,
     default_field_layout,
+    shared_origin,
     solve_sequential,
+    split_part_layout,
 )
+from tag_tracking.detect import for_tracking
 from tag_tracking.photon import PhotonStream, PhotonTags, blank_frame, open_photon
+from tag_tracking.pose import tag_field_pose
 from tag_tracking.verify import (
     FRAMES_PER_POINT,
     CheckSession,
@@ -52,6 +67,7 @@ from vision_core.field import (
     Field,
     ReferenceTagFieldTransform,
     field_pose_path,
+    saved_camera,
     saved_field_size,
     saved_origin,
 )
@@ -60,6 +76,15 @@ from .procs import CommandError
 
 #: Points per field edge when projecting it: enough to follow the lens's curve.
 EDGE_SAMPLES = 32
+#: Most cameras one field may be split between.
+MAX_SPLIT = 4
+#: Overlap check: a camera's tags older than this (s) no longer count, and
+#: each tag's distance between cameras is the median of this many readings.
+OVERLAP_FRESH_S = 0.5
+OVERLAP_WINDOW = 30
+#: Overlap check: an accuracy-check spot this close (px) to the image border
+#: is left out of that camera's check -- a tag there is not fully in view.
+CHECK_BORDER_PX = 40
 
 
 class FieldCalibration:
@@ -90,6 +115,12 @@ class FieldCalibration:
         self._check: CheckSession | None = None
         self._checking = False
         self._check_done: dict[str, Any] | None = None  # summary of the last finished one
+        # several cameras: how many share the field, and which section this one covers
+        self._split = 1
+        self._part = 1
+        # overlap check: the other cameras, opened alongside this one
+        self._others: list[dict[str, Any]] = []
+        self._overlap: dict[str, Any] | None = None  # {"tag_size", "main": {...}, "apart": {id: deque}}
 
     # -- PhotonVision -------------------------------------------------------
 
@@ -149,6 +180,8 @@ class FieldCalibration:
                 self._dets = r.detections
                 self._dets_t = now
                 self._rate = 0.9 * self._rate + 0.1 / max(now - last, 1e-3)
+                if self._overlap is not None:
+                    self._overlap_step(tags, r.detections, now)
                 if self._checking and self._check is not None:
                     self._check.add(r.detections)
                 if self._capturing and self._corners is not None:
@@ -166,10 +199,50 @@ class FieldCalibration:
         if self._thread is not None:
             self._thread.join(timeout=8.0)
         with self._lock:
+            self._overlap, self._others = None, []
             self._tags = self._stream = None
             self._capturing = self._checking = False
             self.state, self.error = "disconnected", None
             self._dets = []
+
+    # -- several cameras ----------------------------------------------------
+
+    def set_split(self, opts: dict[str, Any]) -> None:
+        """How many cameras share the field, and which section (1 = the -x
+        end) the connected one covers."""
+        try:
+            split, part = int(opts.get("split") or 1), int(opts.get("part") or 1)
+        except (TypeError, ValueError):
+            raise CommandError("cameras and section are whole numbers") from None
+        if not 1 <= split <= MAX_SPLIT:
+            raise CommandError(f"1 to {MAX_SPLIT} cameras")
+        if not 1 <= part <= split:
+            raise CommandError(f"the section is 1 to {split}")
+        with self._lock:
+            if self._capturing:
+                raise CommandError("stop the capture first")
+            if (split, part) != (self._split, self._part):
+                # A result solved for another section (or saved under another
+                # camera's name) would be saved in the wrong place.
+                self._result = self._transform = self._field = None
+                self._fit_mm, self._origin = None, None
+            self._split, self._part = split, part
+
+    def _pose_path(self, tags: PhotonTags | None = None) -> Path | None:
+        """Where this camera's calibration lives: field_pose.json for one
+        camera, field_pose_<camera>.json for one of several -- None if that
+        needs the camera's name and nothing is connected."""
+        if self._split <= 1:
+            return field_pose_path()
+        tags = tags if tags is not None else self._tags
+        return None if tags is None else field_pose_path(tags.name)
+
+    def _target(self) -> Path:
+        path = self._pose_path()
+        if path is None:
+            raise CommandError("connect to the camera first: with several cameras each one's "
+                               "calibration is saved under its PhotonVision name")
+        return path
 
     def frame_jpeg(self) -> bytes | None:
         """The newest camera picture, raw (distorted, like the tag corners),
@@ -189,8 +262,12 @@ class FieldCalibration:
         w, h = _positive(opts, "field_w"), _positive(opts, "field_h")
         field = Field(w, h)
         layout = opts.get("layout")
-        layout = ({int(k): (float(v[0]), float(v[1])) for k, v in layout.items()}
-                  if layout else default_field_layout(field))
+        if layout:
+            layout = {int(k): (float(v[0]), float(v[1])) for k, v in layout.items()}
+        elif self._split > 1:
+            layout = split_part_layout(field, self._split, self._part)
+        else:
+            layout = default_field_layout(field)
         if len(layout) < ReferenceTagFieldTransform.MIN_TAGS:
             raise CommandError(f"need at least {ReferenceTagFieldTransform.MIN_TAGS} reference tags")
         min_frames = int(opts.get("min_frames") or MIN_FRAMES)
@@ -204,7 +281,8 @@ class FieldCalibration:
             self._setup = {"tag_size": tag_size, "field": (w, h), "layout": layout,
                            "min_frames": min_frames,
                            "max_frames": max(min_frames, MAX_LIVE_FRAMES),
-                           "sequential": sequential}
+                           "sequential": sequential,
+                           "split": self._split, "part": self._part}
             self._views = []
             self._corners = CornerSampler(layout, per_corner) if sequential else None
             self._corner_status = CornerSampler.NO_TAG
@@ -268,19 +346,24 @@ class FieldCalibration:
         w, h = tags.size
         result.transform.source += f" ({w}x{h}, {tags.source})"
         result.transform.field_size = setup["field"]
+        # A custom origin is a point on the field, not on the camera: keep the
+        # saved one across a re-calibration, as track does -- or, for a camera
+        # not calibrated before, the one the other cameras already share.
+        target = self._pose_path(tags)
+        origin = saved_origin(target) if target is not None else None
+        if origin is None and self._split > 1:
+            origin, _ = shared_origin(target)
         with self._lock:
             self._result = result
             self._fit_mm = fit_mm
             self._transform = result.transform
             self._field = Field(*setup["field"])
-            # A custom origin is a point on the field, not on the camera:
-            # keep the saved one across a re-calibration, as track does.
-            self._origin = saved_origin(field_pose_path())
+            self._origin = origin
             self._result_from = "calibrated"
 
     def load_saved(self) -> None:
         """The saved pose, to move its origin without calibrating again."""
-        path = field_pose_path()
+        path = self._target()
         if not path.exists():
             raise CommandError(f"nothing saved yet at {path}")
         size = saved_field_size(path)
@@ -333,7 +416,9 @@ class FieldCalibration:
             raise CommandError("nothing to save -- calibrate first")
         out = transform.with_origin(origin)
         out.field_size = (field.width, field.height)
-        path = field_pose_path()
+        path = self._target()
+        if self._split > 1 and self._tags is not None:
+            out.camera = self._tags.name  # what makes it one camera's of several
         path.parent.mkdir(parents=True, exist_ok=True)
         out.save(path)
         return path
@@ -348,8 +433,10 @@ class FieldCalibration:
             raise CommandError("the edge inset must be 0 to 1 m")
         tag_id = opts.get("tag_id")
         tag_id = None if tag_id in (None, "") else int(tag_id)
+        if self.state != "connected" or self._tags is None:
+            raise CommandError("connect to PhotonVision first")
         try:
-            transform, field, targets = load_saved(inset=inset)
+            transform, field, targets = load_saved(inset=inset, pose_path=self._target())
         except FileNotFoundError:
             raise CommandError("save a field calibration first -- the check tests the saved "
                                "one") from None
@@ -358,6 +445,15 @@ class FieldCalibration:
             if self.state != "connected" or tags is None:
                 raise CommandError("connect to PhotonVision first")
             measurer = Measurer(tags.K, tags.dist, transform, field, tag_size)
+            if self._split > 1:
+                # One of several cameras: only the spots this one can see.
+                w, h = tags.size
+                px = measurer.to_pixels(targets)
+                b = CHECK_BORDER_PX
+                targets = [t for t, (u, v) in zip(targets, px)
+                           if b <= u <= w - b and b <= v <= h - b]
+                if not targets:
+                    raise CommandError("none of the 9 spots is in this camera's view")
             self._check = CheckSession(measurer, targets, FRAMES_PER_POINT, None, tag_id)
             self._capturing = False
             self._checking = True
@@ -437,6 +533,100 @@ class FieldCalibration:
             })
         return out
 
+    # -- overlap check (several cameras) ------------------------------------
+
+    def overlap_start(self, opts: dict[str, Any]) -> None:
+        """Watch every calibrated camera at once: for each tag two of them
+        see, how far apart their saved calibrations put it."""
+        tag_size = _positive(opts, "tag_size")
+        tag_height = float(opts.get("tag_height") or 0.0)
+        if not 0.0 <= tag_height < 2.0:
+            raise CommandError("tag height is 0 (on the floor) to 2 m")
+        if self._split <= 1:
+            raise CommandError("the overlap check is for a field split between cameras")
+        with self._lock:
+            tags = self._tags
+            if self.state != "connected" or tags is None:
+                raise CommandError("connect to PhotonVision first")
+            if self._capturing or self._checking:
+                raise CommandError("finish the capture or the accuracy check first")
+        main_path = field_pose_path(tags.name)
+        if not main_path.exists():
+            raise CommandError(f"save this camera's calibration first ({main_path.name})")
+        other_files = [p for p in camera_pose_files() if p.resolve() != main_path.resolve()]
+        if not other_files:
+            raise CommandError("calibrate another camera first: connect to it, calibrate its "
+                               "section and save, then come back to this one")
+        main = _overlap_camera(tags.name, tags, main_path)
+        others = []
+        for p in other_files:
+            name = saved_camera(p) or p.stem
+            try:
+                # The calibration session owns the NetworkTables connection.
+                cam = PhotonTags(name, tags.server, None, timeout_s=5.0, start_nt=False)
+            except SystemExit as e:
+                raise CommandError(f"camera '{name}' ({p.name}) is not answering: {e}") from None
+            others.append(_overlap_camera(name, cam, p))
+        for o in others:
+            if not np.allclose(o["field_size"], main["field_size"], atol=1e-3):
+                raise CommandError(f"{o['path'].name} is for a {o['field_size'][0]:g} x "
+                                   f"{o['field_size'][1]:g} m field, {main['path'].name} for "
+                                   f"{main['field_size'][0]:g} x {main['field_size'][1]:g}: "
+                                   f"calibrate both with the same field size")
+            oa, ob = main["transform"].origin, o["transform"].origin
+            if (oa is None) != (ob is None) or (oa is not None and not np.allclose(oa, ob, atol=1e-3)):
+                raise CommandError(f"{o['path'].name} has origin {ob}, {main['path'].name} has "
+                                   f"{oa}: set the same origin on both and save")
+        with self._lock:
+            self._others = others
+            self._overlap = {"tag_size": tag_size, "tag_height": tag_height, "main": main,
+                             "apart": {}, "positions": {}}
+
+    def overlap_stop(self) -> None:
+        with self._lock:
+            self._overlap, self._others = None, []
+
+    def _overlap_step(self, tags: PhotonTags, dets: list, now: float) -> None:
+        """One result from the connected camera (worker thread, under the
+        lock): take the other cameras' newest too, and compare."""
+        ov = self._overlap
+        assert ov is not None
+        ov["main"]["dets"], ov["main"]["t"] = dets, now
+        for o in self._others:
+            r = o["tags"].poll()
+            if r is not None:
+                o["dets"], o["t"] = r.detections, now
+        seen: dict[int, dict[str, tuple[float, float]]] = {}
+        for cam in [ov["main"], *self._others]:
+            if now - cam["t"] > OVERLAP_FRESH_S:
+                continue
+            for d in for_tracking(cam["dets"], cam["K"], cam["dist"], ov["tag_size"]):
+                p = tag_field_pose(d, cam["transform"], cam["field"], K=cam["K"],
+                                   tag_height=ov["tag_height"])
+                seen.setdefault(p.tag_id, {})[cam["name"]] = (round(p.x, 4), round(p.y, 4))
+        ov["positions"] = {tid: where for tid, where in seen.items() if len(where) > 1}
+        for tid, where in ov["positions"].items():
+            pts = list(where.values())
+            apart = max(float(np.hypot(a[0] - b[0], a[1] - b[1]))
+                        for i, a in enumerate(pts) for b in pts[i + 1:])
+            ov["apart"].setdefault(tid, deque(maxlen=OVERLAP_WINDOW)).append(apart)
+
+    def _overlap_status(self) -> dict[str, Any] | None:
+        ov = self._overlap
+        if ov is None:
+            return None
+        rows = [{"id": tid, "apart_mm": round(float(np.median(hist)) * 1000, 1), "n": len(hist),
+                 "now": {k: list(v) for k, v in ov["positions"].get(tid, {}).items()} or None}
+                for tid, hist in sorted(ov["apart"].items())]
+        return {
+            "cameras": [ov["main"]["name"]] + [o["name"] for o in self._others],
+            "live": [o["name"] for o in [ov["main"], *self._others]
+                     if time.monotonic() - o["t"] < OVERLAP_FRESH_S],
+            "tag_size": ov["tag_size"], "tag_height": ov["tag_height"],
+            "tags": rows,
+            "worst_mm": max((r["apart_mm"] for r in rows), default=None),
+        }
+
     # -- status -------------------------------------------------------------
 
     def status(self) -> dict[str, Any]:
@@ -501,10 +691,36 @@ class FieldCalibration:
                 out["overlay"] = _overlay(transform, field, origin, tags)
         with self._lock:
             check = self._check_status(tags)
+            overlap = self._overlap_status()
+            split, part = self._split, self._part
         if check is not None:
             out["check"] = _jsonable(check)
-        out["saved"] = _saved_summary(field_pose_path())
+        out["split"], out["part"] = split, part
+        target = self._pose_path(tags)
+        out["saved"] = (_saved_summary(target) if target is not None
+                        else {"path": "", "exists": False, "needs_camera": True})
+        if split > 1:
+            out["cameras"] = [{"name": saved_camera(p), **_saved_summary(p)}
+                              for p in camera_pose_files()]
+            fields = {tuple(c["field"]) for c in out["cameras"] if c.get("field")}
+            origins = {None if c.get("origin") is None else tuple(c["origin"])
+                       for c in out["cameras"] if c.get("exists") and "error" not in c}
+            out["cameras_agree"] = {"field": len(fields) <= 1, "origin": len(origins) <= 1}
+        if overlap is not None:
+            out["overlap"] = _jsonable(overlap)
         return out
+
+
+def _overlap_camera(name: str, tags: PhotonTags, path: Path) -> dict[str, Any]:
+    """One camera of the overlap check: its saved pose, in the coordinates the
+    trackers report (origin applied), and its newest detections."""
+    transform = ReferenceTagFieldTransform.load(path, use_origin=True)
+    size = saved_field_size(path)
+    if size is None:
+        raise CommandError(f"{path.name} has no field size -- calibrate that camera again")
+    return {"name": name, "tags": tags, "path": path, "transform": transform,
+            "field": Field(*size).relative_to(transform.origin), "field_size": size,
+            "K": tags.K, "dist": tags.dist, "dets": [], "t": 0.0}
 
 
 # -- geometry for the overlay ------------------------------------------------

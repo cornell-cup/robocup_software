@@ -324,6 +324,21 @@ def create_app(photonvision_dir: Path | None = None, start_photonvision: bool = 
         path = state.calib.save()
         return {**state.calib.status(), "saved_to": str(path)}
 
+    @app.post("/api/v1/calib/split")
+    def calib_split(opts: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
+        state.calib.set_split(opts)
+        return state.calib.status()
+
+    @app.post("/api/v1/calib/overlap/start")
+    def calib_overlap_start(opts: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
+        state.calib.overlap_start(opts)
+        return state.calib.status()
+
+    @app.post("/api/v1/calib/overlap/stop")
+    def calib_overlap_stop() -> dict[str, Any]:
+        state.calib.overlap_stop()
+        return state.calib.status()
+
     @app.post("/api/v1/calib/check/start")
     def calib_check_start(opts: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
         state.calib.check_start(opts)

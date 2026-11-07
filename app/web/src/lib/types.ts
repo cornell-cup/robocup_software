@@ -157,7 +157,25 @@ export interface CalibStatus {
     min_frames: number;
     max_frames: number;
     sequential: boolean;
+    split?: number;
+    part?: number;
   } | null;
+  /** How many cameras share the field, and which section (1 = the -x end) this one covers. */
+  split: number;
+  part: number;
+  /** Several cameras: every field_pose_<camera>.json saved so far. */
+  cameras?: { name: string; path: string; exists: boolean; field?: number[] | null; origin?: number[] | null; modified?: number; error?: string }[];
+  /** Several cameras: whether those files share one field size and one origin. */
+  cameras_agree?: { field: boolean; origin: boolean };
+  /** Several cameras: the live overlap check. */
+  overlap?: {
+    cameras: string[];
+    live: string[];
+    tag_size: number;
+    tag_height: number;
+    tags: { id: number; apart_mm: number; n: number; now: Record<string, number[]> | null }[];
+    worst_mm: number | null;
+  };
   /** One tag at a time: where the capture is. */
   corners?: {
     index: number;
@@ -205,6 +223,8 @@ export interface CalibStatus {
   saved: {
     path: string;
     exists: boolean;
+    /** Several cameras and nothing connected: which file is unknown until a camera is. */
+    needs_camera?: boolean;
     source?: string;
     field?: number[] | null;
     origin?: number[] | null;
@@ -298,6 +318,10 @@ export interface TrackingDoc {
     capture_dropped?: number; photon_skipped?: number; ball_dropouts?: number;
     /** What the tracker's keys have set (track-combined --control). */
     view?: { grid: boolean; trails: boolean; mask: boolean; mode: "floor" | "wall"; ball_min_conc: number };
+    /** Several cameras: each one's own numbers. */
+    cameras?: Record<string, { fps: number; photon_latency_ms: number; tags_seen: number[]; ball_visible: boolean }>;
+    /** Several cameras: tag id -> metres apart the cameras put it, for tags two of them see. */
+    camera_disagreement_m?: Record<string, number>;
   };
 }
 
