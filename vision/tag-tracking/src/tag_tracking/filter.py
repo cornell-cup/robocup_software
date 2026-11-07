@@ -39,6 +39,11 @@ SPEED_EPS = 0.05
 #: 30 fps) still rides out a single misread.
 RELOCK_AFTER = 3
 
+#: update(seeds=...): a new track starts with a seed's velocity and turn rate
+#: only if the seed is this close (m) to the first sighting -- the same
+#: object, seen by another camera. TIGERs use 200 mm for the same job.
+SEED_MAX_DIST_M = 0.2
+
 
 @dataclass(frozen=True)
 class TagFieldState:
@@ -103,6 +108,10 @@ class TagFilter:
             self.off_plane_m = float(pose.off_plane_m)
         return ok
 
+    def seed_motion(self, vx: float, vy: float, omega_deg: float) -> None:
+        """Start from this velocity and turn rate instead of standing still."""
+        self.kf.x[3], self.kf.x[4], self.kf.x[5] = vx, vy, np.radians(omega_deg)
+
     def lost(self) -> bool:
         return self.age > self.max_coast_s
 
@@ -159,7 +168,13 @@ class TagTracker:
     def _new(self, pose: TagFieldPose) -> TagFilter:
         return TagFilter(pose, self.sigma_a, self.sigma_alpha, self.gate, self.max_coast_s)
 
-    def update(self, poses: list[TagFieldPose], dt: float) -> list[TagFieldState]:
+    def update(self, poses: list[TagFieldPose], dt: float,
+               seeds: dict[int, TagFieldState] | None = None) -> list[TagFieldState]:
+        """`seeds`: what is already known of each tag from elsewhere -- with
+        several cameras, the merged tracks. A track this tracker starts for a
+        tag it had not got, close to its seed, starts at the seed's velocity
+        instead of at rest, so a camera picking up a moving robot does not lag
+        behind the camera that already had it."""
         for f in self.filters.values():
             f.predict(dt)
 
@@ -167,7 +182,10 @@ class TagTracker:
         for pose in poses:
             f = self.filters.get(pose.tag_id)
             if f is None:
-                self.filters[pose.tag_id] = self._new(pose)
+                f = self.filters[pose.tag_id] = self._new(pose)
+                seed = seeds.get(pose.tag_id) if seeds else None
+                if seed is not None and np.hypot(seed.x - pose.x, seed.y - pose.y) <= SEED_MAX_DIST_M:
+                    f.seed_motion(seed.vx, seed.vy, seed.omega_deg)
                 seen[pose.tag_id] = True
                 continue
             ok = f.update(pose, self.sigma_xy, self.sigma_theta)

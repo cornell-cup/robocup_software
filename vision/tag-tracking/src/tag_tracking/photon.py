@@ -49,25 +49,35 @@ COMMON_SIZES = [
 ]
 
 
-def add_photon_args(ap: argparse.ArgumentParser, *, stream_optional: bool = True) -> None:
+def add_photon_args(ap: argparse.ArgumentParser, *, stream_optional: bool = True,
+                    multi: bool = False) -> None:
+    """`multi`: --photon-camera, --stream and --photon-res may each be given
+    once per camera, in the same order (see open_photon_cameras)."""
     g = ap.add_argument_group("PhotonVision")
-    g.add_argument("--photon-camera", default=None, metavar="NAME",
+    once = ("; repeat it, once per camera, to use several cameras (in the same "
+            "order for every repeated flag)") if multi else ""
+    append = "append" if multi else None
+    g.add_argument("--photon-camera", default=None, metavar="NAME", action=append,
                    help="camera nickname in the PhotonVision UI (default: the only "
-                        "camera PhotonVision publishes)")
+                        "camera PhotonVision publishes)" + once)
     g.add_argument("--nt-server", default=None, metavar="HOST",
                    help="connect to the NetworkTables server at HOST instead of running "
                         "one here (default: run it here, and point PhotonVision's "
                         "'NetworkTables Server Address' at this machine)")
-    g.add_argument("--stream", default=None, metavar="URL",
+    g.add_argument("--stream", default=None, metavar="URL", action=append,
                    help=f"PhotonVision's camera stream (default "
-                        f"http://<photonvision>:{STREAM_PORT}/stream.mjpg)")
+                        f"http://<photonvision>:{STREAM_PORT}/stream.mjpg"
+                        + (f", then port {STREAM_PORT + 2}, {STREAM_PORT + 4}, ... for each "
+                           f"further camera, PhotonVision's own order: check it)" if multi
+                           else ")") + once)
     if stream_optional:
         g.add_argument("--no-stream", action="store_true",
                        help="don't open the camera stream: tags only, drawn on a "
                             "blank canvas")
     g.add_argument("--photon-res", type=int, nargs=2, metavar=("W", "H"), default=None,
+                   action=append,
                    help="the resolution PhotonVision's pipeline runs at (default: "
-                        "worked out from its calibration's principal point)")
+                        "worked out from its calibration's principal point)" + once)
 
 
 def guess_size(K: np.ndarray) -> tuple[int, int]:
@@ -109,7 +119,12 @@ class PhotonResult:
 
 
 class PhotonTags:
-    """Tags from one PhotonVision camera, over NetworkTables."""
+    """Tags from one PhotonVision camera, over NetworkTables.
+
+    Several cameras share one NetworkTables connection: the first PhotonTags
+    starts it (`start_nt`, the default) and closes it again; the others pass
+    start_nt=False and leave it alone. Close those first.
+    """
 
     def __init__(
         self,
@@ -117,13 +132,17 @@ class PhotonTags:
         server: str | None = None,
         res: tuple[int, int] | None = None,
         timeout_s: float = CONNECT_TIMEOUT_S,
+        start_nt: bool = True,
     ) -> None:
         import ntcore
 
         self._inst = ntcore.NetworkTableInstance.getDefault()
         self._nt_now = ntcore._now  # microseconds, the clock NT stamps arrivals with
         self.server = server
-        if server is None:
+        self._owns_nt = start_nt
+        if not start_nt:
+            pass  # another PhotonTags runs the connection
+        elif server is None:
             # Nothing here is persistent; keep ntcore's persistence file out of
             # whatever directory the tracker was started from.
             self._inst.startServer(str(Path(tempfile.gettempdir()) / "robocup-networktables.json"))
@@ -260,6 +279,8 @@ class PhotonTags:
             time.sleep(0.002)
 
     def close(self) -> None:
+        if not self._owns_nt:
+            return
         if self.server is None:
             self._inst.stopServer()
         else:
@@ -337,6 +358,16 @@ class PhotonStream:
             frame, self._frame = self._frame, None
             return frame, self._t_capture, self._t_perf
 
+    def try_read(self) -> tuple[np.ndarray, float, float] | None:
+        """read() without the wait: the newest frame not yet handed out, or
+        None if there is none right now (or the stream stopped -- see failed).
+        For a loop serving several streams, none of which may block it."""
+        with self._cond:
+            if self._frame is None:
+                return None
+            frame, self._frame = self._frame, None
+            return frame, self._t_capture, self._t_perf
+
     def latest(self) -> np.ndarray:
         """The newest frame, whether or not it was handed out before."""
         with self._cond:
@@ -382,6 +413,78 @@ def open_photon(args, *, need_stream: bool) -> tuple[PhotonTags, PhotonStream | 
                              f"in PhotonVision's camera view, and pass --stream)") from None
         print(f"warning: {e} -- tags only, drawn on a blank canvas")
         return tags, None
+
+
+def camera_names(args) -> list[str | None]:
+    """The cameras asked for with add_photon_args(multi=True): [None] for
+    "whichever one PhotonVision publishes"."""
+    names = args.photon_camera or [None]
+    if len(names) > 1:
+        dupes = sorted({n for n in names if names.count(n) > 1})
+        if dupes:
+            raise SystemExit(f"--photon-camera {', '.join(dupes)} given more than once")
+    return names
+
+
+def _per_camera(values, n: int, flag: str):
+    """A repeated flag's values, one per camera: none at all, or exactly n."""
+    if not values:
+        return [None] * n
+    if len(values) != n:
+        raise SystemExit(f"{flag} was given {len(values)} time(s) for {n} cameras: give it "
+                         f"once per --photon-camera, in the same order, or not at all")
+    return list(values)
+
+
+def open_photon_cameras(args, *, need_stream: bool) -> list[tuple[PhotonTags, PhotonStream | None]]:
+    """open_photon() for every --photon-camera (add_photon_args(multi=True)),
+    sharing one NetworkTables connection. One camera behaves exactly like
+    open_photon(). Close in reverse order: the first one owns the connection.
+
+    Each further camera's stream defaults to the next pair of PhotonVision's
+    ports (1183, 1185, ...), which follows PhotonVision's own camera order --
+    not necessarily the order given here -- so say which with --stream when
+    unsure; the URLs are printed.
+    """
+    names = camera_names(args)
+    streams = _per_camera(args.stream, len(names), "--stream")
+    resses = _per_camera(args.photon_res, len(names), "--photon-res")
+    opened: list[tuple[PhotonTags, PhotonStream | None]] = []
+    try:
+        for i, (name, url, res) in enumerate(zip(names, streams, resses)):
+            tags = PhotonTags(name, args.nt_server, res, start_nt=(i == 0))
+            opened.append((tags, None))
+            if getattr(args, "no_stream", False):
+                continue
+            if url is None:
+                host = tags.host()
+                url = (f"http://{host}:{STREAM_PORT + 2 * i}/stream.mjpg" if host else None)
+            try:
+                if url is None:
+                    raise OSError("cannot tell where PhotonVision runs -- pass --stream URL")
+                stream = PhotonStream(url, tags.size)
+                print(f"camera '{tags.name}' stream: {url}")
+                opened[-1] = (tags, stream)
+            except OSError as e:
+                if need_stream:
+                    raise SystemExit(f"camera '{tags.name}': {e}\n(the ball tracker needs the "
+                                     f"picture; check the URL in PhotonVision's camera view, "
+                                     f"and pass --stream once per camera)") from None
+                print(f"warning: camera '{tags.name}': {e} -- tags only")
+    except BaseException:
+        close_photon_cameras(opened)
+        raise
+    return opened
+
+
+def close_photon_cameras(opened: list[tuple[PhotonTags, PhotonStream | None]]) -> None:
+    """Undo open_photon_cameras(): streams first, then the cameras, the one
+    owning the NetworkTables connection last."""
+    for _tags, stream in opened:
+        if stream is not None:
+            stream.stop()
+    for tags, _stream in reversed(opened):
+        tags.close()
 
 
 def blank_frame(size: tuple[int, int]) -> np.ndarray:
