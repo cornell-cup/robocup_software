@@ -246,12 +246,15 @@ class SyntheticFieldTransform(CameraFieldTransform):
         field: Field,
         height: float = 1.5,
         pitch_deg: float = 90.0,
+        centre: tuple[float, float] | None = None,
     ) -> SyntheticFieldTransform:
         """Camera above the field, looking down at `pitch` degrees from horizontal.
 
         90 is the rig this is built for: directly over the field centre. Below 90
         the camera backs off to the -Y side so its axis still lands on the
         centre, which at shallow angles puts it outside the field entirely.
+        `centre` aims it at another field point instead (one of several
+        cameras, each over its own part of the field).
 
         Straight down is the kinder geometry -- the ball-centre height correction
         (see ball.py) vanishes directly beneath the camera. The cost is airborne
@@ -273,11 +276,14 @@ class SyntheticFieldTransform(CameraFieldTransform):
         # Sit the camera so its optical axis lands on the field centre. At
         # pitch 90 the tangent blows up and the offset goes to zero, which is
         # exactly right: straight down means directly above the centre.
+        aim = (field.width / 2.0, field.height / 2.0) if centre is None else centre
         cam_in_field = np.array(
-            [field.width / 2.0, field.height / 2.0 - height / np.tan(phi), float(height)]
+            [float(aim[0]), float(aim[1]) - height / np.tan(phi), float(height)]
         )
         t = -R @ cam_in_field
         where = "overhead" if abs(pitch_deg) >= 89.5 else f"{pitch_deg:.0f} deg down"
+        if centre is not None:
+            where += f" at ({aim[0]:g}, {aim[1]:g})"
         return cls(R, t, f"synthetic floor, cam {height:.2f} m up, {where}")
 
 
@@ -289,12 +295,18 @@ class SyntheticFieldTransform(CameraFieldTransform):
 FIELD_POSE_NAME = "field_pose.json"
 
 
-def field_pose_path() -> Path:
+def field_pose_path(camera: str | None = None) -> Path:
     """vision/calib/field_pose.json: where calibrate-field saves the
-    measured pose and where every skill's tracker looks for it."""
+    measured pose and where every skill's tracker looks for it.
+
+    With `camera`, that camera's own pose, field_pose_<camera>.json: one per
+    camera when several cover the field, all solved in the same field frame."""
     from .paths import calib_path
 
-    return calib_path(FIELD_POSE_NAME)
+    if camera is None:
+        return calib_path(FIELD_POSE_NAME)
+    safe = "".join(c if c.isalnum() or c in "-_." else "_" for c in camera)
+    return calib_path(f"field_pose_{safe}.json")
 
 
 class ReferenceTagFieldTransform(CameraFieldTransform):
@@ -319,6 +331,9 @@ class ReferenceTagFieldTransform(CameraFieldTransform):
     #: (width, height) in metres of the field this pose was solved for, or None
     #: for a file saved before the size was recorded.
     field_size: tuple[float, float] | None = None
+    #: the PhotonVision camera this pose is for, when it is one of several
+    #: covering the field (field_pose_<camera>.json); None for the one camera.
+    camera: str | None = None
 
     def with_origin(self, origin: tuple[float, float] | None) -> ReferenceTagFieldTransform:
         """This pose re-expressed so `origin` (corner coords) reads (0, 0).
@@ -333,6 +348,7 @@ class ReferenceTagFieldTransform(CameraFieldTransform):
         out = type(self)(self.R, t, self.source)
         out.origin = origin
         out.field_size = self.field_size
+        out.camera = self.camera
         return out
 
     @classmethod
@@ -410,6 +426,8 @@ class ReferenceTagFieldTransform(CameraFieldTransform):
             d["field"] = {"width": self.field_size[0], "height": self.field_size[1]}
         if self.origin is not None:
             d["origin"] = list(self.origin)
+        if self.camera is not None:
+            d["camera"] = self.camera
         Path(path).write_text(json.dumps(d, indent=2))
 
     @classmethod
@@ -419,6 +437,7 @@ class ReferenceTagFieldTransform(CameraFieldTransform):
         d = json.loads(Path(path).read_text())
         t = cls(np.array(d["R"]), np.array(d["t"]), d.get("source", str(path)))
         t.field_size = saved_field_size(path)
+        t.camera = d.get("camera")
         if use_origin and d.get("origin") is not None:
             t = t.with_origin(tuple(d["origin"]))
         return t
@@ -455,6 +474,16 @@ def resolve_field(arg: list[float] | None, pose_path: str | Path | None) -> Fiel
         print(f"field {saved[0]:g} x {saved[1]:g} m (saved with the calibration)")
         return Field(*saved)
     return Field(*DEFAULT_FIELD_SIZE)
+
+
+def saved_camera(path: str | Path) -> str | None:
+    """The camera a field_pose_<camera>.json was saved for, or None (the one
+    camera's field_pose.json, an old file, or not a pose at all)."""
+    try:
+        cam = json.loads(Path(path).read_text()).get("camera")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return cam if isinstance(cam, str) and cam else None
 
 
 def saved_origin(path: str | Path) -> tuple[float, float] | None:

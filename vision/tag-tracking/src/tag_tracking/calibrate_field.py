@@ -56,6 +56,7 @@ from vision_core.field import (
     SyntheticFieldTransform,
     field_pose_path,
     resolve_field,
+    saved_camera,
     saved_origin,
 )
 from vision_core.intrinsics import undistort_maps
@@ -84,6 +85,42 @@ def default_field_layout(field: Field) -> dict[int, tuple[float, float]]:
     """Tags 0-3 at the four corners, in the same order Field.corners() uses."""
     w, h = field.width, field.height
     return {0: (0.0, 0.0), 1: (w, 0.0), 2: (w, h), 3: (0.0, h)}
+
+
+#: split_field_layout(): the first id of the tags on the seams between cameras.
+SEAM_TAG_ID0 = 10
+
+
+def split_field_layout(field: Field, n_cameras: int) -> dict[int, tuple[float, float]]:
+    """Reference tags for a field covered by `n_cameras` side by side along
+    its width: the four corners (ids 0-3, as default_field_layout), plus a pair
+    on every seam between two cameras, at the near and far edge (ids 10, 11 on
+    the first seam, 12, 13 on the next, ...).
+
+    Each camera then sees its own two corners or seam pairs -- four tags,
+    enough to solve its pose on its own -- and every seam pair is seen by the
+    cameras either side of it, which is what makes their poses agree there.
+    One camera gives the plain four corners.
+    """
+    layout = default_field_layout(field)
+    for k in range(1, n_cameras):
+        x = field.width * k / n_cameras
+        layout[SEAM_TAG_ID0 + 2 * (k - 1)] = (x, 0.0)
+        layout[SEAM_TAG_ID0 + 2 * (k - 1) + 1] = (x, field.height)
+    return layout
+
+
+def split_part_layout(field: Field, n_cameras: int, part: int) -> dict[int, tuple[float, float]]:
+    """The four tags of split_field_layout() around camera `part`'s section
+    (1 = the one on the -X side), in the order a single tag would be carried
+    round them: near-left, near-right, far-right, far-left."""
+    if not 1 <= part <= n_cameras:
+        raise ValueError(f"part must be 1..{n_cameras}, got {part}")
+    full = split_field_layout(field, n_cameras)
+    x0, x1 = field.width * (part - 1) / n_cameras, field.width * part / n_cameras
+    order = [(x0, 0.0), (x1, 0.0), (x1, field.height), (x0, field.height)]
+    by_pos = {(round(x, 9), round(y, 9)): tid for tid, (x, y) in full.items()}
+    return {by_pos[(round(x, 9), round(y, 9))]: (x, y) for x, y in order}
 
 
 def _rotation_angle_deg(R: np.ndarray) -> float:
@@ -145,7 +182,7 @@ def calibrate_field(
         ts.append(t.t)
     if len(Rs) < min_frames:
         raise RuntimeError(
-            f"only {len(Rs)}/{seen} frames saw all {len(layout)} reference tags "
+            f"only {len(Rs)}/{seen} frames saw {_need(layout)}+ of the reference tags "
             f"(ids {sorted(layout)}), need >= {min_frames}"
         )
     R_avg = _average_rotations(Rs)
@@ -157,6 +194,12 @@ def calibrate_field(
         f"measured, averaged over {len(Rs)} frames of {len(layout)} reference tags",
     )
     return FieldCalibrationResult(transform, len(Rs), rot_spread, t_spread)
+
+
+def _need(layout: dict[int, tuple[float, float]]) -> int:
+    """Reference tags a frame must show to be solved from: all of a 4-tag
+    layout, any 4 of a bigger one (a camera seeing its part of the field)."""
+    return min(len(layout), ReferenceTagFieldTransform.MIN_TAGS)
 
 
 def parse_layout(spec: list[str]) -> dict[int, tuple[float, float]]:
@@ -176,9 +219,10 @@ def capture_reference_views(
     max_frames: int = MAX_LIVE_FRAMES,
     window_name: str = "calibrate-field",
 ) -> list[list[TagDetection]]:
-    """Show a live preview and collect each frame's detections until all
-    reference tags have been seen `min_frames`+ times. 'q' to finish once
-    enough are captured, Esc to abort (raises SystemExit).
+    """Show a live preview and collect each frame's detections until the
+    reference tags have been seen `min_frames`+ times -- all of a 4-tag
+    layout, or any 4 of a bigger one (see _need). 'q' to finish once enough
+    are captured, Esc to abort (raises SystemExit).
 
     Takes a plain `read()` callable rather than a specific source, so both
     this module's own live capture and track.py's --calibrate-live drive this
@@ -191,7 +235,7 @@ def capture_reference_views(
         while True:
             bgr, dets = read()
             seen_ids = {d.tag_id for d in dets}
-            good = set(layout).issubset(seen_ids)
+            good = len(seen_ids & set(layout)) >= _need(layout)
             disp = bgr.copy()
             for d in dets:
                 colour = (0, 255, 0) if d.tag_id in layout else (0, 165, 255)
@@ -205,8 +249,9 @@ def capture_reference_views(
             status_colour = (0, 255, 0) if good else (0, 0, 255)
             cv2.rectangle(disp, (0, 0), (disp.shape[1], 84), (0, 0, 0), -1)
             cv2.putText(
-                disp, f"captured {len(frames)}/{min_frames}   need ids {sorted(layout)}"
-                      f"   see {sorted(seen_ids) or '(none)'}",
+                disp, f"captured {len(frames)}/{min_frames}   need "
+                      f"{'ids' if _need(layout) == len(layout) else f'{_need(layout)} of ids'} "
+                      f"{sorted(layout)}   see {sorted(seen_ids) or '(none)'}",
                 (10, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.62, status_colour, 2, cv2.LINE_AA,
             )
             ready = len(frames) >= min_frames
@@ -554,12 +599,47 @@ def _choose_origin(args, read_bgr, transform, field, K, dist, out):
         return o
     if args.no_origin:
         return None
+    initial = _initial_origin(args, out)
     if read_bgr is None:
-        return saved_origin(out) if out else None
+        return initial
     print("\nnow pick the origin: click where (0, 0) should be, Enter to accept, "
           "'d' to keep the first corner.")
-    return pick_origin(read_bgr, transform, field, K, dist,
-                       initial=saved_origin(out) if out else None)
+    return pick_origin(read_bgr, transform, field, K, dist, initial=initial)
+
+
+def _initial_origin(args, out) -> tuple[float, float] | None:
+    """Where the origin picker starts: this file's saved origin -- or, for one
+    of several cameras (--split) with none saved yet, the origin another
+    camera's pose file already uses, since they all have to share it."""
+    own = saved_origin(out) if out else None
+    if own is not None or getattr(args, "split", 1) <= 1:
+        return own
+    o, p = shared_origin(Path(out) if out else None)
+    if o is not None and p is not None:
+        print(f"starting from the origin {p.name} uses, ({o[0]:g}, {o[1]:g}): Enter keeps it")
+    return o
+
+
+def camera_pose_files() -> list[Path]:
+    """Every per-camera field pose saved so far: the field_pose_<camera>.json
+    that say which camera they are for (a backup such as field_pose_oct17.json
+    does not, and is not one)."""
+    return [p for p in sorted(field_pose_path().parent.glob("field_pose_*.json"))
+            if saved_camera(p) is not None]
+
+
+def shared_origin(exclude: Path | None = None) -> tuple[tuple[float, float] | None, Path | None]:
+    """The custom origin the other cameras' pose files already use, and the
+    file it came from -- (None, None) if none has one. Several cameras must
+    share one origin, so a new one starts from theirs."""
+    mine = exclude.resolve() if exclude is not None else None
+    for p in camera_pose_files():
+        if p.resolve() == mine:
+            continue
+        o = saved_origin(p)
+        if o is not None:
+            return o, p
+    return None, None
 
 
 def _synthetic_height(field: Field) -> float:
@@ -786,6 +866,20 @@ def main() -> None:
              "(--sequential: visited in this order; the ids are just labels)",
     )
     ap.add_argument(
+        "--split", type=int, default=1, metavar="N",
+        help="the field is covered by N cameras side by side along its width, "
+             "each calibrated on its own (run this once per camera, with "
+             "--photon-camera). Reference tags: the 4 corners plus a pair on every "
+             "seam (ids 10, 11 at x = W/N; 12, 13 at 2W/N; ...). Saves to "
+             "vision/calib/field_pose_<camera>.json unless --out says otherwise",
+    )
+    ap.add_argument(
+        "--part", type=int, default=None, metavar="K",
+        help="with --split: this camera covers section K (1 = the -X end): solve "
+             "from that section's 4 tags only. Needed with --sequential; without "
+             "it, any 4 of the split layout's tags in view will do",
+    )
+    ap.add_argument(
         "--origin", nargs="+", metavar="X Y",
         help="put field (0, 0) here instead of the first corner, in metres from "
              "that corner (or 'center'); skips the click picker",
@@ -814,12 +908,39 @@ def main() -> None:
     add_photon_args(ap)
     args = ap.parse_args()
 
+    if args.split < 1:
+        ap.error("--split is a number of cameras, 1 or more")
+    if args.part is not None and not 1 <= args.part <= args.split:
+        ap.error(f"--part is 1..{args.split} (with --split {args.split})")
+    if args.split > 1 and args.sequential and args.part is None and not args.layout:
+        ap.error("--split with --sequential needs --part K: which section this camera "
+                 "covers, so it knows which 4 positions to ask for")
+    if args.split > 1 and not args.out and not args.synthetic:
+        if not args.photon_camera:
+            ap.error("--split: name the camera with --photon-camera (its pose is saved "
+                     "as field_pose_<camera>.json), or pass --out")
+        args.out = str(field_pose_path(args.photon_camera))
+
     # A re-run (or --pick-origin) defaults to the size already saved, so the
     # field never silently snaps back to 1.2 x 0.8.
     # --synthetic without --out saves nothing, so it has no file to default from.
     field = resolve_field(args.field, None if (args.synthetic and not args.out)
                           else (args.out or field_pose_path()))
-    layout = parse_layout(args.layout) if args.layout else default_field_layout(field)
+    if args.layout:
+        layout = parse_layout(args.layout)
+    elif args.split > 1 and args.part is not None:
+        layout = split_part_layout(field, args.split, args.part)
+    elif args.split > 1:
+        layout = split_field_layout(field, args.split)
+    else:
+        layout = default_field_layout(field)
+    if args.split > 1:
+        who = f"camera '{args.photon_camera}', " if args.photon_camera else ""
+        print(f"{who}one of {args.split} cameras: reference tags "
+              f"{', '.join(f'{t} at ({x:g}, {y:g})' for t, (x, y) in layout.items())}")
+        if args.origin is None and not args.no_origin and not args.pick_origin:
+            print("every camera must share one origin: pick the same point for each, "
+                  "or pass --origin X Y (or --no-origin) to all of them")
     if args.origin is not None and not (
         args.origin == ["center"] or len(args.origin) == 2
     ):
@@ -844,6 +965,8 @@ def main() -> None:
         Path(out).parent.mkdir(parents=True, exist_ok=True)
         # The size travels with the pose: every tracker reads it from here.
         result.transform.field_size = (field.width, field.height)
+        if args.split > 1 and args.photon_camera:
+            result.transform.camera = args.photon_camera
         result.transform.save(out)
         print(f"\nsaved {out}")
     else:

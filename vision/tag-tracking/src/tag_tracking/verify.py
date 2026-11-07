@@ -363,10 +363,12 @@ class CheckSession:
 
 
 def load_saved(field_arg: list[float] | None = None, points: list[str] | None = None,
-               inset: float = 0.0) -> tuple[ReferenceTagFieldTransform, Field, list]:
+               inset: float = 0.0, pose_path: Path | None = None,
+               ) -> tuple[ReferenceTagFieldTransform, Field, list]:
     """The saved field calibration (with its origin), the field in the
-    coordinates the trackers report, and the points to check."""
-    pose_path = field_pose_path()
+    coordinates the trackers report, and the points to check. `pose_path`
+    picks another camera's pose file (default: field_pose.json)."""
+    pose_path = field_pose_path() if pose_path is None else Path(pose_path)
     if not pose_path.exists():
         raise FileNotFoundError(f"no field calibration at {pose_path} -- calibrate the field "
                                 "first")
