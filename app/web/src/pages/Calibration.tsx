@@ -6,7 +6,7 @@ import { api } from "../lib/api";
 import { photonvision, usePhotonVision } from "../lib/photonvision";
 import { usePolling } from "../lib/store";
 import { toasts } from "../lib/toast";
-import type { CalibStatus } from "../lib/types";
+import type { CalibStatus, LensReview } from "../lib/types";
 import { useSavedState } from "../lib/useSavedState";
 import "../styles/calibration.css";
 
@@ -48,6 +48,76 @@ const CORNER_MSG: Record<string, string> = {
   capturing: "hold steady, capturing…",
   ready: "got it: confirm and move on",
 };
+
+/** Under this many corners in a ninth of the picture, the board "missed" it. */
+const REACHED = 20;
+const fitClass = (px: number) => (px < 1 ? "good" : px < 2 ? "fair" : "poor");
+
+/** The lens calibration PhotonVision is using, checked: its fit next to a
+ * re-solve of its own snapshots (its macOS solve can be far worse than they
+ * allow), where the board reached, and a button to use the re-solve. */
+function LensCheck({ camera, size, onInstalled }: { camera: string; size: number[]; onInstalled: () => void }) {
+  const [rev, setRev] = useState<LensReview | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let live = true;
+    setLoading(true);
+    api.get<LensReview>(`/calib/lens?camera=${encodeURIComponent(camera)}&w=${size[0]}&h=${size[1]}`)
+      .then((r) => live && setRev(r))
+      .catch(() => live && setRev(null))
+      .finally(() => live && setLoading(false));
+    return () => { live = false; };
+  }, [camera, size[0], size[1]]);
+
+  if (loading && !rev) return <p className="muted small">Checking the lens calibration…</p>;
+  if (!rev || !rev.available) return null;
+  if (rev.error) return <p className="note">{rev.error}. Calibrate the lens in PhotonVision at {size[0]}×{size[1]} first.</p>;
+  const pv = rev.photonvision!, re = rev.resolved!;
+  const missed = rev.missed ?? [];
+  const use = async () => {
+    setBusy(true);
+    try {
+      const r = await api.post<{ restarted: boolean }>("/calib/lens/install", { camera, w: size[0], h: size[1] });
+      toasts.push("ok", r.restarted
+        ? "Re-solved lens calibration installed. PhotonVision is restarting (about 20 s); reconnecting after."
+        : "Re-solved lens calibration installed. Start PhotonVision, then Connect.", 8000);
+      onInstalled();
+    } catch (e) {
+      toasts.error(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="lens stack">
+      <div className="lens-head"><b>Lens calibration</b><span className="muted small">{rev.snapshots} snapshots</span></div>
+      <dl className="kv">
+        <dt>PhotonVision's fit</dt><dd className={`fit ${fitClass(pv.rms_px)}`}>{pv.rms_px.toFixed(2)} px</dd>
+        <dt>Re-solved</dt><dd className={`fit ${fitClass(re.rms_px)}`}>{re.rms_px.toFixed(2)} px</dd>
+      </dl>
+      <div className="coverage-row">
+        <div className="coverage" title="Where the board was in the snapshots">
+          {rev.coverage!.flat().map((n, i) => <span key={i} className={n >= REACHED ? "hit" : "miss"} />)}
+        </div>
+        <small className={missed.length ? "" : "dim"}>
+          {missed.length
+            ? `The board never reached the ${missed.join(", ")} of the picture (red): the lens there is a guess. Recalibrate in PhotonVision, covering those parts.`
+            : "The board reached every part of the picture."}
+        </small>
+      </div>
+      {rev.better ? (
+        <>
+          <p className="small">PhotonVision's solve is much worse than its snapshots allow; the same snapshots re-solve to {re.rms_px.toFixed(2)} px.</p>
+          <button className="btn primary block" disabled={busy} onClick={use}>{busy ? "Installing…" : "Use the re-solved calibration"}</button>
+          <small className="dim">Restarts PhotonVision if this app started it; the old settings are kept as photon.sqlite.bak.</small>
+        </>
+      ) : (
+        pv.rms_px < 1 && !missed.length && <p className="small">Good: under 1 px, and the board covered the whole picture.</p>
+      )}
+    </div>
+  );
+}
 
 export function Calibration() {
   const [st, setSt] = useState<CalibStatus | null>(null);
@@ -92,9 +162,9 @@ export function Calibration() {
   const clicks = st?.setup?.method === "click" ? st.clicks : undefined;
   const nextClick = clicks ? clicks.findIndex((c) => c === null) : -1;
   const clicking = !!clicks && !st?.result;
-  // What the panel shows: the session under way, else the saved choice.
-  const method: Method = clicking ? "click" : st?.capturing && st.setup?.method ? st.setup.method
-    : form.method || (form.oneTag ? "one" : "tags");
+  // What the panel shows: the session under way (until Start over), else the
+  // saved choice.
+  const method: Method = st?.setup?.method ?? (form.method || (form.oneTag ? "one" : "tags"));
   // The points being clicked, as the server has them (the form may differ).
   const clickLayout = clicking && st?.setup ? Object.values(st.setup.layout) : null;
   const canSolve = !!st && (clicks ? clicks.every((c) => c !== null)
@@ -242,7 +312,8 @@ export function Calibration() {
     const box = (e.currentTarget as Element).getBoundingClientRect();
     setLoupe(p ? { x: e.clientX - box.left, y: e.clientY - box.top, u: p.x, v: p.y } : null);
   }
-  const snapKey = st?.setup ? JSON.stringify(st.setup) : "";
+  // A new still picture is a new URL, so the browser doesn't show the old one.
+  const snapKey = st?.setup ? `${JSON.stringify(st.setup)}-${st.snapshot_id ?? 0}` : "";
 
   function customize(on: boolean) {
     setForm((f) => ({
@@ -392,10 +463,18 @@ export function Calibration() {
             <>
               <dl className="kv">
                 <dt>Camera</dt><dd>{st.camera.name}</dd>
-                <dt>Resolution</dt><dd>{st.camera.size[0]} × {st.camera.size[1]}</dd>
+                <dt>Resolution</dt><dd>{st.camera.size[0]} × {st.camera.size[1]}{st.camera.size_from === "guessed" ? " (guessed)" : ""}</dd>
                 <dt>Focal length</dt><dd>{st.camera.fx} px</dd>
                 <dt>Stream</dt><dd>{st.camera.stream ?? "none, tags only"}</dd>
               </dl>
+              {st.camera.size_from === "guessed" && (
+                <p className="note error">
+                  PhotonVision didn't say this camera's resolution, so it's guessed from the lens calibration, and may be wrong.
+                  Check the camera's resolution in PhotonVision, then Disconnect, set it under <b>Show connection options</b>
+                  (Res. width / height) and Connect. It's remembered after that.
+                </p>
+              )}
+              <LensCheck camera={st.camera.name} size={st.camera.size} onInstalled={() => setAutoConnect(true)} />
               {pvUi && <a className="btn sm block ext" href={pvUi} target="_blank" rel="noreferrer">Open PhotonVision UI ↗</a>}
               {pvs?.ours && <button className="btn sm block ghost stop-pv" disabled={pv.busy} onClick={photonvision.stop}>Stop PhotonVision</button>}
             </>
@@ -494,7 +573,11 @@ export function Calibration() {
           )}
         </Card>
 
-        <Card title="Capture reference tags" step={2} active={step === 2} done={!!result}>
+        <Card title="Capture reference tags" step={2} active={step === 2} done={!!result}
+          aside={(st?.setup || result) && (
+            <button className="btn sm ghost" disabled={busy} title="Drop this capture, its clicks and its solve, and start again. The saved calibration is kept."
+              onClick={() => run("/calib/reset", {}, "Starting the field calibration over")}>Start over</button>
+          )}>
           <div className="stack">
             <div className="row">
               <label className="field">
@@ -520,7 +603,10 @@ export function Calibration() {
             </div>
 
             <div className="stack">
-              <Segmented options={METHODS} value={method} onChange={(m) => !st?.capturing && set("method", m)} />
+              <Segmented options={METHODS} value={method} onChange={(m) => {
+                if (st?.setup && m !== method) return toasts.push("error", "Press Start over to change the method: this calibration was started another way.");
+                set("method", m);
+              }} />
               <small className="dim">{METHODS.find((m) => m.value === method)!.help}</small>
             </div>
 
@@ -609,6 +695,10 @@ export function Calibration() {
                   )}
                 </div>
                 <small className="dim">Click where the tag's centre would go. The magnifier shows the spot 3× larger.</small>
+                <button className="btn sm block" disabled={busy} title="A fresh picture from the camera. Your points stay; redo any that no longer sit on their mark."
+                  onClick={() => run("/calib/click", { action: "retake" }, "New picture taken: check your points still sit on their marks")}>
+                  Retake picture (keeps the points)
+                </button>
                 <div className="row wrap">
                   {clicks!.map((c, i) => c && (
                     <button key={i} className="btn sm" disabled={busy} onClick={() => run("/calib/click", { action: "clear", index: i })}>Redo {i + 1}</button>
@@ -624,9 +714,9 @@ export function Calibration() {
             <div className="row">
               {st?.capturing ? (
                 <button className="btn" disabled={busy} onClick={() => run("/calib/capture/stop")}>Stop</button>
-              ) : (
+              ) : method === "click" && clicks ? null : (
                 <button className={`btn${!canSolve ? " primary" : ""}`} disabled={busy || !connected} onClick={startCapture}>
-                  {method === "click" ? (clicks ? "New picture" : "Take a picture to click on")
+                  {method === "click" ? "Take a picture to click on"
                     : st && (st.captured > 0 || (corners && corners.index > 0)) ? "Capture again" : "Start capture"}
                 </button>
               )}
@@ -641,6 +731,16 @@ export function Calibration() {
         <Card title="Origin & save" step={3} active={step === 3}>
           {result ? (
             <div className="stack">
+              <div className="row">
+                {result.from === "calibrated" && (
+                  <button className="btn sm" disabled={busy} title="Undo the solve and go back to the capture: adjust the clicks or corners, then Solve again."
+                    onClick={() => run("/calib/unsolve")}>
+                    {st?.setup?.method === "click" ? "Back to the points" : "Back to the capture"}
+                  </button>
+                )}
+                <button className="btn sm ghost" disabled={busy} title="Drop the capture and the solve and start again. The saved calibration is kept."
+                  onClick={() => run("/calib/reset", {}, "Starting the field calibration over")}>Start over</button>
+              </div>
               {result.from === "calibrated" && (
                 <div className={`quality ${q}`}>
                   <span className={`dot ${q === "good" ? "ok" : q === "fair" ? "warn" : "red"}`} />

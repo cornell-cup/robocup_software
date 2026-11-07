@@ -200,15 +200,26 @@ class PhotonTags:
             self.close()  # a caller that carries on must not inherit the server
             raise
         # The resolution the camera runs at, which the corners and K are in:
-        # given, else the mode PhotonVision announces for it, else a guess
-        # from K -- a poor one when the calibration's principal point sits far
-        # off-centre (cy 896 of 1080 read as 1440 tall, seen on a real one).
-        announced = None if res else self._announced_size()
-        self.size: tuple[int, int] = (
-            (int(res[0]), int(res[1])) if res else announced or guess_size(self.K))
+        # given; else the mode PhotonVision announces for it (it does not
+        # always); else what was known for this camera last time; else a
+        # guess from K -- a poor one when the calibration's principal point
+        # sits off-centre (cy 896 of 1080 read as 1440 tall, cy 609 as 1200,
+        # both seen on one real camera).
+        known = remembered().get("sizes", {}).get(self.name)
+        if res:
+            self.size, self.size_from = (int(res[0]), int(res[1])), "set"
+        elif (announced := self._announced_size()) is not None:
+            self.size, self.size_from = announced, "announced"
+        elif known:
+            self.size, self.size_from = (int(known[0]), int(known[1])), "remembered"
+        else:
+            self.size, self.size_from = guess_size(self.K), "guessed"
+        if self.size_from in ("set", "announced"):
+            remember(sizes={**remembered().get("sizes", {}), self.name: list(self.size)})
         self.source = f"PhotonVision '{self.name}' calibration"
-        how = ("" if res else " (PhotonVision's camera mode)" if announced
-               else " (guessed from the calibration; --photon-res to set)")
+        how = {"set": "", "announced": " (PhotonVision's camera mode)",
+               "remembered": " (as last time)",
+               "guessed": " (guessed from the calibration; --photon-res to set)"}[self.size_from]
         print(f"PhotonVision camera '{self.name}': fx {self.K[0, 0]:.1f}, "
               f"{self.size[0]}x{self.size[1]}{how}")
         self._warned_not_tags = False
@@ -555,7 +566,8 @@ def open_photon(args, *, need_stream: bool) -> tuple[PhotonTags, PhotonStream | 
                              f"Otherwise pass the stream's address with --stream.") from None
         print(f"warning: {e} -- tags only, drawn on a blank canvas")
         return tags, None
-    remember(camera=tags.name, stream=stream.url, size=list(tags.size))
+    remember(camera=tags.name, stream=stream.url,
+             size=list(tags.size) if tags.size_from != "guessed" else None)
     return tags, stream
 
 

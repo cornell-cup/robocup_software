@@ -29,7 +29,11 @@ fits with the rest.
    camera doesn't appear, give your terminal camera access in System Settings >
    Privacy & Security. An iPhone nearby may show up as a second camera
    (Continuity Camera): the app picks the camera with a lens calibration, or
-   asks once on the Field calibration page. If it still doesn't, run PhotonVision on a Windows or
+   asks once on the Field calibration page. PhotonVision's own lens solve on
+   the Mac build can come out far worse than its snapshots allow (7–20 px where
+   they re-solve to under 1 px): the Field calibration page's PhotonVision panel
+   checks it, shows where the board reached, and **Use the re-solved
+   calibration** puts the re-solve back into PhotonVision (restarting it). If it still doesn't, run PhotonVision on a Windows or
    Linux machine with the camera plugged in there, and in step 4 set the
    address to the Mac's IP instead of `127.0.0.1`.
    After the first connection, the camera and its stream address are

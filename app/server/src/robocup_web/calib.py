@@ -86,6 +86,7 @@ class FieldCalibration:
         self._corners: CornerSampler | None = None  # one tag at a time
         # clicking the corners: one still picture, a pixel (or None) per point
         self._snapshot: np.ndarray | None = None
+        self._snapshot_id = 0  # changes with each still picture, for the page's cache
         self._clicks: list[tuple[float, float] | None] | None = None
         self._corner_status = CornerSampler.NO_TAG
         self._result: FieldCalibrationResult | SequentialCalibrationResult | None = None
@@ -240,17 +241,26 @@ class FieldCalibration:
             self._corners = CornerSampler(layout, per_corner) if sequential else None
             self._corner_status = CornerSampler.NO_TAG
             self._snapshot = snapshot
+            self._snapshot_id += snapshot is not None
             self._clicks = [None] * len(layout) if method == "click" else None
             self._capturing = method != "click"
 
     def click(self, opts: dict[str, Any]) -> None:
         """Clicking the corners: `set` a point (the next unset one, or
-        `index`) at pixel u, v of the still picture, `clear` one, or `clear_all`."""
+        `index`) at pixel u, v of the still picture, `clear` one, `clear_all`,
+        or `retake` the picture -- keeping the points, which stay right while
+        the camera hasn't moved, and show at a glance if it has."""
         action = opts.get("action", "set")
         with self._lock:
             clicks, snap = self._clicks, self._snapshot
             if clicks is None or snap is None:
                 raise CommandError("start clicking the corners first")
+            if action == "retake":
+                if self._stream is None:
+                    raise CommandError("no camera picture to retake it from")
+                self._snapshot = self._stream.latest().copy()
+                self._snapshot_id += 1
+                return
             if action == "clear_all":
                 clicks[:] = [None] * len(clicks)
                 return
@@ -275,6 +285,38 @@ class FieldCalibration:
             # snapping to a nearby image corner -- on an L of tape that is the
             # tape's edge, half a tape width from where the tag sat.
             clicks[index] = (float(u), float(v))
+
+    def unsolve(self) -> None:
+        """Back from the solve to the capture it came from: the clicks, corners
+        or frames are kept, to adjust and solve again."""
+        with self._lock:
+            if self._result_from != "calibrated":
+                raise CommandError("nothing solved to go back from")
+            self._result = None
+            self._fit_mm = None
+            self._transform = None
+            self._field = None
+            self._origin = None
+            self._result_from = ""
+
+    def reset(self) -> None:
+        """Start the field calibration over: drop the capture, the clicks, the
+        solve and the origin picked for it. The connection stays, and nothing
+        saved is touched."""
+        with self._lock:
+            self._capturing = False
+            self._setup = None
+            self._views = []
+            self._corners = None
+            self._corner_status = CornerSampler.NO_TAG
+            self._snapshot = None
+            self._clicks = None
+            self._result = None
+            self._fit_mm = None
+            self._transform = None
+            self._field = None
+            self._origin = None
+            self._result_from = ""
 
     def stop_capture(self) -> None:
         with self._lock:
@@ -541,6 +583,7 @@ class FieldCalibration:
             if self._clicks is not None:
                 out["clicks"] = [None if c is None else [round(c[0], 1), round(c[1], 1)]
                                  for c in self._clicks]
+                out["snapshot_id"] = self._snapshot_id
             sampler = self._corners
             if sampler is not None:
                 out["corners"] = {
@@ -559,6 +602,8 @@ class FieldCalibration:
         if tags is not None:
             out["camera"] = {
                 "name": tags.name, "size": list(tags.size), "fx": round(float(tags.K[0, 0]), 1),
+                # How the resolution is known: set, announced, remembered or guessed.
+                "size_from": getattr(tags, "size_from", "set"),
                 "source": tags.source, "stream": stream.url if stream is not None else None,
                 "host": tags.host(),
             }

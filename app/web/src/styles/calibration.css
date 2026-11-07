@@ -259,3 +259,44 @@ tr.current td {
 .row.wrap {
   flex-wrap: wrap;
 }
+
+/* the lens check */
+.lens {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+.lens-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+.lens .fit.good {
+  color: var(--ok);
+}
+.lens .fit.fair {
+  color: var(--warn);
+}
+.lens .fit.poor {
+  color: var(--error-text);
+}
+.coverage-row {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.coverage {
+  flex: none;
+  display: grid;
+  grid-template-columns: repeat(3, 16px);
+  grid-template-rows: repeat(3, 9px);
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--line-2);
+  border-radius: 3px;
+}
+.coverage span.hit {
+  background: var(--ok);
+}
+.coverage span.miss {
+  background: rgba(var(--red-rgb), 0.55);
+}
