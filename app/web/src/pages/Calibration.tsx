@@ -145,9 +145,9 @@ export function Calibration() {
     }
   }
 
-  const connect = () =>
+  const connect = (camera?: string) =>
     run("/calib/connect", {
-      camera: form.camera.trim() || null,
+      camera: (camera ?? form.camera).trim() || null,
       nt_server: form.ntServer.trim() || null,
       stream: form.streamUrl.trim() || null,
       res: Number(form.resW) && Number(form.resH) ? [Number(form.resW), Number(form.resH)] : null,
@@ -261,7 +261,7 @@ export function Calibration() {
   const ownFile = fileName(st?.saved.path);
   // Several cameras: the others' saved calibrations, and whether this one's
   // origin matches theirs (the tracker refuses cameras that disagree).
-  const otherCams = (st?.cameras ?? []).filter((c) => fileName(c.path) !== ownFile && c.exists && !c.error);
+  const otherCams = (st?.saved_cameras ?? []).filter((c) => fileName(c.path) !== ownFile && c.exists && !c.error);
   const sameXY = (a?: number[] | null, b?: number[] | null) =>
     (!a && !b) || (!!a && !!b && Math.abs(a[0] - b[0]) < 1e-3 && Math.abs(a[1] - b[1]) < 1e-3);
   const theirOrigin = otherCams[0]?.origin ?? null;
@@ -443,10 +443,22 @@ export function Calibration() {
               <p className="muted small">
                 Point PhotonVision's <b>NetworkTables server address</b> at this machine, with an AprilTag 36h11 pipeline and a calibrated lens.
               </p>
-              <button className={`btn block${!pvs || pvs.up ? " primary" : ""}`} disabled={busy || st?.state === "connecting"} onClick={connect}>
+              <button className={`btn block${!pvs || pvs.up ? " primary" : ""}`} disabled={busy || st?.state === "connecting"} onClick={() => connect()}>
                 {st?.state === "connecting" ? "Connecting…" : pvs && !pvs.up ? "Connect (PhotonVision elsewhere)" : "Connect"}
               </button>
-              {st?.state === "error" && st.error && <p className="note error">{st.error}</p>}
+              {st?.state === "error" && st.cameras?.length ? (
+                <div className="stack">
+                  <p className="note">PhotonVision has several cameras. Which one looks at the field?</p>
+                  {st.cameras.map((name) => (
+                    <button key={name} className="btn block" disabled={busy} onClick={() => { set("camera", name); connect(name); }}>
+                      Use {name}
+                    </button>
+                  ))}
+                  <small className="dim">Remembered for next time, here and on the Tracking page.</small>
+                </div>
+              ) : (
+                st?.state === "error" && st.error && <p className="note error">{st.error}</p>
+              )}
               <button className="link" onClick={() => setAdvanced(!advanced)}>{advanced ? "Hide" : "Show"} connection options</button>
               {advanced && (
                 <>
@@ -868,9 +880,9 @@ export function Calibration() {
               <table className="plain">
                 <thead><tr><th>Camera</th><th>Field</th><th>Origin</th><th>Saved</th></tr></thead>
                 <tbody>
-                  {(st?.cameras ?? []).length === 0 ? (
+                  {(st?.saved_cameras ?? []).length === 0 ? (
                     <tr><td colSpan={4} className="dim">No camera calibrated yet</td></tr>
-                  ) : (st?.cameras ?? []).map((c) => (
+                  ) : (st?.saved_cameras ?? []).map((c) => (
                     <tr key={c.path} className={fileName(c.path) === ownFile ? "current" : undefined}>
                       <td className="mono">{c.name}</td>
                       <td className="mono">{c.field ? `${c.field[0]}×${c.field[1]}` : "–"}</td>
@@ -882,9 +894,9 @@ export function Calibration() {
               </table>
               {st?.cameras_agree && !st.cameras_agree.field && <p className="note error">The cameras were calibrated for different field sizes. Recalibrate with the same size.</p>}
               {st?.cameras_agree && !st.cameras_agree.origin && <p className="note error">The cameras use different origins. Give them the same one (step 3) and save each.</p>}
-              {(st?.cameras ?? []).length >= 2 && st?.cameras_agree?.field && st.cameras_agree.origin && (
+              {(st?.saved_cameras ?? []).length >= 2 && st?.cameras_agree?.field && st.cameras_agree.origin && (
                 <small className="dim">
-                  Track with all of them: on the Tracking page, PhotonVision camera <span className="mono">{(st?.cameras ?? []).map((c) => c.name).join(", ")}</span>.
+                  Track with all of them: on the Tracking page, PhotonVision camera <span className="mono">{(st?.saved_cameras ?? []).map((c) => c.name).join(", ")}</span>.
                 </small>
               )}
             </>

@@ -18,6 +18,7 @@ import threading
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import cv2
@@ -33,7 +34,7 @@ from ball_tracking.ball_color import (
     save_profile,
     scene_hue_histogram,
 )
-from tag_tracking.photon import STREAM_PORT, PhotonStream
+from tag_tracking.photon import PhotonStream, open_stream, remember, remembered, stream_urls
 
 from .procs import CommandError
 
@@ -58,19 +59,27 @@ class BallCalibration:
     # -- the picture ----------------------------------------------------------
 
     def connect(self, url: str | None, host_hint: str | None = None) -> None:
-        url = (url or "").strip() or f"http://{host_hint or '127.0.0.1'}:{STREAM_PORT}/stream.mjpg"
+        # What was typed, else the stream that worked last time (any tool), else
+        # the default port.
+        given = (url or "").strip() or None
+        urls = stream_urls(SimpleNamespace(stream=given), None, host_hint)
         with self._lock:
             if self.state in ("connecting", "connected"):
                 raise CommandError("already connected -- disconnect first")
             self.state, self.error = "connecting", None
         try:
-            stream = PhotonStream(url, None)
+            # The pipeline's size, as last seen by a tool that knows it: asked
+            # for, or PhotonVision sends a thumbnail (see PhotonStream).
+            size = remembered().get("size")
+            stream = open_stream(urls, tuple(size) if size else None, given)
         except OSError as e:
             with self._lock:
                 self.state, self.error = "error", (
-                    f"{e}. Is PhotonVision running with its camera enabled? The address "
-                    f"is in PhotonVision's camera view; paste it into Stream URL.")
+                    f"{e}. Is PhotonVision running with its camera enabled? Connecting on the "
+                    f"Field calibration page first finds the stream by itself; or paste its "
+                    f"address (in PhotonVision's camera view) into Stream URL.")
             return
+        remember(stream=stream.url)
         with self._lock:
             self._stream = stream
             self.state = "connected"

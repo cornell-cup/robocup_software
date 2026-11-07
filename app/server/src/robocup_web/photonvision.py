@@ -14,6 +14,7 @@ Which folder: --photonvision-dir, else $ROBOCUP_PHOTONVISION_DIR, else a
 from __future__ import annotations
 
 import os
+import platform
 import re
 import shutil
 import socket
@@ -164,7 +165,10 @@ class PhotonVisionProcess(ManagedProcess):
         self._failure = None
         self._setup_lines = {}
         # Started from its own folder: its settings live in photonvision_config there.
-        self.launch([str(java), "-jar", jar.name], self.folder)
+        # -n: hands off the network settings. PhotonVision manages a
+        # coprocessor's network itself, which on a Mac it must not touch.
+        mac = ["-n"] if platform.system() == "Darwin" else []
+        self.launch([str(java), "-jar", jar.name, *mac], self.folder)
 
     def install(self) -> None:
         """Download the missing pieces into the folder, in the background."""

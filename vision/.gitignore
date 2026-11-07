@@ -20,6 +20,10 @@ ENV/
 /field.png
 /tag*.png
 
+# What worked last time with PhotonVision (camera name, stream URL): per
+# machine, like the camera numbers in it.
+/calib/photonvision.json
+
 # Editor / OS noise
 .vscode/
 .idea/

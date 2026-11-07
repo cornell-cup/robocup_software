@@ -96,6 +96,8 @@ class FieldCalibration:
         self._stop = threading.Event()
         self.state = "disconnected"  # connecting | connected | error
         self.error: str | None = None
+        #: PhotonVision's cameras, when it has several and the page must ask which.
+        self.cameras: list[str] | None = None
         self._dets: list = []
         self._dets_t = 0.0
         self._rate = 0.0
@@ -128,7 +130,7 @@ class FieldCalibration:
         with self._lock:
             if self.state in ("connecting", "connected"):
                 raise CommandError("already connected -- disconnect first")
-            self.state, self.error = "connecting", None
+            self.state, self.error, self.cameras = "connecting", None, None
         res = opts.get("res")
         args = SimpleNamespace(
             photon_camera=(opts.get("camera") or None),
@@ -147,6 +149,7 @@ class FieldCalibration:
         except BaseException as e:  # open_photon exits with its message on failure
             with self._lock:
                 self.state, self.error = "error", str(e) or type(e).__name__
+                self.cameras = getattr(e, "names", None)
             return
         if self._stop.is_set():  # disconnected while it was still connecting
             if stream is not None:
@@ -636,6 +639,7 @@ class FieldCalibration:
             out: dict[str, Any] = {
                 "state": self.state,
                 "error": self.error,
+                "cameras": self.cameras,
                 "capturing": self._capturing,
                 "captured": len(self._views),
                 "setup": None if self._setup is None else {
@@ -700,11 +704,11 @@ class FieldCalibration:
         out["saved"] = (_saved_summary(target) if target is not None
                         else {"path": "", "exists": False, "needs_camera": True})
         if split > 1:
-            out["cameras"] = [{"name": saved_camera(p), **_saved_summary(p)}
-                              for p in camera_pose_files()]
-            fields = {tuple(c["field"]) for c in out["cameras"] if c.get("field")}
+            out["saved_cameras"] = [{"name": saved_camera(p), **_saved_summary(p)}
+                                    for p in camera_pose_files()]
+            fields = {tuple(c["field"]) for c in out["saved_cameras"] if c.get("field")}
             origins = {None if c.get("origin") is None else tuple(c["origin"])
-                       for c in out["cameras"] if c.get("exists") and "error" not in c}
+                       for c in out["saved_cameras"] if c.get("exists") and "error" not in c}
             out["cameras_agree"] = {"field": len(fields) <= 1, "origin": len(origins) <= 1}
         if overlap is not None:
             out["overlap"] = _jsonable(overlap)

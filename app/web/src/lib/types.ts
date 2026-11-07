@@ -148,6 +148,8 @@ export interface CalibCheck {
 export interface CalibStatus {
   state: "disconnected" | "connecting" | "connected" | "error";
   error: string | null;
+  /** PhotonVision's cameras, when it has several and none was picked. */
+  cameras: string[] | null;
   capturing: boolean;
   captured: number;
   setup: {
@@ -164,7 +166,7 @@ export interface CalibStatus {
   split: number;
   part: number;
   /** Several cameras: every field_pose_<camera>.json saved so far. */
-  cameras?: { name: string; path: string; exists: boolean; field?: number[] | null; origin?: number[] | null; modified?: number; error?: string }[];
+  saved_cameras?: { name: string; path: string; exists: boolean; field?: number[] | null; origin?: number[] | null; modified?: number; error?: string }[];
   /** Several cameras: whether those files share one field size and one origin. */
   cameras_agree?: { field: boolean; origin: boolean };
   /** Several cameras: the live overlap check. */
