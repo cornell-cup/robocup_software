@@ -29,6 +29,19 @@ def _tag_bitmap(tag_id: int, px_per_module: int = 24) -> np.ndarray:
     return cv2.aruco.generateImageMarker(d, tag_id, MODULES * px_per_module, borderBits=1)
 
 
+def tag_corners_field(x: float, y: float, theta_deg: float, size: float) -> np.ndarray:
+    """The 4 corners of a tag lying on the field at (x, y), turned theta_deg,
+    in field coords (4, 3): the bitmap's top-left, top-right, bottom-right,
+    bottom-left, as _warp_tag paints them."""
+    th = np.radians(theta_deg)
+    ex = np.array([np.cos(th), np.sin(th), 0.0])  # tag +X in field coords
+    ey = np.array([np.sin(th), -np.cos(th), 0.0])  # tag +Y in field coords
+    centre = np.array([x, y, 0.0])
+    h = size / 2.0
+    local = [(-h, -h), (h, -h), (h, h), (-h, h)]
+    return np.array([centre + u * ex + v * ey for u, v in local])
+
+
 def _warp_tag(
     frame: np.ndarray, tag_id: int, x: float, y: float, theta_deg: float, size: float,
     rvec: np.ndarray, tvec: np.ndarray, K: np.ndarray,
@@ -36,13 +49,7 @@ def _warp_tag(
     """Paint one AprilTag into `frame` at a given field pose, quiet zone
     included. Same trick selfcheck.py uses to fabricate detections.
     """
-    th = np.radians(theta_deg)
-    ex = np.array([np.cos(th), np.sin(th), 0.0])  # tag +X in field coords
-    ey = np.array([np.sin(th), -np.cos(th), 0.0])  # tag +Y in field coords
-    centre = np.array([x, y, 0.0])
-    h = size / 2.0
-    local = [(-h, -h), (h, -h), (h, h), (-h, h)]
-    obj = np.array([centre + u * ex + v * ey for u, v in local])
+    obj = tag_corners_field(x, y, theta_deg, size)
 
     src_img = _tag_bitmap(tag_id)
     sh, sw = src_img.shape
