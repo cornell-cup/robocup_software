@@ -159,7 +159,10 @@ export interface CalibStatus {
     min_frames: number;
     max_frames: number;
     sequential: boolean;
+    method?: "tags" | "one" | "click";
   } | null;
+  /** Clicking the corners: each point's pixel on the still picture, or null. */
+  clicks?: (number[] | null)[];
   /** One tag at a time: where the capture is. */
   corners?: {
     index: number;

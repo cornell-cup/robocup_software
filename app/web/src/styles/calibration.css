@@ -223,3 +223,39 @@ tr.current td {
   border-radius: var(--radius-sm);
   background: white;
 }
+
+/* clicking the corners */
+.overlay .clicked line {
+  stroke: #ff3df2;
+  stroke-width: 2;
+}
+.loupe {
+  position: absolute;
+  pointer-events: none;
+  border: 2px solid #ff3df2;
+  border-radius: 50%;
+  background-color: #000;
+  background-repeat: no-repeat;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.6);
+}
+.loupe::before,
+.loupe::after {
+  content: "";
+  position: absolute;
+  background: rgba(255, 61, 242, 0.9);
+}
+.loupe::before {
+  left: 50%;
+  top: 30%;
+  bottom: 30%;
+  width: 1px;
+}
+.loupe::after {
+  top: 50%;
+  left: 30%;
+  right: 30%;
+  height: 1px;
+}
+.row.wrap {
+  flex-wrap: wrap;
+}

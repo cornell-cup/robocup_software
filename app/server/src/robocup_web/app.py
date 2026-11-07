@@ -24,7 +24,7 @@ from typing import Annotated, Any
 
 import uvicorn
 from fastapi import Body, FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import __version__
@@ -303,6 +303,18 @@ def create_app(photonvision_dir: Path | None = None, start_photonvision: bool = 
     def calib_corner(opts: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
         state.calib.corner(str(opts.get("action")))
         return state.calib.status()
+
+    @app.post("/api/v1/calib/click")
+    def calib_click(opts: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
+        state.calib.click(opts)
+        return state.calib.status()
+
+    @app.get("/api/v1/calib/snapshot.jpg")
+    def calib_snapshot() -> Response:
+        jpeg = state.calib.snapshot_jpeg()
+        if jpeg is None:
+            raise CommandError("no still picture -- start clicking the corners first")
+        return Response(jpeg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
     @app.post("/api/v1/calib/solve")
     def calib_solve() -> dict[str, Any]:

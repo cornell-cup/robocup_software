@@ -170,6 +170,12 @@ connect while tracking.
    put it at each corner in the order listed, counterclockwise seen from above, let
    go until the count fills, then **Confirm corner** (`q`; `r` retries, **Back a
    corner** redoes the one before). Any tag id works; only one may be in view.
+   Or, with no tags at all, **Click**: if the corners are taped, **Take a picture to
+   click on** freezes one full-size frame, and you click each taped corner on it in
+   the listed order (a magnifier follows the mouse; **Redo n** moves a point). Click
+   where the tag's centre would have gone. A click 1–2 px off is a few mm, a little
+   less exact than a tag averaged over 30 frames; clicking extra taped points as
+   custom positions (edge midpoints) makes up for it.
 3. Pick the **origin**: corner, centre, typed coordinates, or click the picture (snaps to
    corners, edge midpoints and the centre). **Save** writes `vision/calib/field_pose.json`,
    which every tracker loads the next time it starts.
