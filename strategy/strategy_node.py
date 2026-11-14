@@ -521,9 +521,13 @@ class Brain:
 
     def _reset_memory(self) -> None:
         self.sticky: dict[str, int] = {}
-        # Flips True once the ball has been kicked/pushed. Before that, supporters
-        # hold on their own half so they don't barrel into each other at midfield.
+        # False from a restart (start, goal, half time) until the ball first
+        # moves. Meanwhile supporters hold their own half so they don't barrel
+        # into each other at midfield.
         self.kicked_off = False
+        self._goal_seq: int | None = None
+        self._half: int | None = None
+        self._last_t: float | None = None
 
     def handle_control(self, msg: dict[str, Any]) -> None:
         """A control message from the manual port (viz_node or the web app)."""
@@ -566,9 +570,24 @@ class Brain:
         return Plan(targets, kicks, dribble, attackers, gamestate)
 
     def _update_kickoff(self, gamestate: GameState) -> None:
+        if self._last_t is not None and gamestate.timestamp < self._last_t:
+            self._reset_memory()  # sim time went back: the sim was restarted
+        self._last_t = gamestate.timestamp
+
+        # A goal or a new half puts the ball back on the centre spot.
+        if (self._goal_seq is not None and gamestate.goal_seq != self._goal_seq) or (
+            self._half is not None and gamestate.half != self._half
+        ):
+            self.kicked_off = False
+            self.log("[Strategy node] restart: waiting for kickoff")
+        self._goal_seq = gamestate.goal_seq
+        self._half = gamestate.half
+
         if not self.kicked_off and gamestate.ball.speed > KICKOFF_BALL_SPEED:
             self.kicked_off = True
             self.log("[Strategy node] kickoff")
+        if not self.kicked_off and gamestate.game_phase == "play":
+            gamestate.game_phase = "kickoff"
 
 
 def _try_load_skill(path: str):
