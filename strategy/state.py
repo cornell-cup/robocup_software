@@ -58,7 +58,17 @@ class GameState:
     opponents_team: list[RobotState] = field(default_factory=list)  # opponents
     possession: str = "loose"  # "ours", "theirs", "loose"
     ball_holder: int | None = None  # id of the robot that has the ball, if any
-    game_phase: str = "play"  # "play", "kickoff", "freekick", "halt"
+    # "play", "kickoff" (ball at the centre, waiting for the first touch) or
+    # "halt" (game over). build_game_state sets "play" or "halt"; the strategy
+    # node sets "kickoff", since that needs memory across frames.
+    game_phase: str = "play"
+
+    # From the sim's game block (world state "game", "score", "last_goal")
+    score_ours: int = 0
+    score_theirs: int = 0
+    half: int = 1  # 1, 2; 3 and 4 are overtime
+    time_remaining: float = 0.0  # seconds left in this half
+    goal_seq: int = 0  # goals scored so far, by anyone; changes on every goal
 
 
 # Goals (Fixed Positions)
@@ -110,6 +120,7 @@ def build_game_state(raw: dict[str, Any], our_color: str = "blue") -> GameState:
     else:
         gamestate.possession = "loose"
 
+    _parse_game(gamestate, raw, our_color)
     return gamestate
 
 
@@ -122,6 +133,18 @@ def _parse_robot(rid: int, raw: dict[str, Any]) -> RobotState:
         angle=raw.get("angle", 0.0),
         omega=raw.get("omega", 0.0),
     )
+
+
+def _parse_game(gamestate: GameState, raw: dict[str, Any], our_color: str) -> None:
+    game = raw.get("game") or {}
+    score = raw.get("score") or {}
+    theirs = "red" if our_color == "blue" else "blue"
+    gamestate.score_ours = int(score.get(our_color, 0))
+    gamestate.score_theirs = int(score.get(theirs, 0))
+    gamestate.half = int(game.get("half", 1))
+    gamestate.time_remaining = float(game.get("time_remaining", 0.0))
+    gamestate.game_phase = "halt" if game.get("half_over") else "play"
+    gamestate.goal_seq = int((raw.get("last_goal") or {}).get("seq", 0))
 
 
 def ball_in_front(robot: RobotState, ball_pos: np.ndarray) -> bool:
