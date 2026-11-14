@@ -305,15 +305,19 @@ def decide(
                 tx, ty, ta = _goalie_target(ball.pos, team_color)
                 targets[robot.id] = (tx, ty, ta)
 
-    # Possession: only the attacker strictly closer to the ball emits a kick.
-    # Two opposing kicks in the same tick produce equal-opposite impulses
-    # that cancel, leaving the ball pinned between both robots.
-    if len(kicks) > 1:
-        rid_to_bot = {r.id: r for r in gamestate.blue + gamestate.red}
-        closest = min(kicks, key=lambda rid: distance(rid_to_bot[rid].pos, ball.pos))
-        kicks = [closest]
-
+    # Both teams' kicks. When both attackers kick in the same tick, Brain keeps
+    # only the closer one (resolve_kick_conflict).
     return targets, kicks, attacker_rids
+
+
+def resolve_kick_conflict(kicks: list[int], gamestate: GameState) -> list[int]:
+    """Only the kicker closest to the ball kicks. Two opposing kicks in the
+    same tick produce equal-opposite impulses that cancel, leaving the ball
+    pinned between both robots."""
+    if len(kicks) <= 1:
+        return list(kicks)
+    rid_to_bot = {r.id: r for r in gamestate.blue + gamestate.red}
+    return [min(kicks, key=lambda rid: distance(rid_to_bot[rid].pos, gamestate.ball.pos))]
 
 
 def _ball_in_opp_half_for(team_color: str, ball_x: float) -> bool:
@@ -524,9 +528,13 @@ class Brain:
         decide_fn: Any = None,
         rl_checkpoint: str = DEFAULT_RL_CHECKPOINT,
         log: Any = None,
+        resolve_kicks: bool = True,
     ):
         self.color = color
         self.decide_fn = decide_fn or decide
+        # False when something else settles kicks between two brains (the
+        # match runner runs one brain per team).
+        self.resolve_kicks = resolve_kicks
         self.rl_checkpoint = rl_checkpoint
         self.log = log or (lambda _msg: None)
         self.rl_skill: "RLKickSkill | None" = None
@@ -573,6 +581,8 @@ class Brain:
             gamestate, self.rl_skill, self.rl_enabled, self.sticky, self.kicked_off,
             self.human_blue_ids, lost,
         )
+        if self.resolve_kicks:
+            kicks = resolve_kick_conflict(kicks, gamestate)
 
         # Our dribblers: on for our attacker (when the toggle is on), off for
         # every other robot we drive, so stale state never leaks between
