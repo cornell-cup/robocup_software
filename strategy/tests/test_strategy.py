@@ -13,9 +13,8 @@ from typing import Any
 
 import numpy as np
 
-from strategy import strategy_node
 from strategy.analysis import analyze, ball_intercept, drive_accel, time_to_reach
-from strategy.eval import baseline_v0, match
+from strategy.eval import match
 from strategy.prediction import (
     ball_rest_position,
     predict_ball_position,
@@ -30,11 +29,11 @@ from strategy.state import (
     build_game_state,
 )
 from strategy.strategy_node import Brain, decide, resolve_kick_conflict
-from strategy.tactics.attacker import CONTESTED_SKEW, attack
+from strategy.tactics.attacker import APPROACH_OFFSET, CONTESTED_SKEW, aim_point, attack
 from strategy.tactics.defender import defend_goal
 from strategy.tactics.role_assignments import ATTACKER, DEFENDER, SUPPORTER, assign_roles
 
-from config import BALL_DAMP, DT, FIELD_IS_DEFAULT  # sim/config.py, on sys.path via strategy
+from config import BALL_DAMP, DT  # sim/config.py, on sys.path via strategy
 
 # Six robots well apart, roughly the sim's spawn layout (0-2 blue, 3-5 red).
 SPAWNS = {
@@ -380,18 +379,64 @@ class TestBrain(unittest.TestCase):
         self.assertNotIn(0, plan.dribble)
 
 
-@unittest.skipUnless(FIELD_IS_DEFAULT, "v0 equivalence holds on the 9 x 6 field")
-class TestMatch(unittest.TestCase):
-    def test_current_plays_like_v0_on_default_field(self):
-        """No change so far alters a pure-sim game on 9 x 6: same game, same result.
-        When a later step changes how it plays on purpose, drop this test."""
-        a = match.play_game(strategy_node.decide, baseline_v0.decide, True, seed=3, duration_s=15)
-        b = match.play_game(baseline_v0.decide, baseline_v0.decide, True, seed=3, duration_s=15)
-        self.assertEqual(
-            (a.goals_a, a.goals_b, a.possession_a, a.possession_b, a.kicks_a, a.kicks_b, a.attacking_a),
-            (b.goals_a, b.goals_b, b.possession_a, b.possession_b, b.kicks_a, b.kicks_b, b.attacking_a),
-        )
+def lone_attacker_scores(ball_frac: tuple[float, float], limit_s: float = 30.0) -> float | None:
+    """Blue robot 1 alone against a still ball (everyone else off the field):
+    seconds until it scores in red's goal, None if not within `limit_s`."""
+    from config import FIELD_H, FIELD_W
+    from pymunk_world import PymunkWorld
+    from robot_node import RobotController
 
+    brain = Brain("blue")
+    brain.handle_control({"human_blue_ids": [0]})  # robot 2 stays off the field: 1 attacks
+    w = PymunkWorld()
+    for rid in (0, 2, 3, 4, 5):
+        w.set_robot(rid, (-10.0 - rid, -10.0), 0.0)
+    w.reset_ball((ball_frac[0] * FIELD_W, ball_frac[1] * FIELD_H))
+    w.set_robot(1, (0.1 * FIELD_W, 0.5 * FIELD_H), 0.0)
+    ctrl = RobotController(1)
+    state = w.step()
+    for _ in range(round(limit_s / DT)):
+        plan = brain.tick({"t": state["t"], "ball": state["ball"], "robots": state["robots"]})
+        ctrl.set_target(*plan.targets[1][:2], None, plan.targets[1][2])
+        state = w.step({1: ctrl.compute_wheels(state["robots"]["1"])})
+        if state["scoring_team"] is not None:
+            return state["t"] if state["scoring_team"] == "red" else None
+    return None
+
+
+class TestPush(unittest.TestCase):
+    def test_lined_up_attacker_drives_through_the_ball(self):
+        ball = (5.0, 3.0)
+        behind = (5.0 - APPROACH_OFFSET, 3.0)  # on the line to red's goal, facing it
+        gs = build_game_state(world({1: (*behind, 0.0)}, ball=(*ball, 0, 0)))
+        command = attack(gs.blue[1], gs, "blue")
+        self.assertGreater(command.x, ball[0])  # past the ball, toward the goal
+        self.assertAlmostEqual(command.angle, 0.0, places=6)
+
+    def test_not_lined_up_gets_behind_first(self):
+        ball = (5.0, 3.0)
+        for robot in ((5.0 - APPROACH_OFFSET, 3.0, math.pi / 2),   # right spot, facing sideways
+                      (5.0 + APPROACH_OFFSET, 3.0, 0.0),          # wrong side of the ball
+                      (5.0 - APPROACH_OFFSET, 3.6, 0.0)):         # off the line
+            gs = build_game_state(world({1: robot}, ball=(*ball, 0, 0)))
+            self.assertLess(attack(gs.blue[1], gs, "blue").x, ball[0], msg=str(robot))
+
+    def test_aim_is_inside_the_goal(self):
+        from config import FIELD_W
+
+        for y in (0.0, 3.0, 6.0):
+            for color, beyond in (("blue", lambda x: x > FIELD_W), ("red", lambda x: x < 0)):
+                aim = aim_point(np.array([4.0, y]), color)
+                self.assertTrue(beyond(aim[0]))
+                self.assertTrue(GOAL_Y_MIN < aim[1] < GOAL_Y_MAX)
+
+    def test_lone_attacker_scores(self):
+        """It used to park behind the ball and never move it."""
+        for spot in ((0.45, 0.4), (0.75, 0.6)):
+            self.assertIsNotNone(lone_attacker_scores(spot), msg=str(spot))
+
+
+class TestMatch(unittest.TestCase):
     def test_games_are_reproducible(self):
         a = match.play_game(decide, decide, False, seed=7, duration_s=5)
         b = match.play_game(decide, decide, False, seed=7, duration_s=5)

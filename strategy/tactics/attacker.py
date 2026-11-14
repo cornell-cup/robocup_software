@@ -5,7 +5,8 @@ Three ways, checked in order:
      to break the head-on standoff;
   2. RL kick: when turned on and the robot is on its own side of the ball,
      the learned policy picks the target and the kicker fires;
-  3. classic: stand behind the ball, lined up with their goal, and push.
+  3. classic: get behind the ball on the line to their goal, facing along
+     it; once lined up there, drive through the ball toward the goal.
 """
 
 from __future__ import annotations
@@ -16,9 +17,11 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from strategy.command import Command
-from strategy.geometry import attack_angle, distance, opp_goal
+from strategy.geometry import attack_angle, distance, opp_goal, wrap_angle
 from strategy.skills.navigate import behind_ball, heading_while_driving
-from strategy.state import FIELD_SCALE, BallState, GameState, RobotState
+from strategy.state import FIELD_SCALE, GOAL_MOUTH_H, GOAL_Y_MAX, GOAL_Y_MIN, BallState, GameState, RobotState
+
+from config import ARRIVAL_THRESH  # noqa: E402  (sim/config.py, on sys.path via strategy.state)
 
 if TYPE_CHECKING:
     from strategy.skills.rl_kick import RLKickSkill
@@ -51,6 +54,23 @@ CONTESTED_BALL_SPEED = 0.5  # m/s
 # 2·SKEW — the two attackers end up on different diagonals around the ball
 # instead of pinning head-on along the goal-to-goal axis.
 CONTESTED_SKEW = math.pi / 6
+# Lined up to push: behind the ball, at most this much farther back than the
+# approach point (the controller stops anywhere within ARRIVAL_THRESH of it)...
+LINEUP_SLACK = ARRIVAL_THRESH + 0.02 * FIELD_SCALE
+# ...at most this far off the line from the ball to their goal (the kick
+# zone's half-width: the ball then meets the robot's front)...
+LINEUP_WIDTH = 0.10 * FIELD_SCALE
+# ...and facing along that line to within this.
+LINEUP_ANGLE = math.radians(25)
+# Pushing: the target this far past the ball toward their goal, so the robot
+# keeps driving into it instead of arriving and stopping.
+PUSH_THROUGH = 0.3 * FIELD_SCALE
+# Where to push the ball: a point this far behind their goal line, level with
+# the ball but at least AIM_POST_MARGIN inside the posts. Aiming at the goal
+# line's centre instead, a ball next to a post was pushed along the goal line,
+# from a spot inside the end wall the robot could never reach.
+AIM_DEPTH = GOAL_MOUTH_H / 2
+AIM_POST_MARGIN = GOAL_MOUTH_H / 4
 # The RL policy only runs with the robot at least this far behind the ball
 # along the attack axis, meters (unscaled: RL runs on 9 x 6 only).
 RL_BEHIND_BALL = 0.1
@@ -110,12 +130,51 @@ def _break_standoff(ball: BallState, team_dir: float) -> Command:
 def _push_toward_goal(
     robot: RobotState, ball: BallState, team_color: str, team_dir: float
 ) -> Command:
+    aim = aim_point(ball.pos, team_color)
+    to_aim = aim - ball.pos
+    n = float(np.linalg.norm(to_aim))
+    if n < 1e-6:  # ball already at the aim point, behind the goal line: it's in
+        return Command(float(ball.pos[0]), float(ball.pos[1]), team_dir)
+    direction = to_aim / n
+    push_angle = math.atan2(direction[1], direction[0])
+
+    # Lined up: drive through the ball. Stopping at the approach point would
+    # leave the robot parked short of the ball (it's farther back than the
+    # robot and ball radii), so the ball would never move. While the robot
+    # pushes it stays lined up; if the ball gets away, it lines up again.
+    if lined_up(robot, ball.pos, direction, push_angle):
+        pt = ball.pos + direction * PUSH_THROUGH
+        return Command(float(pt[0]), float(pt[1]), push_angle)
+
     # Face the motion direction while navigating so the robot doesn't "shift"
     # sideways with its back to the target. Once near the approach point,
-    # rotate to team_dir to line up the push.
-    pt = _approach_point(ball.pos, opp_goal(team_color), team_color)
-    ta = heading_while_driving(robot.pos, pt, team_dir, ATTACKER_ALIGN_DIST)
+    # rotate to face along the push.
+    pt = _approach_point(ball.pos, aim, team_color)
+    ta = heading_while_driving(robot.pos, pt, push_angle, ATTACKER_ALIGN_DIST)
     return Command(float(pt[0]), float(pt[1]), ta)
+
+
+def aim_point(ball_pos: np.ndarray, team_color: str) -> np.ndarray:
+    """Where to push the ball: behind their goal line, level with the ball,
+    kept inside the posts."""
+    goal = opp_goal(team_color)
+    into_goal = math.cos(attack_angle(team_color))  # +1 blue (+x), -1 red
+    y = min(max(float(ball_pos[1]), GOAL_Y_MIN + AIM_POST_MARGIN), GOAL_Y_MAX - AIM_POST_MARGIN)
+    return np.array([float(goal[0]) + into_goal * AIM_DEPTH, y])
+
+
+def lined_up(
+    robot: RobotState, ball_pos: np.ndarray, direction: np.ndarray, push_angle: float
+) -> bool:
+    """The robot is behind the ball on the push line, close, and facing along it."""
+    rel = ball_pos - robot.pos
+    along = float(rel @ direction)  # how far behind the ball, along the push
+    across = abs(float(direction[0] * rel[1] - direction[1] * rel[0]))  # off the line
+    return (
+        0.0 < along <= APPROACH_OFFSET + LINEUP_SLACK
+        and across <= LINEUP_WIDTH
+        and abs(wrap_angle(robot.angle - push_angle)) <= LINEUP_ANGLE
+    )
 
 
 def _approach_point(

@@ -4,6 +4,11 @@ import numpy as np
 from strategy.state import BLUE_GOAL, RED_GOAL, RobotState
 
 
+def wrap_angle(a: float) -> float:
+    """An angle in (-pi, pi]: the short way round."""
+    return (a + math.pi) % (2.0 * math.pi) - math.pi
+
+
 # check if there is a clear shot from the robot to the goal
 # for attackers
 def has_clear_shot(
