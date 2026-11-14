@@ -59,7 +59,7 @@ from config import (
     VISION_PORT,
     VISION_TAG_MAP,
 )
-from pymunk_world import PymunkWorld
+from pymunk_world import PymunkWorld, scorer
 from vision_bridge import (
     FRESH,
     LOST,
@@ -228,7 +228,9 @@ def main() -> None:
 
         # Scoring — increment counters; reset ball; optionally end the game.
         # Edge-triggered so a mirrored ball sitting in the goal scores once.
-        scoring_team = state["scoring_team"]
+        # state["scoring_team"] is whose goal the ball is in; the point goes to
+        # the other team (blue defends x = 0 and attacks +x).
+        scoring_team = scorer(state["scoring_team"]) if state["scoring_team"] else None
         if ball_in_goal:
             scoring_team = None
         ball_in_goal = state["scoring_team"] is not None

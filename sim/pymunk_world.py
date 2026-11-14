@@ -218,6 +218,10 @@ def _apply_wheel_commands(body: pymunk.Body, wheel_speeds: list[float]) -> None:
 
 
 def _scoring_team(ball: pymunk.Body) -> str | None:
+    """Whose goal the ball is in: "blue" for the x = 0 goal, which blue
+    defends, "red" for x = FIELD_W. The team that scored is the other one
+    (scorer() below). Published as step()'s "scoring_team"; the RL env reads
+    it this way ("red": the blue attacker scored)."""
     y = ball.position.y
     if y < GOAL_Y_MIN or y > GOAL_Y_MAX:
         return None
@@ -226,6 +230,11 @@ def _scoring_team(ball: pymunk.Body) -> str | None:
     if ball.position.x >= FIELD_W:
         return "red"
     return None
+
+
+def scorer(goal: str) -> str:
+    """The team that scored, given whose goal the ball went into."""
+    return "red" if goal == "blue" else "blue"
 
 
 def _jittered(

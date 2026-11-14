@@ -437,6 +437,20 @@ class TestPush(unittest.TestCase):
 
 
 class TestMatch(unittest.TestCase):
+    def test_goal_goes_to_the_team_that_scored(self):
+        """Blue attacks +x: a ball into the x = FIELD_W goal (red's) is blue's goal."""
+        from config import FIELD_H, FIELD_W
+        from pymunk_world import PymunkWorld, scorer
+
+        w = PymunkWorld()
+        w.reset_ball((FIELD_W - 0.3, FIELD_H / 2))
+        w.ball.velocity = (3.0, 0.0)
+        goal = None
+        for _ in range(60):
+            goal = w.step()["scoring_team"] or goal
+        self.assertEqual(goal, "red")  # whose goal it went into
+        self.assertEqual(scorer(goal), "blue")  # who gets the point
+
     def test_games_are_reproducible(self):
         a = match.play_game(decide, decide, False, seed=7, duration_s=5)
         b = match.play_game(decide, decide, False, seed=7, duration_s=5)

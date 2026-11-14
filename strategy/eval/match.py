@@ -33,7 +33,7 @@ for _p in (_ROOT, os.path.join(_ROOT, "sim")):
         sys.path.insert(0, _p)
 
 from config import DT, FIELD_W, NUM_ROBOTS, TEAM_BLUE_SIZE  # noqa: E402
-from pymunk_world import PymunkWorld  # noqa: E402
+from pymunk_world import PymunkWorld, scorer  # noqa: E402
 from robot_node import RobotController  # noqa: E402
 from simulation_node import BALL_STUCK_DURATION, BALL_STUCK_THRESHOLD  # noqa: E402
 
@@ -154,7 +154,9 @@ def play_game(
                 result.kicks_b += 1
 
         # Goals: edge-triggered, ball back to the centre, as simulation_node.
-        scoring = state["scoring_team"]
+        # state["scoring_team"] is whose goal the ball is in; the other team scored.
+        goal = state["scoring_team"]
+        scoring = scorer(goal) if goal is not None else None
         new_goal = scoring is not None and not ball_in_goal
         ball_in_goal = scoring is not None
         if new_goal:
