@@ -226,6 +226,41 @@ class TestAnalysis(unittest.TestCase):
         self.assertNotIn(3, a.intercepts)
 
 
+def corner_squeeze(seconds: float = 5.0) -> float:
+    """Pin the ball in each corner and drive a robot flat out into it, as in a
+    scrum. Returns the farthest the ball's centre ever got past the field edge
+    (m); 0 if it stayed inside."""
+    from config import BALL_RADIUS, FIELD_H, FIELD_W, ROBOT_RADIUS as R
+    from pymunk_world import PymunkWorld
+    from robot_node import RobotController
+
+    worst = 0.0
+    for cx, cy in ((0.0, 0.0), (FIELD_W, 0.0), (0.0, FIELD_H), (FIELD_W, FIELD_H)):
+        w = PymunkWorld()
+        for rid in range(1, 6):
+            w.set_robot(rid, (-10.0 - rid, -10.0), 0.0)
+        sx, sy = (1 if cx == 0 else -1), (1 if cy == 0 else -1)  # into the field
+        w.reset_ball((cx + sx * BALL_RADIUS, cy + sy * BALL_RADIUS))
+        heading = math.atan2(-sy, -sx)  # facing the corner
+        w.set_robot(0, (cx + sx * (2 * BALL_RADIUS + R), cy + sy * (2 * BALL_RADIUS + R)), heading)
+        ctrl = RobotController(0)
+        ctrl.set_target(cx - sx, cy - sy, "2005_INVERSION", heading)  # 1 m past the corner
+        state = w.step()
+        for _ in range(round(seconds / DT)):
+            state = w.step({0: ctrl.compute_wheels(state["robots"]["0"])})
+            x, y = w.ball.position.x, w.ball.position.y
+            worst = max(worst, -x, x - FIELD_W, -y, y - FIELD_H)
+    return max(worst, 0.0)
+
+
+class TestWalls(unittest.TestCase):
+    def test_ball_cannot_be_squeezed_out_of_a_corner(self):
+        from config import BALL_RADIUS
+
+        # Pressed into the wall a little is contact; out of the field is a bug.
+        self.assertLess(corner_squeeze(), BALL_RADIUS)
+
+
 class TestDecide(unittest.TestCase):
     def test_lone_robot_is_goalie(self):
         # Blue 1 and 2 driven by humans: blue 0 plays alone.

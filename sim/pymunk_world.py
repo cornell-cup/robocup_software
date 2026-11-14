@@ -145,17 +145,23 @@ def _add_walls(space: pymunk.Space) -> None:
         seg.filter = filt
         space.add(seg)
 
+    # Each wall is a capsule of radius r centred r outside the field edge. The
+    # walls run on past the corners to the other wall's centre line, so the two
+    # overlap there: ending them at the corner left an 83 mm opening between
+    # the two rounded ends, which a robot could squeeze a 9 x 6 ball through
+    # and a small field's ball (18 mm on 1.93 x 1.32) rolled straight through.
+
     # --- TOP & BOTTOM WALLS (block everything)
-    add_seg((r, -r), (FIELD_W - r, -r), wall_filter)                # bottom
-    add_seg((r, FIELD_H + r), (FIELD_W - r, FIELD_H + r), wall_filter)  # top
+    add_seg((-r, -r), (FIELD_W + r, -r), wall_filter)                       # bottom
+    add_seg((-r, FIELD_H + r), (FIELD_W + r, FIELD_H + r), wall_filter)     # top
 
     # --- LEFT WALL (split around goal gap)
-    add_seg((-r, r), (-r, GOAL_Y_MIN), wall_filter)                 # below goal
-    add_seg((-r, GOAL_Y_MAX), (-r, FIELD_H - r), wall_filter)       # above goal
+    add_seg((-r, -r), (-r, GOAL_Y_MIN), wall_filter)                # below goal
+    add_seg((-r, GOAL_Y_MAX), (-r, FIELD_H + r), wall_filter)       # above goal
 
     # --- RIGHT WALL (split around goal gap)
-    add_seg((FIELD_W + r, r), (FIELD_W + r, GOAL_Y_MIN), wall_filter)
-    add_seg((FIELD_W + r, GOAL_Y_MAX), (FIELD_W + r, FIELD_H - r), wall_filter)
+    add_seg((FIELD_W + r, -r), (FIELD_W + r, GOAL_Y_MIN), wall_filter)
+    add_seg((FIELD_W + r, GOAL_Y_MAX), (FIELD_W + r, FIELD_H + r), wall_filter)
 
     # --- BACK OF GOALS (robots blocked, ball passes through)
     goal_back_x_left = -ROBOT_RADIUS
