@@ -14,6 +14,7 @@ from typing import Any
 import numpy as np
 
 from strategy import strategy_node
+from strategy.analysis import analyze, ball_intercept, drive_accel, time_to_reach
 from strategy.eval import baseline_v0, match
 from strategy.prediction import (
     ball_rest_position,
@@ -25,6 +26,7 @@ from strategy.state import (
     GOAL_Y_MIN,
     ROBOT_RADIUS,
     BallState,
+    RobotState,
     build_game_state,
 )
 from strategy.strategy_node import Brain, decide, resolve_kick_conflict
@@ -146,6 +148,82 @@ class TestPrediction(unittest.TestCase):
         predicted = predict_ball_position(start, 1.0)
         self.assertAlmostEqual(w.ball.position.x, predicted[0], delta=0.02)
         self.assertAlmostEqual(w.ball.position.y, predicted[1], delta=0.01)
+
+
+def _measured_drive_time(heading: float, distance_m: float) -> float:
+    """Drive robot 0 flat out along +x in the sim, heading fixed, and time how
+    long it takes to cover `distance_m` from rest."""
+    from pymunk_world import PymunkWorld
+    from robot_node import RobotController
+
+    w = PymunkWorld()
+    for rid in range(1, 6):
+        w.set_robot(rid, (-10.0 - rid, -10.0), 0.0)
+    w.reset_ball((-5.0, -5.0))
+    w.set_robot(0, (0.5, 3.0), heading)
+    ctrl = RobotController(0)
+    ctrl.set_target(8.5, 3.0, "2005_INVERSION", heading)
+    state, t = w.step(), 0.0
+    while state["robots"]["0"]["x"] - 0.5 < distance_m:
+        state = w.step({0: ctrl.compute_wheels(state["robots"]["0"])})
+        t += DT
+    return t
+
+
+class TestAnalysis(unittest.TestCase):
+    def test_drive_accel_depends_on_direction(self):
+        from config import MOTOR_MAX_FORCE, ROBOT_MASS
+
+        unit = MOTOR_MAX_FORCE / ROBOT_MASS
+        self.assertAlmostEqual(float(drive_accel(0.0)), math.sqrt(3) * unit)  # straight ahead
+        self.assertAlmostEqual(float(drive_accel(math.pi / 2)), 1.5 * unit)  # sideways
+        self.assertAlmostEqual(float(drive_accel(math.pi / 3)), math.sqrt(3) * unit)  # 60 deg period
+
+    def test_time_to_reach_matches_the_sim(self):
+        for heading, label in ((0.0, "facing"), (-math.pi / 2, "sideways")):
+            robot = RobotState(pos=np.array([0.5, 3.0]), angle=heading)
+            for d in (0.5, 1.0, 2.0):
+                model = time_to_reach(robot, np.array([0.5 + d, 3.0]))
+                measured = _measured_drive_time(heading, d)
+                self.assertAlmostEqual(model, measured, delta=0.06 * measured + DT,
+                                       msg=f"{label}, {d} m")
+
+    def test_moving_away_takes_longer(self):
+        still = RobotState(pos=np.array([2.0, 3.0]))
+        away = RobotState(pos=np.array([2.0, 3.0]), vel=np.array([-0.8, 0.0]))
+        toward = RobotState(pos=np.array([2.0, 3.0]), vel=np.array([0.8, 0.0]))
+        point = np.array([3.0, 3.0])
+        self.assertLess(time_to_reach(toward, point), time_to_reach(still, point))
+        self.assertGreater(time_to_reach(away, point), time_to_reach(still, point))
+        self.assertEqual(time_to_reach(still, point, reach=2.0), 0.0)
+
+    def test_intercepting_a_moving_ball(self):
+        robot = RobotState(id=1, pos=np.array([3.0, 3.0]))
+        still = ball_intercept(robot, BallState(pos=np.array([5.0, 3.0])))
+        coming = ball_intercept(robot, BallState(pos=np.array([5.0, 3.0]),
+                                                 vel=np.array([-1.0, 0.0]), speed=1.0))
+        self.assertLess(coming.t, still.t)
+        self.assertLess(coming.point[0], 5.0)  # met on the way
+        # Too fast to catch: met where it stops.
+        fast = BallState(pos=np.array([5.0, 3.0]), vel=np.array([3.0, 0.0]), speed=3.0)
+        gone = ball_intercept(robot, fast)
+        np.testing.assert_allclose(gone.point, ball_rest_position(fast))
+
+    def test_race_and_threats(self):
+        # Red 4 sits on the ball in blue's half; blue's robots are far away.
+        robots = {4: (2.5, 2.0, math.pi), 1: (6.0, 5.5, 0.0), 2: (7.0, 0.5, 0.0)}
+        a = analyze(build_game_state(world(robots, ball=(2.3, 2.0, 0, 0))))
+        self.assertEqual(a.blue.their_first_to_ball.robot_id, 4)
+        self.assertLess(a.blue.race_margin, 0)
+        self.assertEqual(a.blue.first_threat_robot, 4)
+        self.assertEqual([rid for rid, _ in a.blue.second_threats], [5, 3])  # nearest blue's goal first
+        self.assertGreater(a.red.race_margin, 0)
+        self.assertIsNone(a.red.first_threat_robot)
+
+    def test_unavailable_robots_left_out(self):
+        a = analyze(build_game_state(world()), unavailable={0, 3})
+        self.assertNotIn(0, a.intercepts)
+        self.assertNotIn(3, a.intercepts)
 
 
 class TestDecide(unittest.TestCase):
