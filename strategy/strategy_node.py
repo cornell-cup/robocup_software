@@ -554,18 +554,17 @@ class Brain:
             self.human_blue_ids,
         )
 
-        # Route dribble to our team's attacker (closest to ball); everyone
-        # else gets OFF so stale state never leaks between attacker changes.
-        # Skip human-driven robots — they own their own dribble state via
-        # the controller's RB button, routed through robot_node.
+        # Our dribblers: on for our attacker (when the toggle is on), off for
+        # every other robot we drive, so stale state never leaks between
+        # attacker changes. Human-driven robots keep their own dribble state
+        # (their controller's button, routed through robot_node).
         ours = [
             r for r in gamestate.our_team
             if not (self.color == "blue" and r.id in self.human_blue_ids)
         ]
-        dribble: dict[int, bool] = {}
-        if ours:
-            attacker_rid = min(ours, key=lambda r: distance(r.pos, gamestate.ball.pos)).id
-            dribble = {r.id: self.dribble_attacker and r.id == attacker_rid for r in ours}
+        our_ids = {r.id for r in ours}
+        our_attacker = next((rid for rid in attackers if rid in our_ids), None)
+        dribble = {rid: self.dribble_attacker and rid == our_attacker for rid in sorted(our_ids)}
 
         return Plan(targets, kicks, dribble, attackers, gamestate)
 
