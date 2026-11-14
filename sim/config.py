@@ -147,7 +147,10 @@ DISPLAY_W = round(FIELD_W * DISPLAY_SCALE)  # 900
 DISPLAY_H = round(FIELD_H * DISPLAY_SCALE)  # 600 on 9 x 6
 
 # ── Navigation thresholds ────────────────────────────────────────────────────
-ARRIVAL_THRESH = 5.0 / 140.0  # ≈ 0.036 m  (legacy 5 px arrival threshold)
+# A robot this close to its target stops (robot_node). Shrinks with the robot on
+# a custom --field: unscaled, 36 mm on a 1.93 m table is more than the robot's
+# whole radius (31 mm), so it could stop a body-width short of where it was sent.
+ARRIVAL_THRESH = 5.0 / 140.0 * FIELD_SCALE  # ≈ 0.036 m on 9 x 6 (legacy 5 px arrival threshold)
 
 # ── Vision mirror (vision_bridge.py) ─────────────────────────────────────────
 # AprilTag id -> sim robot id, or None to auto-assign: each new tag id seen on
