@@ -53,7 +53,12 @@ robot from above, with the dribbler (front) pointing toward you**:
 The dribbler is switched by pin 16 (`DRIBBLER_PIN` in `firmware/robot.py`):
 the pin goes low to turn it on, high to turn it off. It is on/off only, no
 speed. Pin 16 can't power a motor itself: wire it to the motor driver or
-transistor that switches the dribbler motor. There is no kicker.
+transistor that switches the dribbler motor.
+
+The robot also has a kicker, but nothing fires it yet: `firmware/robot.py`
+drives only the wheels and the dribbler, and the Bluetooth packet and the sim's
+real-robot commands (port 9094) have no kick in them. Kicks work in the sim only
+for now.
 
 ## 2. Set up the laptop (once)
 
