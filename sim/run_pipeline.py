@@ -130,6 +130,10 @@ def main() -> None:
 
     signal.signal(signal.SIGINT, _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)
+    # A closed terminal sends SIGHUP: without this the launcher dies without
+    # stopping its nodes, and an orphaned sim keeps serving a finished game.
+    if hasattr(signal, "SIGHUP"):
+        signal.signal(signal.SIGHUP, _shutdown)
 
     print("[Launcher] Starting RoboCup pipeline ...\n")
 

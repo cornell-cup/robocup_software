@@ -7,6 +7,8 @@ const FALLBACK: FieldInfo = {
   ball_radius: 0.043, team_blue_size: 3, num_robots: 6, is_default: true,
 };
 const TRAIL = 40;
+/** A ball step longer than this fraction of the field width is a teleport. */
+const TRAIL_JUMP = 0.15;
 
 interface View {
   s: number; // CSS px per metre
@@ -105,7 +107,11 @@ function draw(
   const b = w.ball;
   if (b) {
     const last = trail[trail.length - 1];
-    if (!last || Math.hypot(last.x - b.x, last.y - b.y) > 0.01) trail.push({ x: b.x, y: b.y });
+    const step = last ? Math.hypot(last.x - b.x, last.y - b.y) : Infinity;
+    // A jump no ball rolls in one frame is a reset (goal, stuck ball): start a
+    // new trail instead of a streak from the old spot to the new one.
+    if (last && step > v.field.width * TRAIL_JUMP) trail.length = 0;
+    if (step > 0.01) trail.push({ x: b.x, y: b.y });
     if (trail.length > TRAIL) trail.shift();
     for (let i = 1; i < trail.length; i++) {
       g.strokeStyle = `rgba(230, 120, 0, ${(i / trail.length) * 0.5})`;

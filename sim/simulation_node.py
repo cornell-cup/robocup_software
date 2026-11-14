@@ -70,7 +70,8 @@ from vision_bridge import (
 )
 from strategy.skills.dribble import try_dribble_ball
 
-HALF_DURATION = 300.0  # seconds per half
+HALF_DURATION = 300.0  # seconds per half, unless a game_half_duration command changes it
+HALF_DURATION_RANGE = (10.0, 3600.0)
 BALL_STUCK_THRESHOLD = 0.02
 BALL_STUCK_DURATION = 10.0
 VISION_LOG_PERIOD = 5.0  # seconds between vision stats prints
@@ -164,12 +165,14 @@ def main() -> None:
 
     score = {"blue": 0, "red": 0}
     game_time = 0.0
+    half_duration = HALF_DURATION
     current_half = 1
     half_over = False
     winner: str | None = None
     game_phase = "FIRST HALF"
+    paused = False
     last_goal: dict[str, Any] | None = None
-    goal_seq = 0
+    goal_seq = 0  # never reset: viewers flash a goal when it goes up
     ball_stuck_timer = 0.0
     ball_stuck_seq = 0
     ball_last_pos = (FIELD_W / 2, FIELD_H / 2)
@@ -205,6 +208,32 @@ def main() -> None:
                     ball_stuck_enabled = not ball_stuck_enabled
                     print(f"[SimNode] Ball stuck reset → {'ON' if ball_stuck_enabled else 'OFF'}")
                     continue
+                if ctype == "game_pause":
+                    paused = bool(cmd.get("paused", not paused))
+                    print(f"[SimNode] {'PAUSED' if paused else 'RESUMED'}")
+                    continue
+                if ctype == "game_reset":
+                    # A new game: score, clock and positions back to kickoff.
+                    score = {"blue": 0, "red": 0}
+                    game_time = 0.0
+                    current_half = 1
+                    half_over = False
+                    winner = None
+                    game_phase = "FIRST HALF"
+                    last_goal = None
+                    ball_stuck_timer = 0.0
+                    ball_last_pos = (FIELD_W / 2, FIELD_H / 2)
+                    pending_kicks.clear()
+                    commands = {i: [0.0, 0.0, 0.0] for i in range(NUM_ROBOTS)}
+                    world.reset_robots()
+                    world.reset_ball()
+                    print("[SimNode] NEW GAME")
+                    continue
+                if ctype == "game_half_duration":
+                    lo, hi = HALF_DURATION_RANGE
+                    half_duration = min(hi, max(lo, float(cmd["seconds"])))
+                    print(f"[SimNode] Half length → {half_duration:.0f} s")
+                    continue
                 rid = int(cmd["robot_id"])
                 if 0 <= rid < NUM_ROBOTS and "wheel_speeds" in cmd:
                     commands[rid] = cmd["wheel_speeds"]
@@ -220,8 +249,13 @@ def main() -> None:
         # Camera owns the ball: resets would just get snapped back next frame.
         vision_ball = vision_snap is not None and vision_snap["ball"].mode != LOST
 
-        state = world.step(commands, pending_kicks, dribbling)
-        
+        if paused:
+            # Frozen: no physics, no clock. Still published, so viewers keep
+            # seeing the field (and camera-owned robots, which the camera moves).
+            state = world.state()
+        else:
+            state = world.step(commands, pending_kicks, dribbling)
+
         for rid in state["kicks"]:
             print(f"[SimNode] Kick by robot {rid}")
         pending_kicks.clear()
@@ -230,10 +264,12 @@ def main() -> None:
         # Edge-triggered so a mirrored ball sitting in the goal scores once.
         # state["scoring_team"] is whose goal the ball is in; the point goes to
         # the other team (blue defends x = 0 and attacks +x).
-        scoring_team = scorer(state["scoring_team"]) if state["scoring_team"] else None
-        if ball_in_goal:
+        goal_post = state["scoring_team"]
+        scoring_team = scorer(goal_post) if goal_post else None
+        if ball_in_goal or paused:
             scoring_team = None
-        ball_in_goal = state["scoring_team"] is not None
+        if not paused:
+            ball_in_goal = state["scoring_team"] is not None
         if scoring_team is not None:
             score[scoring_team] += 1
             goal_seq += 1
@@ -241,7 +277,10 @@ def main() -> None:
                 world.reset_ball()
             last_goal = {
                 "seq": goal_seq,
-                "team": scoring_team,
+                # The goal scored ON: the viewers (viz_node, the web app's
+                # Simulator page) flip it to colour the scorer's celebration.
+                "team": goal_post,
+                "scorer": scoring_team,  # who got the point
                 "score": {"blue": score["blue"], "red": score["red"]},
                 "t": state["t"],
             }
@@ -255,9 +294,9 @@ def main() -> None:
                 print("[SimNode] 10 GOAL LEAD — game over")
 
         # Game clock (halves + overtime).
-        if not half_over:
+        if not half_over and not paused:
             game_time += DT
-            if game_time >= HALF_DURATION:
+            if game_time >= half_duration:
                 if current_half == 1:
                     current_half = 2
                     game_time = 0.0
@@ -291,7 +330,7 @@ def main() -> None:
                         f"[SimNode] OVERTIME FULL TIME — Blue: {score['blue']}  "
                         + f"Red: {score['red']}"
                     )
-        if ball_stuck_enabled and not vision_ball:
+        if ball_stuck_enabled and not vision_ball and not paused:
             bx, by = state["ball"]["x"], state["ball"]["y"]
             ball_moved = math.hypot(bx - ball_last_pos[0], by - ball_last_pos[1])
             if ball_moved < BALL_STUCK_THRESHOLD:
@@ -326,7 +365,9 @@ def main() -> None:
             "last_goal": last_goal,
             "game": {
                 "half": current_half,
-                "time_remaining": max(0.0, HALF_DURATION - game_time),
+                "time_remaining": max(0.0, half_duration - game_time),
+                "half_duration": half_duration,
+                "paused": paused,
                 "blue_score": score["blue"],
                 "red_score": score["red"],
                 "half_over": half_over,

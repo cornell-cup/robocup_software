@@ -319,10 +319,13 @@ class PymunkWorld:
             _apply_damping(self.ball, BALL_DAMP, BALL_DAMP, sub_dt)
             self.space.step(sub_dt)
         self.sim_time += DT
+        return self.state(fired)
 
+    def state(self, kicks: list[int] | None = None) -> dict[str, Any]:
+        """The world as step() reports it, without advancing it (a paused game)."""
         return {
             "t": self.sim_time,
-            "kicks": fired,
+            "kicks": kicks or [],
             "scoring_team": _scoring_team(self.ball),
             "ball": {
                 "x": self.ball.position.x,
@@ -350,6 +353,18 @@ class PymunkWorld:
             self.ball.position = (FIELD_W / 2.0, FIELD_H / 2.0)
         else:
             self.ball.position = (float(pos[0]), float(pos[1]))
+
+    def reset_robots(self) -> None:
+        """Every simulated robot back on its spawn, at rest. Camera-owned
+        robots stay where the camera puts them."""
+        for i, body in enumerate(self.robots):
+            if i in self.mirrored:
+                continue
+            x, y, angle = NOMINAL_SPAWNS[i]
+            body.position = _jittered(self._rng, x, y)
+            body.angle = angle
+            body.velocity = (0.0, 0.0)
+            body.angular_velocity = 0.0
 
     def apply_dribble(self, robot_id: int, dt: float) -> None:
         if 0 <= robot_id < len(self.robots):

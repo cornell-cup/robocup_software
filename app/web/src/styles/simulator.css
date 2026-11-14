@@ -105,24 +105,72 @@
   gap: 14px;
   pointer-events: none;
 }
-.flash {
-  animation: fade 2.2s ease-out forwards;
-}
-.flash .goal,
 .winner .label {
   font-size: 32px;
   font-weight: 700;
 }
-.flash .mono,
 .winner .mono {
   font-size: 22px;
   color: var(--muted);
 }
-.flash.blue .goal {
-  color: var(--team-blue);
+
+/* Goal: the whole field tints in the team's colour, a big GOAL! pops in with
+   the score under it, then it all fades (GOAL_FLASH_MS in Simulator.tsx). */
+.flash {
+  --team: var(--team-blue);
+  top: 0;
+  bottom: 0;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  background: radial-gradient(circle at center,
+      color-mix(in srgb, var(--team) 22%, rgba(0, 0, 0, 0.45)) 0%,
+      rgba(0, 0, 0, 0.55) 75%);
+  animation: fade 2.8s ease-out forwards;
 }
-.flash.red .goal {
-  color: var(--team-red);
+.flash.red {
+  --team: var(--team-red);
+}
+.flash .goal {
+  font-size: clamp(56px, 13vw, 168px);
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--team);
+  text-shadow: 0 4px 16px rgba(0, 0, 0, 0.45);
+  animation: goal-pop 0.6s cubic-bezier(0.2, 1.6, 0.4, 1) both;
+}
+.flash .score {
+  font-size: clamp(28px, 5vw, 56px);
+  font-weight: 700;
+  color: rgba(255, 255, 255, 0.9);
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
+  animation: goal-pop 0.6s 0.15s cubic-bezier(0.2, 1.6, 0.4, 1) both;
+}
+@keyframes goal-pop {
+  0% {
+    opacity: 0;
+    transform: scale(0.3) rotate(-6deg);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) rotate(0);
+  }
+}
+.confetti {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 3;
+}
+@media (prefers-reduced-motion: reduce) {
+  .flash .goal,
+  .flash .score {
+    animation: none;
+  }
 }
 .winner {
   top: 0;
@@ -195,4 +243,15 @@
     height: 62vh;
     flex: none;
   }
+}
+
+/* The end-of-game overlay lets clicks through, except to its New game button. */
+.winner .btn {
+  pointer-events: auto;
+  align-self: center;
+  text-transform: none;
+}
+.game-row {
+  align-items: flex-end;
+  margin-top: 12px;
 }

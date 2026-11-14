@@ -43,6 +43,8 @@ SIM_SILENT_S = 1.5
 #: A robot being driven gets a stop command if its driver goes quiet this long
 #: (a closed tab, a lost connection), so it never keeps the last speed.
 DRIVE_TIMEOUT_S = 0.4
+#: Half lengths the sim takes, seconds (simulation_node.HALF_DURATION_RANGE).
+HALF_DURATION_S = (10.0, 3600.0)
 
 
 def sim_config():
@@ -288,6 +290,17 @@ class SimBridge:
             game = (self._world or {}).get("game") or {}
             if bool(cmd.get("enabled")) != bool(game.get("ball_stuck_enabled")):
                 self._publish({"type": "ball_stuck_toggle"})
+        elif kind == "pause":
+            self._publish({"type": "game_pause", "paused": bool(cmd.get("paused"))})
+        elif kind == "new_game":
+            self._publish({"type": "game_reset"})
+        elif kind == "half_duration":
+            seconds = _finite(cmd, "seconds")
+            if not HALF_DURATION_S[0] <= seconds <= HALF_DURATION_S[1]:
+                raise CommandError(
+                    f"seconds must be {HALF_DURATION_S[0]:g}-{HALF_DURATION_S[1]:g}"
+                )
+            self._publish({"type": "game_half_duration", "seconds": seconds})
         else:
             raise CommandError(f"unknown command type {kind!r}")
 

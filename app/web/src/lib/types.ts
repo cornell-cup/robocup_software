@@ -35,6 +35,9 @@ export interface Ball {
 export interface Game {
   half: number;
   time_remaining: number;
+  /** Seconds per half; missing from a sim older than the game controls. */
+  half_duration?: number;
+  paused?: boolean;
   half_over: boolean;
   phase: string;
   winner: "blue" | "red" | "draw" | null;
@@ -93,7 +96,10 @@ export type SimCommand =
   | { type: "drive"; robot: number; vx: number; vy: number; w: number }      // field directions
   | { type: "drive"; robot: number; forward: number; left: number; w: number } // the robot's own frame
   | { type: "kick"; robot: number }
-  | { type: "strategy" | "dribble" | "rl_kick" | "ball_stuck_reset"; enabled: boolean };
+  | { type: "strategy" | "dribble" | "rl_kick" | "ball_stuck_reset"; enabled: boolean }
+  | { type: "pause"; paused: boolean }
+  | { type: "new_game" }
+  | { type: "half_duration"; seconds: number };
 
 export interface SimProcessStatus {
   running: boolean;

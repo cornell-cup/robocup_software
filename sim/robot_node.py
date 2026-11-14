@@ -370,6 +370,10 @@ def main() -> None:
                 if data.get("type") == "ball_stuck_toggle":
                     _ = cmd_push.send_string(json.dumps({"type": "ball_stuck_toggle"}))
 
+                # Game controls (pause, new game, half length) belong to the sim.
+                if data.get("type") in ("game_pause", "game_reset", "game_half_duration"):
+                    _ = cmd_push.send_string(json.dumps(data))
+
                 for rid_str in data.get("kick", {}):
                     i = int(rid_str)
                     if 0 <= i < NUM_ROBOTS:
@@ -396,6 +400,9 @@ def main() -> None:
         except zmq.Again:
             continue
 
+        # A paused game holds real robots still too; the sim already ignores
+        # the wheel speeds while paused.
+        paused = bool((state.get("game") or {}).get("paused"))
         real: dict[str, dict[str, object]] = {}
         for robot in robots:
             rid_str = str(robot.id)
@@ -411,7 +418,7 @@ def main() -> None:
                     }
                 )
             )
-            forward, left, turn = _body_command(*command)
+            forward, left, turn = (0.0, 0.0, 0.0) if paused else _body_command(*command)
             real[rid_str] = {
                 "forward": round(forward, 3),
                 "left": round(left, 3),

@@ -34,7 +34,7 @@ from .calib import FieldCalibration
 from .photonvision import ENV_DIR, PhotonVisionProcess
 from .procs import CommandError
 from .robots import RealRobots
-from .sim import SimBridge, SimProcess
+from .sim import SIM_DIR, SimBridge, SimProcess
 from .tracking import (
     VIDEO_PORT,
     TrackerProcess,
@@ -52,6 +52,8 @@ CALIB_STREAM_FPS = 15
 TRACKING_WS_HZ = 30
 #: Robot link status to the Robots page.
 ROBOTS_WS_HZ = 5
+#: The sim/sounds files the pages may play.
+SIM_SOUNDS = {"goal", "cheer"}
 
 
 def _mjpeg_part(jpeg: bytes) -> bytes:
@@ -138,6 +140,13 @@ def create_app(photonvision_dir: Path | None = None, start_photonvision: bool = 
     def sim_stop() -> dict[str, Any]:
         state.sim.stop()
         return state.sim.status()
+
+    @app.get("/api/v1/sim/sounds/{name}")
+    def sim_sound(name: str) -> FileResponse:
+        """The pygame window's sounds (sim/sounds), for the page's goal effect."""
+        if name not in SIM_SOUNDS:
+            raise CommandError(f"no sound {name!r}")
+        return FileResponse(SIM_DIR / "sounds" / f"{name}.wav", media_type="audio/wav")
 
     @app.get("/api/v1/sim/log")
     def sim_log(after: int = 0) -> dict[str, Any]:
