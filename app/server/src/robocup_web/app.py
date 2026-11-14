@@ -24,8 +24,9 @@ from typing import Annotated, Any
 
 import uvicorn
 from fastapi import Body, FastAPI, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from tag_tracking import photon_lens
 
 from . import __version__
 from .ball import VIEWS, BallCalibration
@@ -303,6 +304,79 @@ def create_app(photonvision_dir: Path | None = None, start_photonvision: bool = 
     def calib_corner(opts: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
         state.calib.corner(str(opts.get("action")))
         return state.calib.status()
+
+    # -- the lens calibration, as PhotonVision has it ------------------------
+
+    lens_cache: dict[tuple, dict] = {}
+
+    def lens_db() -> Path:
+        return state.photon.folder / "photonvision_config" / "photon.sqlite"
+
+    @app.get("/api/v1/calib/lens")
+    def calib_lens(camera: str, w: int, h: int) -> dict[str, Any]:
+        """PhotonVision's lens calibration for this camera next to a re-solve
+        of its own snapshots (photon_lens). Only for a PhotonVision run from
+        this machine's folder: its database is read directly."""
+        db = lens_db()
+        if not db.exists():
+            return {"available": False}
+        key = (db.stat().st_mtime, camera, w, h)
+        if key not in lens_cache:
+            try:
+                lens_cache.clear()
+                lens_cache[key] = {"available": True, **photon_lens.review(db, camera, (w, h))}
+            except LookupError as e:
+                return {"available": True, "error": str(e)}
+        return lens_cache[key]
+
+    @app.post("/api/v1/calib/lens/install")
+    async def calib_lens_install(opts: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
+        """Put the re-solved calibration into PhotonVision. It must be stopped
+        for that (it saves its own copy over the file), so one this app
+        started is stopped and started again; one started elsewhere must be
+        stopped by hand first."""
+        db = lens_db()
+        if not db.exists():
+            raise CommandError(f"no PhotonVision settings at {db}")
+        camera, res = str(opts.get("camera")), (int(opts["w"]), int(opts["h"]))
+        ours = state.photon.status()["ours"]
+        if state.photon.ui_up() and not ours:
+            raise CommandError("PhotonVision was started outside this app: stop it, then press "
+                               "this again")
+        await asyncio.to_thread(state.calib.disconnect)
+        if ours:
+            await asyncio.to_thread(state.photon.stop)
+        try:
+            summary = await asyncio.to_thread(photon_lens.install, db, camera, res)
+        except LookupError as e:
+            raise CommandError(str(e)) from None
+        finally:
+            if ours:
+                await asyncio.to_thread(state.photon.start)
+        lens_cache.clear()
+        return {"installed": summary, "restarted": ours}
+
+    @app.post("/api/v1/calib/unsolve")
+    def calib_unsolve() -> dict[str, Any]:
+        state.calib.unsolve()
+        return state.calib.status()
+
+    @app.post("/api/v1/calib/reset")
+    def calib_reset() -> dict[str, Any]:
+        state.calib.reset()
+        return state.calib.status()
+
+    @app.post("/api/v1/calib/click")
+    def calib_click(opts: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
+        state.calib.click(opts)
+        return state.calib.status()
+
+    @app.get("/api/v1/calib/snapshot.jpg")
+    def calib_snapshot() -> Response:
+        jpeg = state.calib.snapshot_jpeg()
+        if jpeg is None:
+            raise CommandError("no still picture -- start clicking the corners first")
+        return Response(jpeg, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
     @app.post("/api/v1/calib/solve")
     def calib_solve() -> dict[str, Any]:

@@ -29,7 +29,11 @@ fits with the rest.
    camera doesn't appear, give your terminal camera access in System Settings >
    Privacy & Security. An iPhone nearby may show up as a second camera
    (Continuity Camera): the app picks the camera with a lens calibration, or
-   asks once on the Field calibration page. If it still doesn't, run PhotonVision on a Windows or
+   asks once on the Field calibration page. PhotonVision's own lens solve on
+   the Mac build can come out far worse than its snapshots allow (7–20 px where
+   they re-solve to under 1 px): the Field calibration page's PhotonVision panel
+   checks it, shows where the board reached, and **Use the re-solved
+   calibration** puts the re-solve back into PhotonVision (restarting it). If it still doesn't, run PhotonVision on a Windows or
    Linux machine with the camera plugged in there, and in step 4 set the
    address to the Mac's IP instead of `127.0.0.1`.
    After the first connection, the camera and its stream address are
@@ -170,6 +174,12 @@ connect while tracking.
    put it at each corner in the order listed, counterclockwise seen from above, let
    go until the count fills, then **Confirm corner** (`q`; `r` retries, **Back a
    corner** redoes the one before). Any tag id works; only one may be in view.
+   Or, with no tags at all, **Click**: if the corners are taped, **Take a picture to
+   click on** freezes one full-size frame, and you click each taped corner on it in
+   the listed order (a magnifier follows the mouse; **Redo n** moves a point). Click
+   where the tag's centre would have gone. A click 1–2 px off is a few mm, a little
+   less exact than a tag averaged over 30 frames; clicking extra taped points as
+   custom positions (edge midpoints) makes up for it.
 3. Pick the **origin**: corner, centre, typed coordinates, or click the picture (snaps to
    corners, edge midpoints and the centre). **Save** writes `vision/calib/field_pose.json`,
    which every tracker loads the next time it starts.

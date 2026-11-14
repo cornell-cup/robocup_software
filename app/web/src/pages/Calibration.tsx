@@ -1,15 +1,30 @@
 import { useEffect, useRef, useState } from "react";
 import { Card } from "../components/Card";
+import { Segmented } from "../components/Segmented";
 import { Toggle } from "../components/Toggle";
 import { api } from "../lib/api";
 import { photonvision, usePhotonVision } from "../lib/photonvision";
 import { usePolling } from "../lib/store";
 import { toasts } from "../lib/toast";
-import type { CalibStatus } from "../lib/types";
+import type { CalibStatus, LensReview } from "../lib/types";
 import { useSavedState } from "../lib/useSavedState";
 import "../styles/calibration.css";
 
 type Row = { id: number; x: number; y: number };
+type Method = "tags" | "one" | "click";
+
+/** How the reference points are shown: the setting, and what it tells you. */
+const METHODS: { value: Method; label: string; title: string; help: string }[] = [
+  { value: "tags", label: "Four tags", title: "Tags with these ids, all in view at once",
+    help: "Four tags with these ids, all in view at once." },
+  { value: "one", label: "One tag", title: "One tag moved to each corner in turn",
+    help: "Put one tag at each corner in turn, in the order below (counterclockwise seen from above). Any tag id works." },
+  { value: "click", label: "Click", title: "Click each taped corner on a still picture",
+    help: "No tags: take a still picture, then click each taped corner on it, in the order below. Zoom in with the magnifier; a click 1–2 px off is a few mm." },
+];
+/** The magnifier: its size on screen, and image pixels per screen pixel inside it. */
+const LOUPE_PX = 180;
+const LOUPE_ZOOM = 3;
 
 const pts = (p: number[][]) => p.map((q) => q.join(",")).join(" ");
 const fmtTime = (t?: number) => (t ? new Date(t * 1000).toLocaleString() : "–");
@@ -53,6 +68,76 @@ const CORNER_MSG: Record<string, string> = {
   ready: "got it: confirm and move on",
 };
 
+/** Under this many corners in a ninth of the picture, the board "missed" it. */
+const REACHED = 20;
+const fitClass = (px: number) => (px < 1 ? "good" : px < 2 ? "fair" : "poor");
+
+/** The lens calibration PhotonVision is using, checked: its fit next to a
+ * re-solve of its own snapshots (its macOS solve can be far worse than they
+ * allow), where the board reached, and a button to use the re-solve. */
+function LensCheck({ camera, size, onInstalled }: { camera: string; size: number[]; onInstalled: () => void }) {
+  const [rev, setRev] = useState<LensReview | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let live = true;
+    setLoading(true);
+    api.get<LensReview>(`/calib/lens?camera=${encodeURIComponent(camera)}&w=${size[0]}&h=${size[1]}`)
+      .then((r) => live && setRev(r))
+      .catch(() => live && setRev(null))
+      .finally(() => live && setLoading(false));
+    return () => { live = false; };
+  }, [camera, size[0], size[1]]);
+
+  if (loading && !rev) return <p className="muted small">Checking the lens calibration…</p>;
+  if (!rev || !rev.available) return null;
+  if (rev.error) return <p className="note">{rev.error}. Calibrate the lens in PhotonVision at {size[0]}×{size[1]} first.</p>;
+  const pv = rev.photonvision!, re = rev.resolved!;
+  const missed = rev.missed ?? [];
+  const use = async () => {
+    setBusy(true);
+    try {
+      const r = await api.post<{ restarted: boolean }>("/calib/lens/install", { camera, w: size[0], h: size[1] });
+      toasts.push("ok", r.restarted
+        ? "Re-solved lens calibration installed. PhotonVision is restarting (about 20 s); reconnecting after."
+        : "Re-solved lens calibration installed. Start PhotonVision, then Connect.", 8000);
+      onInstalled();
+    } catch (e) {
+      toasts.error(e);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="lens stack">
+      <div className="lens-head"><b>Lens calibration</b><span className="muted small">{rev.snapshots} snapshots</span></div>
+      <dl className="kv">
+        <dt>PhotonVision's fit</dt><dd className={`fit ${fitClass(pv.rms_px)}`}>{pv.rms_px.toFixed(2)} px</dd>
+        <dt>Re-solved</dt><dd className={`fit ${fitClass(re.rms_px)}`}>{re.rms_px.toFixed(2)} px</dd>
+      </dl>
+      <div className="coverage-row">
+        <div className="coverage" title="Where the board was in the snapshots">
+          {rev.coverage!.flat().map((n, i) => <span key={i} className={n >= REACHED ? "hit" : "miss"} />)}
+        </div>
+        <small className={missed.length ? "" : "dim"}>
+          {missed.length
+            ? `The board never reached the ${missed.join(", ")} of the picture (red): the lens there is a guess. Recalibrate in PhotonVision, covering those parts.`
+            : "The board reached every part of the picture."}
+        </small>
+      </div>
+      {rev.better ? (
+        <>
+          <p className="small">PhotonVision's solve is much worse than its snapshots allow; the same snapshots re-solve to {re.rms_px.toFixed(2)} px.</p>
+          <button className="btn primary block" disabled={busy} onClick={use}>{busy ? "Installing…" : "Use the re-solved calibration"}</button>
+          <small className="dim">Restarts PhotonVision if this app started it; the old settings are kept as photon.sqlite.bak.</small>
+        </>
+      ) : (
+        pv.rms_px < 1 && !missed.length && <p className="small">Good: under 1 px, and the board covered the whole picture.</p>
+      )}
+    </div>
+  );
+}
+
 export function Calibration() {
   const [st, setSt] = useState<CalibStatus | null>(null);
   const [busy, setBusy] = useState(false);
@@ -71,6 +156,7 @@ export function Calibration() {
     tagSize: "", fieldW: "", fieldH: "", minFrames: 10,
     customLayout: false, layoutRows: [] as Row[],
     oneTag: false, perCorner: 30,
+    method: "" as "" | Method,
     checkInset: false, checkTagId: "",
     split: 1, part: 1, overlapHeight: "",
   });
@@ -97,7 +183,19 @@ export function Calibration() {
   // One tag at a time, once a capture of that kind has started.
   const corners = st?.setup?.sequential ? st.corners : undefined;
   const cornersDone = !!corners && corners.index >= corners.total;
-  const canSolve = !!st && (corners ? cornersDone : !st.setup?.sequential && st.captured >= minNeeded);
+  // Clicking the corners, once its still picture is taken.
+  const clicks = st?.setup?.method === "click" ? st.clicks : undefined;
+  const nextClick = clicks ? clicks.findIndex((c) => c === null) : -1;
+  const clicking = !!clicks && !st?.result;
+  // What the panel shows: the session under way (until Start over), else the
+  // saved choice.
+  const method: Method = st?.setup?.method ?? (form.method || (form.oneTag ? "one" : "tags"));
+  // The points being clicked, as the server has them (the form may differ).
+  const clickLayout = clicking && st?.setup ? Object.values(st.setup.layout) : null;
+  const canSolve = !!st && (clicks ? clicks.every((c) => c !== null)
+    : corners ? cornersDone : !st.setup?.sequential && st.captured >= minNeeded);
+  const current = clicking ? nextClick : corners && st?.capturing ? corners.index : -1;
+  const placed = (i: number, id: number) => (clicks ? clicks[i] != null : corners ? i < corners.index : seen.has(id));
   const result = st?.result;
   const step = !connected ? 1 : result ? 3 : 2;
   const check = st?.check;
@@ -165,14 +263,15 @@ export function Calibration() {
 
   function startCapture() {
     const tag = Number(form.tagSize);
-    if (!(tag > 0)) return toasts.push("error", "Enter the tag size first (black square edge, metres).");
+    if (method !== "click" && !(tag > 0)) return toasts.push("error", "Enter the tag size first (black square edge, metres).");
     if (!(fw > 0 && fh > 0)) return toasts.push("error", "Enter the field size first.");
     run("/calib/capture/start", {
       tag_size: tag,
       field_w: fw,
       field_h: fh,
       min_frames: form.minFrames,
-      sequential: form.oneTag,
+      method,
+      sequential: method === "one",
       frames_per_corner: form.perCorner,
       // The server works out the default layout itself (one camera's
       // section of several, too); only a custom one is sent.
@@ -235,15 +334,37 @@ export function Calibration() {
     if (s?.saved_to) toasts.push("ok", `Saved to ${s.saved_to}\nTrackers pick it up the next time they start.`, 7000);
   }
 
-  function clickPicture(e: React.MouseEvent) {
-    if (!result || !svg.current || !connected) return;
+  /** A mouse position as image pixels, or null outside the picture. */
+  function imagePoint(e: React.MouseEvent) {
+    if (!svg.current) return null;
     const pt = svg.current.createSVGPoint();
     pt.x = e.clientX;
     pt.y = e.clientY;
     const p = pt.matrixTransform(svg.current.getScreenCTM()!.inverse());
-    if (p.x < 0 || p.y < 0 || p.x > size[0] || p.y > size[1]) return;
-    run("/calib/origin", { mode: "pixel", u: p.x, v: p.y });
+    return p.x < 0 || p.y < 0 || p.x > size[0] || p.y > size[1] ? null : p;
   }
+
+  function clickPicture(e: React.MouseEvent) {
+    const p = imagePoint(e);
+    if (!p || !connected) return;
+    if (clicking) {
+      if (nextClick < 0) return toasts.push("error", "Every point is placed. Clear one to move it.");
+      run("/calib/click", { action: "set", u: p.x, v: p.y });
+    } else if (result) {
+      run("/calib/origin", { mode: "pixel", u: p.x, v: p.y });
+    }
+  }
+
+  // The magnifier follows the mouse over the still picture.
+  const [loupe, setLoupe] = useState<{ x: number; y: number; u: number; v: number } | null>(null);
+  function moveLoupe(e: React.MouseEvent) {
+    if (!clicking) return setLoupe(null);
+    const p = imagePoint(e);
+    const box = (e.currentTarget as Element).getBoundingClientRect();
+    setLoupe(p ? { x: e.clientX - box.left, y: e.clientY - box.top, u: p.x, v: p.y } : null);
+  }
+  // A new still picture is a new URL, so the browser doesn't show the old one.
+  const snapKey = st?.setup ? `${JSON.stringify(st.setup)}-${st.snapshot_id ?? 0}` : "";
 
   function customize(on: boolean) {
     setForm((f) => ({
@@ -277,7 +398,11 @@ export function Calibration() {
             <>
               <span className="info"><span className="dot ok" />{st.camera.name}</span>
               <span className="info mono">{st.camera.size[0]}×{st.camera.size[1]}, {st.rate.toFixed(0)} fps</span>
-              {corners ? (
+              {clicks ? (
+                <span className="tags" title="Points clicked">
+                  {clicks.map((c, i) => <span key={i} className={`tag${c ? " on" : ""}`}>{i + 1}</span>)}
+                </span>
+              ) : corners ? (
                 <span className="tags" title="Corners captured">
                   {Array.from({ length: corners.total }, (_, i) => (
                     <span key={i} className={`tag${i < corners.index ? " on" : ""}`}>{i + 1}</span>
@@ -299,16 +424,25 @@ export function Calibration() {
           )}
           {checking ? (
             <span className="head-hint">Spot {(check?.index ?? 0) + 1} of {check?.total}: put the tag on the pink cross</span>
+          ) : clicking ? (
+            <span className="head-hint">
+              {nextClick >= 0 ? `Click point ${nextClick + 1} of ${clicks!.length} on the picture` : "All points placed: Solve"}
+            </span>
           ) : (
             result && connected && <span className="head-hint">Click the picture to place the origin</span>
           )}
         </div>
 
-        <div className={`picture${result && connected ? " pickable" : ""}`}>
+        <div className={`picture${(result || clicking) && connected ? " pickable" : ""}`}>
           {connected ? (
             <>
-              <img key={streamKey} src={`/api/v1/calib/stream.mjpg?k=${streamKey}`} alt="PhotonVision camera" />
-              <svg className="overlay" ref={svg} viewBox={`0 0 ${size[0]} ${size[1]}`} preserveAspectRatio="xMidYMid meet" onClick={clickPicture}>
+              {clicking ? (
+                <img key={`snap-${snapKey}`} src={`/api/v1/calib/snapshot.jpg?k=${encodeURIComponent(snapKey)}`} alt="Still picture to click on" />
+              ) : (
+                <img key={streamKey} src={`/api/v1/calib/stream.mjpg?k=${streamKey}`} alt="PhotonVision camera" />
+              )}
+              <svg className="overlay" ref={svg} viewBox={`0 0 ${size[0]} ${size[1]}`} preserveAspectRatio="xMidYMid meet"
+                onClick={clickPicture} onMouseMove={moveLoupe} onMouseLeave={() => setLoupe(null)}>
                 {st?.overlay && (
                   <>
                     {st.overlay.centre_lines.map((l, i) => <polyline key={`c${i}`} points={pts(l)} className="centre" />)}
@@ -321,6 +455,13 @@ export function Calibration() {
                     <circle cx={st.overlay.origin[0]} cy={st.overlay.origin[1]} r={fs * 0.38} className="origin" />
                   </>
                 )}
+                {clicking && clicks!.map((c, i) => c && (
+                  <g key={`p${i}`} className="clicked">
+                    <line x1={c[0] - fs * 0.8} y1={c[1]} x2={c[0] + fs * 0.8} y2={c[1]} />
+                    <line x1={c[0]} y1={c[1] - fs * 0.8} x2={c[0]} y2={c[1] + fs * 0.8} />
+                    <text x={c[0]} y={c[1]} dx={fs * 0.6} dy={-fs * 0.6} fontSize={fs} className="det-label">{i + 1}</text>
+                  </g>
+                ))}
                 {!result && corners?.captured.map((c, i) => (
                   <g key={`k${i}`}>
                     <circle cx={c[0]} cy={c[1]} r={fs * 0.3} className="snap" />
@@ -351,6 +492,16 @@ export function Calibration() {
                   </g>
                 ))}
               </svg>
+              {clicking && loupe && (
+                <div className="loupe" style={{
+                  // Above-right of the cursor, below it near the top: never over the spot.
+                  left: loupe.x + 24, top: loupe.y > LOUPE_PX + 24 ? loupe.y - LOUPE_PX - 24 : loupe.y + 24,
+                  width: LOUPE_PX, height: LOUPE_PX,
+                  backgroundImage: `url(/api/v1/calib/snapshot.jpg?k=${encodeURIComponent(snapKey)})`,
+                  backgroundSize: `${size[0] * LOUPE_ZOOM}px ${size[1] * LOUPE_ZOOM}px`,
+                  backgroundPosition: `${LOUPE_PX / 2 - loupe.u * LOUPE_ZOOM}px ${LOUPE_PX / 2 - loupe.v * LOUPE_ZOOM}px`,
+                }} />
+              )}
             </>
           ) : (
             <div className="empty">
@@ -373,10 +524,18 @@ export function Calibration() {
             <>
               <dl className="kv">
                 <dt>Camera</dt><dd>{st.camera.name}</dd>
-                <dt>Resolution</dt><dd>{st.camera.size[0]} × {st.camera.size[1]}</dd>
+                <dt>Resolution</dt><dd>{st.camera.size[0]} × {st.camera.size[1]}{st.camera.size_from === "guessed" ? " (guessed)" : ""}</dd>
                 <dt>Focal length</dt><dd>{st.camera.fx} px</dd>
                 <dt>Stream</dt><dd>{st.camera.stream ?? "none, tags only"}</dd>
               </dl>
+              {st.camera.size_from === "guessed" && (
+                <p className="note error">
+                  PhotonVision didn't say this camera's resolution, so it's guessed from the lens calibration, and may be wrong.
+                  Check the camera's resolution in PhotonVision, then Disconnect, set it under <b>Show connection options</b>
+                  (Res. width / height) and Connect. It's remembered after that.
+                </p>
+              )}
+              <LensCheck camera={st.camera.name} size={st.camera.size} onInstalled={() => setAutoConnect(true)} />
               {pvUi && <a className="btn sm block ext" href={pvUi} target="_blank" rel="noreferrer">Open PhotonVision UI ↗</a>}
               {pvs?.ours && <button className="btn sm block ghost stop-pv" disabled={pv.busy} onClick={photonvision.stop}>Stop PhotonVision</button>}
             </>
@@ -475,7 +634,11 @@ export function Calibration() {
           )}
         </Card>
 
-        <Card title="Capture reference tags" step={2} active={step === 2} done={!!result}>
+        <Card title="Capture reference tags" step={2} active={step === 2} done={!!result}
+          aside={(st?.setup || result) && (
+            <button className="btn sm ghost" disabled={busy} title="Drop this capture, its clicks and its solve, and start again. The saved calibration is kept."
+              onClick={() => run("/calib/reset", {}, "Starting the field calibration over")}>Start over</button>
+          )}>
           <div className="stack">
             <div className="row">
               <label className="field">
@@ -507,7 +670,7 @@ export function Calibration() {
                 <span>Tag size (m)</span>
                 <input className="input mono" type="number" step="0.001" min="0.001" placeholder="e.g. 0.177" value={form.tagSize} onChange={(e) => set("tagSize", e.target.value)} disabled={st?.capturing} />
               </label>
-              {form.oneTag ? (
+              {method === "click" ? null : method === "one" ? (
                 <label className="field">
                   <span>Frames per corner</span>
                   <input className="input mono" type="number" min="3" max="300" value={form.perCorner} onChange={(e) => set("perCorner", Number(e.target.value))} disabled={st?.capturing} />
@@ -519,43 +682,40 @@ export function Calibration() {
                 </label>
               )}
             </div>
-            <small className="dim">Tag size is the black square's edge.</small>
+            <small className="dim">{method === "click" ? "Tag size isn't needed to click the corners; it's kept for the trackers." : "Tag size is the black square's edge."}</small>
             <div className="row">
               <label className="field"><span>Field width (m)</span><input className="input mono" type="number" step="0.001" value={form.fieldW} onChange={(e) => set("fieldW", e.target.value)} disabled={st?.capturing} /></label>
               <label className="field"><span>Field height (m)</span><input className="input mono" type="number" step="0.001" value={form.fieldH} onChange={(e) => set("fieldH", e.target.value)} disabled={st?.capturing} /></label>
             </div>
 
-            <div>
-              <Toggle label="One tag at a time" checked={form.oneTag} onChange={(on) => set("oneTag", on)} disabled={st?.capturing} />
-              <small className="dim">
-                {form.oneTag
-                  ? `Put one tag at each ${multi ? "position of this section" : "corner"} in turn, in the order below (counterclockwise seen from above). Any tag id works.`
-                  : multi
-                    ? "This section's four tags, with these ids, all in view at once."
-                    : "Four tags with these ids, all in view at once."}
-              </small>
+            <div className="stack">
+              <Segmented options={METHODS} value={method} onChange={(m) => {
+                if (st?.setup && m !== method) return toasts.push("error", "Press Start over to change the method: this calibration was started another way.");
+                set("method", m);
+              }} />
+              <small className="dim">{METHODS.find((m) => m.value === method)!.help}</small>
             </div>
 
             <div>
               <Toggle label="Reference tags at custom positions" checked={form.customLayout} onChange={customize} />
               <table className="plain">
-                <thead><tr><th>{form.oneTag ? "#" : "Tag"}</th><th>x (m)</th><th>y (m)</th><th /></tr></thead>
+                <thead><tr><th>{method !== "tags" ? "#" : "Tag"}</th><th>x (m)</th><th>y (m)</th><th /></tr></thead>
                 <tbody>
                   {form.customLayout
                     ? form.layoutRows.map((r, i) => (
-                        <tr key={i} className={corners && corners.index === i && st?.capturing ? "current" : undefined}>
-                          <td>{form.oneTag ? <span className="mono">{i + 1}</span> : <input className="input mono cell" type="number" value={r.id} onChange={(e) => editRow(i, "id", e.target.value)} />}</td>
+                        <tr key={i} className={current === i ? "current" : undefined}>
+                          <td>{method !== "tags" ? <span className="mono">{i + 1}</span> : <input className="input mono cell" type="number" value={r.id} onChange={(e) => editRow(i, "id", e.target.value)} />}</td>
                           <td><input className="input mono cell" type="number" step="0.001" value={r.x} onChange={(e) => editRow(i, "x", e.target.value)} /></td>
                           <td><input className="input mono cell" type="number" step="0.001" value={r.y} onChange={(e) => editRow(i, "y", e.target.value)} /></td>
-                          <td><span className={`seen${(corners ? i < corners.index : seen.has(r.id)) ? " on" : ""}`} /></td>
+                          <td><span className={`seen${placed(i, r.id) ? " on" : ""}`} /></td>
                         </tr>
                       ))
                     : layout.map((r, i) => (
-                        <tr key={r.id} className={corners && corners.index === i && st?.capturing ? "current" : undefined}>
-                          <td className="mono">{form.oneTag ? i + 1 : r.id}</td>
+                        <tr key={r.id} className={current === i ? "current" : undefined}>
+                          <td className="mono">{method !== "tags" ? i + 1 : r.id}</td>
                           <td className="mono">{r.x.toFixed(3)}</td>
                           <td className="mono">{r.y.toFixed(3)}</td>
-                          <td><span className={`seen${(corners ? i < corners.index : seen.has(r.id)) ? " on" : ""}`} /></td>
+                          <td><span className={`seen${placed(i, r.id) ? " on" : ""}`} /></td>
                         </tr>
                       ))}
                 </tbody>
@@ -608,6 +768,31 @@ export function Calibration() {
                 </div>
               </>
             )}
+            {clicking && (
+              <>
+                <div className="corner-now">
+                  {nextClick >= 0 ? (
+                    <>
+                      Click point <b>{nextClick + 1}/{clicks!.length}</b> on the picture: the tape at
+                      <b className="mono"> ({clickLayout?.[nextClick]?.[0].toFixed(3)}, {clickLayout?.[nextClick]?.[1].toFixed(3)})</b>
+                    </>
+                  ) : (
+                    <>All {clicks!.length} points placed. Check them in the picture, then Solve.</>
+                  )}
+                </div>
+                <small className="dim">Click where the tag's centre would go. The magnifier shows the spot 3× larger.</small>
+                <button className="btn sm block" disabled={busy} title="A fresh picture from the camera. Your points stay; redo any that no longer sit on their mark."
+                  onClick={() => run("/calib/click", { action: "retake" }, "New picture taken: check your points still sit on their marks")}>
+                  Retake picture (keeps the points)
+                </button>
+                <div className="row wrap">
+                  {clicks!.map((c, i) => c && (
+                    <button key={i} className="btn sm" disabled={busy} onClick={() => run("/calib/click", { action: "clear", index: i })}>Redo {i + 1}</button>
+                  ))}
+                  <button className="btn sm ghost" disabled={busy || clicks!.every((c) => c === null)} onClick={() => run("/calib/click", { action: "clear_all" })}>Clear all</button>
+                </div>
+              </>
+            )}
             {corners && cornersDone && !st?.capturing && !result && (
               <button className="btn sm" disabled={busy} onClick={() => corner("back")}>Redo the last corner</button>
             )}
@@ -615,14 +800,15 @@ export function Calibration() {
             <div className="row">
               {st?.capturing ? (
                 <button className="btn" disabled={busy} onClick={() => run("/calib/capture/stop")}>Stop</button>
-              ) : (
+              ) : method === "click" && clicks ? null : (
                 <button className={`btn${!canSolve ? " primary" : ""}`} disabled={busy || !connected} onClick={startCapture}>
-                  {st && (st.captured > 0 || (corners && corners.index > 0)) ? "Capture again" : "Start capture"}
+                  {method === "click" ? "Take a picture to click on"
+                    : st && (st.captured > 0 || (corners && corners.index > 0)) ? "Capture again" : "Start capture"}
                 </button>
               )}
               <button className={`btn${canSolve ? " primary" : ""}`} disabled={busy || !canSolve} onClick={() => run("/calib/solve", {}, "Field pose solved")}>Solve</button>
             </div>
-            {connected && !form.oneTag && !allVisible && !st?.capturing && (
+            {connected && method === "tags" && !allVisible && !st?.capturing && (
               <p className="note">Every reference tag must be in view at once. Visible now: {[...seen].join(", ") || "none"}.</p>
             )}
           </div>
@@ -631,6 +817,16 @@ export function Calibration() {
         <Card title="Origin & save" step={3} active={step === 3}>
           {result ? (
             <div className="stack">
+              <div className="row">
+                {result.from === "calibrated" && (
+                  <button className="btn sm" disabled={busy} title="Undo the solve and go back to the capture: adjust the clicks or corners, then Solve again."
+                    onClick={() => run("/calib/unsolve")}>
+                    {st?.setup?.method === "click" ? "Back to the points" : "Back to the capture"}
+                  </button>
+                )}
+                <button className="btn sm ghost" disabled={busy} title="Drop the capture and the solve and start again. The saved calibration is kept."
+                  onClick={() => run("/calib/reset", {}, "Starting the field calibration over")}>Start over</button>
+              </div>
               {result.from === "calibrated" && (
                 <div className={`quality ${q}`}>
                   <span className={`dot ${q === "good" ? "ok" : q === "fair" ? "warn" : "red"}`} />

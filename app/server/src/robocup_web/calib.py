@@ -4,7 +4,8 @@ buttons instead of an OpenCV window.
 The steps and the maths are calibrate_field's own -- connect to PhotonVision
 (photon.py), collect frames that see every reference tag, calibrate_field()
 them (or, one tag at a time, CornerSampler and solve_sequential(), as
---sequential does), place the origin (pixel_to_field, with the same
+--sequential does; or, clicked on a still picture, the taped corners
+themselves), place the origin (pixel_to_field, with the same
 snapping), save field_pose.json -- only the window is new. The accuracy
 check after it is verify-calibration's CheckSession, fed the same detections:
 one tag on 9 tape-measured spots, each read back in mm. Overlays are not drawn into the
@@ -43,6 +44,7 @@ from tag_tracking.calibrate_field import (
     CornerSampler,
     FieldCalibrationResult,
     SequentialCalibrationResult,
+    _averaged,
     calibrate_field,
     camera_pose_files,
     default_field_layout,
@@ -85,6 +87,7 @@ OVERLAP_WINDOW = 30
 #: Overlap check: an accuracy-check spot this close (px) to the image border
 #: is left out of that camera's check -- a tag there is not fully in view.
 CHECK_BORDER_PX = 40
+CLICK_METHODS = ("tags", "one", "click")
 
 
 class FieldCalibration:
@@ -106,6 +109,10 @@ class FieldCalibration:
         self._views: list[list] = []
         self._setup: dict[str, Any] | None = None
         self._corners: CornerSampler | None = None  # one tag at a time
+        # clicking the corners: one still picture, a pixel (or None) per point
+        self._snapshot: np.ndarray | None = None
+        self._snapshot_id = 0  # changes with each still picture, for the page's cache
+        self._clicks: list[tuple[float, float] | None] | None = None
         self._corner_status = CornerSampler.NO_TAG
         self._result: FieldCalibrationResult | SequentialCalibrationResult | None = None
         self._fit_mm: list[float | None] | None = None  # one tag: each corner's miss
@@ -247,6 +254,15 @@ class FieldCalibration:
                                "calibration is saved under its PhotonVision name")
         return path
 
+    def snapshot_jpeg(self) -> bytes | None:
+        """The still picture the corners are clicked on, full size."""
+        with self._lock:
+            snap = self._snapshot
+        if snap is None:
+            return None
+        ok, buf = cv2.imencode(".jpg", snap, [cv2.IMWRITE_JPEG_QUALITY, 92])
+        return buf.tobytes() if ok else None
+
     def frame_jpeg(self) -> bytes | None:
         """The newest camera picture, raw (distorted, like the tag corners),
         as JPEG -- or a blank canvas when the stream would not open."""
@@ -261,7 +277,9 @@ class FieldCalibration:
     # -- capture and solve --------------------------------------------------
 
     def start_capture(self, opts: dict[str, Any]) -> None:
-        tag_size = _positive(opts, "tag_size")
+        # Clicking the corners places no tag, so it needs no tag size.
+        tag_size = (_positive(opts, "tag_size") if opts.get("method") != "click"
+                    else float(opts.get("tag_size") or 0) or None)
         w, h = _positive(opts, "field_w"), _positive(opts, "field_h")
         field = Field(w, h)
         layout = opts.get("layout")
@@ -274,22 +292,109 @@ class FieldCalibration:
         if len(layout) < ReferenceTagFieldTransform.MIN_TAGS:
             raise CommandError(f"need at least {ReferenceTagFieldTransform.MIN_TAGS} reference tags")
         min_frames = int(opts.get("min_frames") or MIN_FRAMES)
-        sequential = bool(opts.get("sequential"))
+        method = opts.get("method") or ("one" if opts.get("sequential") else "tags")
+        if method not in CLICK_METHODS:
+            raise CommandError("method must be tags, one or click")
+        sequential = method == "one"
         per_corner = int(opts.get("frames_per_corner") or FRAMES_PER_CORNER)
         if not 3 <= per_corner <= 300:
             raise CommandError("frames per corner must be 3-300")
         with self._lock:
             if self.state != "connected":
                 raise CommandError("connect to PhotonVision first")
+            snapshot = None
+            if method == "click":
+                # One still picture to click on: the camera is fixed, and a
+                # still one can be zoomed into and clicked precisely.
+                if self._stream is None:
+                    raise CommandError("clicking the corners needs PhotonVision's camera picture, "
+                                       "and its stream didn't open -- set Stream URL")
+                snapshot = self._stream.latest().copy()
             self._setup = {"tag_size": tag_size, "field": (w, h), "layout": layout,
                            "min_frames": min_frames,
                            "max_frames": max(min_frames, MAX_LIVE_FRAMES),
-                           "sequential": sequential,
+                           "sequential": sequential, "method": method,
                            "split": self._split, "part": self._part}
             self._views = []
             self._corners = CornerSampler(layout, per_corner) if sequential else None
             self._corner_status = CornerSampler.NO_TAG
-            self._capturing = True
+            self._snapshot = snapshot
+            self._snapshot_id += snapshot is not None
+            self._clicks = [None] * len(layout) if method == "click" else None
+            self._capturing = method != "click"
+
+    def click(self, opts: dict[str, Any]) -> None:
+        """Clicking the corners: `set` a point (the next unset one, or
+        `index`) at pixel u, v of the still picture, `clear` one, `clear_all`,
+        or `retake` the picture -- keeping the points, which stay right while
+        the camera hasn't moved, and show at a glance if it has."""
+        action = opts.get("action", "set")
+        with self._lock:
+            clicks, snap = self._clicks, self._snapshot
+            if clicks is None or snap is None:
+                raise CommandError("start clicking the corners first")
+            if action == "retake":
+                if self._stream is None:
+                    raise CommandError("no camera picture to retake it from")
+                self._snapshot = self._stream.latest().copy()
+                self._snapshot_id += 1
+                return
+            if action == "clear_all":
+                clicks[:] = [None] * len(clicks)
+                return
+            index = opts.get("index")
+            if action == "clear":
+                clicks[int(_num(opts, "index"))] = None
+                return
+            if action != "set":
+                raise CommandError("action must be set, clear or clear_all")
+            if index is None:
+                index = next((i for i, c in enumerate(clicks) if c is None), None)
+                if index is None:
+                    raise CommandError("every point is placed -- clear one to move it")
+            index = int(index)
+            if not 0 <= index < len(clicks):
+                raise CommandError(f"point {index + 1} doesn't exist")
+            u, v = _num(opts, "u"), _num(opts, "v")
+            h, w = snap.shape[:2]
+            if not (0 <= u < w and 0 <= v < h):
+                raise CommandError("that's outside the picture")
+            # Exactly where clicked: the page magnifies the picture for it. No
+            # snapping to a nearby image corner -- on an L of tape that is the
+            # tape's edge, half a tape width from where the tag sat.
+            clicks[index] = (float(u), float(v))
+
+    def unsolve(self) -> None:
+        """Back from the solve to the capture it came from: the clicks, corners
+        or frames are kept, to adjust and solve again."""
+        with self._lock:
+            if self._result_from != "calibrated":
+                raise CommandError("nothing solved to go back from")
+            self._result = None
+            self._fit_mm = None
+            self._transform = None
+            self._field = None
+            self._origin = None
+            self._result_from = ""
+
+    def reset(self) -> None:
+        """Start the field calibration over: drop the capture, the clicks, the
+        solve and the origin picked for it. The connection stays, and nothing
+        saved is touched."""
+        with self._lock:
+            self._capturing = False
+            self._setup = None
+            self._views = []
+            self._corners = None
+            self._corner_status = CornerSampler.NO_TAG
+            self._snapshot = None
+            self._clicks = None
+            self._result = None
+            self._fit_mm = None
+            self._transform = None
+            self._field = None
+            self._origin = None
+            self._result_from = ""
 
     def stop_capture(self) -> None:
         with self._lock:
@@ -320,11 +425,26 @@ class FieldCalibration:
         with self._lock:
             tags, setup, views = self._tags, self._setup, list(self._views)
             sampler = self._corners
+            clicks = None if self._clicks is None else list(self._clicks)
             self._capturing = False
         if tags is None or setup is None:
             raise CommandError("capture frames first")
+        clicked: dict[int, Any] | None = None
         try:
-            if sampler is not None:
+            if clicks is not None:
+                missing = [i + 1 for i, c in enumerate(clicks) if c is None]
+                if missing:
+                    raise CommandError(f"click every point first (still to place: "
+                                       f"{', '.join(map(str, missing))})")
+                # A clicked pixel is a tag centre with no tag around it: solved
+                # on centres alone, as the tag's own corners don't exist.
+                clicked = {tid: _averaged(tid, c, np.tile(c, (4, 1)))
+                           for tid, c in zip(setup["layout"], clicks)}
+                result = solve_sequential(clicked, setup["layout"], tags.K, tags.dist,
+                                          tag_size=None)
+                result.transform.source = (f"measured, {len(clicks)} taped points clicked on "
+                                           "the picture")
+            elif sampler is not None:
                 if not sampler.done:
                     raise CommandError(f"capture every corner first "
                                        f"({sampler.index}/{len(sampler.items)} done)")
@@ -338,11 +458,13 @@ class FieldCalibration:
         except (RuntimeError, LookupError) as e:
             raise CommandError(str(e)) from None
         fit_mm = None
-        if sampler is not None:
+        points = clicked if clicked is not None else (
+            sampler.results if sampler is not None else None)
+        if points is not None:
             # The fit in millimetres on the field, which pixels are not: each
             # tag's seen centre, back onto the floor, against where it was put.
             fit_mm = []
-            for tid, det in sampler.results.items():
+            for tid, det in points.items():
                 p = result.transform.pixel_to_field(*det.center, tags.K, tags.dist)
                 fit_mm.append(None if p is None else
                               round(float(np.hypot(*(p[:2] - setup["layout"][tid]))) * 1000, 1))
@@ -648,6 +770,10 @@ class FieldCalibration:
                 },
                 "rate": round(self._rate, 1) if dets else 0.0,
             }
+            if self._clicks is not None:
+                out["clicks"] = [None if c is None else [round(c[0], 1), round(c[1], 1)]
+                                 for c in self._clicks]
+                out["snapshot_id"] = self._snapshot_id
             sampler = self._corners
             if sampler is not None:
                 out["corners"] = {
@@ -666,6 +792,8 @@ class FieldCalibration:
         if tags is not None:
             out["camera"] = {
                 "name": tags.name, "size": list(tags.size), "fx": round(float(tags.K[0, 0]), 1),
+                # How the resolution is known: set, announced, remembered or guessed.
+                "size_from": getattr(tags, "size_from", "set"),
                 "source": tags.source, "stream": stream.url if stream is not None else None,
                 "host": tags.host(),
             }

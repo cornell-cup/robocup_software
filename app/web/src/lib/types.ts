@@ -145,6 +145,32 @@ export interface CalibCheck {
   results?: { x: number; y: number; skipped: boolean; err_mm: number | null; heading_err_deg: number | null; grade: CheckGrade }[];
 }
 
+export interface LensFit {
+  rms_px: number;
+  fx: number;
+  fy: number;
+  cx: number;
+  cy: number;
+  dist: number[];
+}
+
+/** PhotonVision's lens calibration next to a re-solve of its own snapshots. */
+export interface LensReview {
+  /** False when PhotonVision's settings aren't on this machine to read. */
+  available: boolean;
+  error?: string;
+  camera?: string;
+  size?: number[];
+  snapshots?: number;
+  photonvision?: LensFit;
+  resolved?: LensFit;
+  /** The re-solve is clearly better: worth installing. */
+  better?: boolean;
+  /** Board corners found in each ninth of the picture, top row first. */
+  coverage?: number[][];
+  missed?: string[];
+}
+
 export interface CalibStatus {
   state: "disconnected" | "connecting" | "connected" | "error";
   error: string | null;
@@ -161,7 +187,12 @@ export interface CalibStatus {
     sequential: boolean;
     split?: number;
     part?: number;
+    method?: "tags" | "one" | "click";
   } | null;
+  /** Clicking the corners: each point's pixel on the still picture, or null. */
+  clicks?: (number[] | null)[];
+  /** Changes with each still picture taken to click on. */
+  snapshot_id?: number;
   /** How many cameras share the field, and which section (1 = the -x end) this one covers. */
   split: number;
   part: number;
@@ -193,6 +224,8 @@ export interface CalibStatus {
     name: string;
     size: number[];
     fx: number;
+    /** How the resolution is known; "guessed" may well be wrong. */
+    size_from?: "set" | "announced" | "remembered" | "guessed";
     source: string;
     stream: string | null;
     host: string | null;
