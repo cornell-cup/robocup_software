@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { Card } from "../components/Card";
+import { Confetti } from "../components/Confetti";
 import { FieldView } from "../components/FieldView";
 import { Segmented } from "../components/Segmented";
 import { Toggle } from "../components/Toggle";
 import { api } from "../lib/api";
 import { useRobots } from "../lib/robots";
 import { sendSim, useSim } from "../lib/sim";
+import { playGoalSounds, preloadGoalSounds } from "../lib/sounds";
 import { usePolling } from "../lib/store";
 import { toasts } from "../lib/toast";
 import type { Mode, Pin, Recording, SimProcessStatus, TrackingStatus } from "../lib/types";
@@ -16,6 +18,8 @@ type DriveMode = Mode | "keys";
 const MAX_OMEGA = 5;
 /** Half lengths the sim takes, seconds (sim.py HALF_DURATION_S). */
 const HALF_S = [10, 3600];
+/** How long the goal banner stays up (the confetti falls for about as long). */
+const GOAL_FLASH_MS = 2800;
 // The pygame window's controller colours, for the target pin.
 const MODE_COLORS: Record<Mode, string> = { pd: "#00ff80", time: "#dc50ff", mpc: "#00c8ff" };
 
@@ -35,7 +39,8 @@ export function Simulator() {
   const [proc, setProc] = useState<SimProcessStatus | null>(null);
   const [log, setLog] = useState<{ n: number; text: string }[]>([]);
   const [busy, setBusy] = useState(false);
-  const [flash, setFlash] = useState<{ team: string; score: string } | null>(null);
+  const [flash, setFlash] = useState<{ id: number; team: string; score: string } | null>(null);
+  const [sound, setSound] = useSavedState("sim.goalSound", true);
   const [popup, setPopup] = useState<string | null>(null);
 
   // start options, remembered between visits
@@ -161,14 +166,20 @@ export function Simulator() {
   }, [world, pin, field]);
 
   // goal flash and phase changes, as the pygame window showed them
+  const soundOn = useRef(sound);
+  soundOn.current = sound;
+  useEffect(() => {
+    if (sound) preloadGoalSounds();
+  }, [sound]);
   const goalSeq = useRef(-1);
   const phase = useRef("");
   useEffect(() => {
     const g = world?.last_goal;
     if (g && g.seq > goalSeq.current) {
       if (goalSeq.current !== -1) {
-        setFlash({ team: g.team === "red" ? "blue" : "red", score: `${g.score.blue} – ${g.score.red}` });
-        setTimeout(() => setFlash(null), 2200);
+        setFlash({ id: g.seq, team: g.team === "red" ? "blue" : "red", score: `${g.score.blue} – ${g.score.red}` });
+        setTimeout(() => setFlash((f) => (f?.id === g.seq ? null : f)), GOAL_FLASH_MS);
+        if (soundOn.current) playGoalSounds();
       }
       goalSeq.current = g.seq;
     } else if (!g && goalSeq.current === -1) {
@@ -306,10 +317,11 @@ export function Simulator() {
               </div>
             </div>
           )}
+          <Confetti burst={flash} />
           {flash && (
-            <div className={`flash ${flash.team}`}>
-              <span className="goal">Goal</span>
-              <span className="mono">{flash.score}</span>
+            <div key={flash.id} className={`flash ${flash.team}`} role="status">
+              <span className="goal">Goal!</span>
+              <span className="score mono">{flash.score}</span>
             </div>
           )}
           {popup && <div className="popup">{popup}</div>}
@@ -495,6 +507,7 @@ export function Simulator() {
             <Toggle label="Strategy (AI)" shortcut="5" checked={controls.strategy} onChange={setStrategy} disabled={!sim.up} />
             <Toggle label="Attacker dribbles" shortcut="0" checked={controls.dribble} onChange={setDribble} disabled={!sim.up} />
             <Toggle label="Reset a stuck ball" shortcut="9" checked={!!game?.ball_stuck_enabled} onChange={setBallReset} disabled={!sim.up} />
+            <Toggle label="Goal sound" checked={sound} onChange={setSound} hint="Horn and cheer, as the pygame window" />
             <Toggle label="Paused" shortcut="P" checked={!!game?.paused} onChange={setPaused} disabled={!sim.up} hint="Freezes the clock, the ball and the sim robots" />
             <Toggle
               label="RL kick"
