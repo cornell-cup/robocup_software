@@ -32,6 +32,7 @@ from dataclasses import dataclass  # noqa: E402
 from strategy.geometry import distance, opp_goal, our_goal  # noqa: E402
 from strategy.state import (  # noqa: E402
     FIELD_LENGTH,
+    FIELD_SCALE,
     GOAL_Y_MAX,
     GOAL_Y_MIN,
     GameState,
@@ -293,9 +294,9 @@ def decide(
                 if not kicked_off:
                     # Pre-kickoff: hold on own side so the two supporters don't
                     # cross paths and collide while the attackers set up.
-                    pt = ball.pos - to_goal * 1.5 + perp * 1.0
+                    pt = ball.pos - to_goal * SUPPORT_AHEAD + perp * SUPPORT_SIDE
                 else:
-                    pt = ball.pos + to_goal * 1.5 + perp * 1.0
+                    pt = ball.pos + to_goal * SUPPORT_AHEAD + perp * SUPPORT_SIDE
                 targets[robot.id] = (
                     float(pt[0]), float(pt[1]),
                     _face_point(robot.pos, ball.pos, team_dir),  # face the ball, not the target
@@ -331,28 +332,37 @@ def _face_point(
     return math.atan2(dy, dx)
 
 
+# Distances below are tuned on the 9 x 6 field and scaled by FIELD_SCALE, like
+# the robot, ball and kick zone (sim/config.py), so on a custom --field they
+# keep the same size relative to the robots. Speeds are not scaled: the
+# physics isn't either.
+
 # Offset, in meters, placed on our side of the ball so body pushes forward.
 # Must keep the ball inside the kick zone (ROBOT_RADIUS … ROBOT_RADIUS+
-# KICK_ZONE_DEPTH ≈ 0.143 … 0.263) once the attacker arrives, otherwise the
-# kick never fires. 0.25 lands the ball cleanly inside that band.
-APPROACH_OFFSET = 0.25
+# KICK_ZONE_DEPTH ≈ 0.143 … 0.263 on 9 x 6) once the attacker arrives,
+# otherwise the kick never fires. 0.25 lands the ball cleanly inside that band.
+APPROACH_OFFSET = 0.25 * FIELD_SCALE
 # Per-team y bias on the approach point so the two attackers don't converge
 # head-on at the same point and pin the ball. Must stay below
 # KICK_ZONE_HALF_WIDTH (0.10) plus ARRIVAL_THRESH (~0.04) so the ball is still
 # inside the kick zone once the attacker stops at the approach point.
-APPROACH_LATERAL = 0.05
+APPROACH_LATERAL = 0.05 * FIELD_SCALE
 # Within this distance of the approach point, the attacker rotates to the kick
 # direction. Farther away, it faces the motion direction for natural driving.
-ATTACKER_ALIGN_DIST = 0.6
+ATTACKER_ALIGN_DIST = 0.6 * FIELD_SCALE
 # Incumbent attacker keeps the role unless a teammate is at least this much
 # closer to the ball. Bigger than typical per-tick noise and the supporter's
 # transient pass-by distance.
-ATTACKER_HYSTERESIS = 0.4
+ATTACKER_HYSTERESIS = 0.4 * FIELD_SCALE
 # Contested-ball detection: an opposing forward this close to a stalled ball
 # means we're in a head-on push stalemate. The attacker switches to a skewed
 # approach to break it.
-CONTESTED_OPP_DIST = 0.5
-CONTESTED_BALL_SPEED = 0.5
+CONTESTED_OPP_DIST = 0.5 * FIELD_SCALE
+CONTESTED_BALL_SPEED = 0.5  # m/s
+# Supporter: this far past the ball toward the opponent's goal (behind it
+# before kickoff), and this far to the side (+y).
+SUPPORT_AHEAD = 1.5 * FIELD_SCALE
+SUPPORT_SIDE = 1.0 * FIELD_SCALE
 # Kick-angle skew applied when contested. Both teams skew by the same sign,
 # so since team_dir differs by π the absolute kick directions diverge by
 # 2·SKEW — the two attackers end up on different diagonals around the ball
@@ -363,13 +373,13 @@ CONTESTED_SKEW = math.pi / 6
 # Goalie's resting standoff in front of the goal. Bigger than the pure
 # mouth-coverage value so lateral tracking has meaningful range when the
 # ball is wide.
-GOALIE_STANDOFF = 0.8
+GOALIE_STANDOFF = 0.8 * FIELD_SCALE
 # Once the ball is within RUSH_DIST of own goal, scale the standoff up
 # toward RUSH_STANDOFF so the goalie commits forward to challenge.
-GOALIE_RUSH_DIST = 2.5
-GOALIE_RUSH_STANDOFF = 1.6
+GOALIE_RUSH_DIST = 2.5 * FIELD_SCALE
+GOALIE_RUSH_STANDOFF = 1.6 * FIELD_SCALE
 # Keep the goalie a hair inside the posts so it never wedges against a wall.
-GOALIE_Y_MARGIN = 0.05
+GOALIE_Y_MARGIN = 0.05 * FIELD_SCALE
 
 
 def _goalie_target(
