@@ -14,6 +14,8 @@ import "../styles/simulator.css";
 
 type DriveMode = Mode | "keys";
 const MAX_OMEGA = 5;
+/** Half lengths the sim takes, seconds (sim.py HALF_DURATION_S). */
+const HALF_S = [10, 3600];
 // The pygame window's controller colours, for the target pin.
 const MODE_COLORS: Record<Mode, string> = { pd: "#00ff80", time: "#dc50ff", mpc: "#00c8ff" };
 
@@ -134,6 +136,22 @@ export function Simulator() {
   const setDribble = (v: boolean) => sendSim({ type: "dribble", enabled: v });
   const setRl = (v: boolean) => sendSim({ type: "rl_kick", enabled: v });
   const setBallReset = (v: boolean) => sendSim({ type: "ball_stuck_reset", enabled: v });
+  const setPaused = (v: boolean) => sendSim({ type: "pause", paused: v });
+  const newGame = () => {
+    // Mid-game this throws the score away; at full time there is nothing to lose.
+    if (!game?.winner && !window.confirm("Start a new game? The score and clock go back to zero.")) return;
+    sendSim({ type: "new_game" });
+  };
+  /** The half-length box, in minutes; sent when it loses focus or on Enter. */
+  const setHalf = (input: HTMLInputElement) => {
+    const minutes = Number(input.value);
+    if (!Number.isFinite(minutes) || minutes * 60 < HALF_S[0] || minutes * 60 > HALF_S[1]) {
+      toasts.error(`Half length must be ${HALF_S[0] / 60}–${HALF_S[1] / 60} minutes`);
+      input.value = String((game?.half_duration ?? 300) / 60);
+      return;
+    }
+    if (minutes * 60 !== game?.half_duration) sendSim({ type: "half_duration", seconds: minutes * 60 });
+  };
 
   // clear the pin once the robot gets there
   useEffect(() => {
@@ -193,6 +211,7 @@ export function Simulator() {
         "5": () => sendSim({ type: "strategy", enabled: !sim.controls.strategy }),
         "0": () => sendSim({ type: "dribble", enabled: !sim.controls.dribble }),
         "9": () => sendSim({ type: "ball_stuck_reset", enabled: !game?.ball_stuck_enabled }),
+        p: () => sendSim({ type: "pause", paused: !game?.paused }),
         r: () => sendSim({ type: "rl_kick", enabled: !sim.controls.rl_kick }),
         k: () => sendSim({ type: "kick", robot }),
         enter: () => sendSim({ type: "kick", robot }),
@@ -252,7 +271,7 @@ export function Simulator() {
           </div>
           <div className="clock">
             <span className="time mono">{clock(game?.time_remaining)}</span>
-            <span className="phase">{game ? game.phase.toLowerCase() : "not running"}</span>
+            <span className="phase">{game ? (game.paused ? "paused" : game.phase.toLowerCase()) : "not running"}</span>
           </div>
           <div className="team red">
             <span className="score mono">{world?.score?.red ?? 0}</span>
@@ -298,6 +317,7 @@ export function Simulator() {
             <div className="winner">
               <span className="label">{game.winner === "draw" ? "Draw" : `${game.winner} wins`}</span>
               <span className="mono">{world?.score.blue} – {world?.score.red}</span>
+              <button className="btn primary" disabled={!sim.up} onClick={newGame}>New game</button>
             </div>
           )}
         </div>
@@ -466,7 +486,7 @@ export function Simulator() {
               );
             })()}
             <button className="btn block" disabled={!sim.up} onClick={kick} title="Key K or Enter">Kick</button>
-            <p className="keys">Keys: 1–4 controller, 5 strategy, 0 dribble, 9 ball reset, R RL kick, K kick.</p>
+            <p className="keys">Keys: 1–4 controller, 5 strategy, 0 dribble, 9 ball reset, P pause, R RL kick, K kick.</p>
           </div>
         </Card>
 
@@ -475,6 +495,7 @@ export function Simulator() {
             <Toggle label="Strategy (AI)" shortcut="5" checked={controls.strategy} onChange={setStrategy} disabled={!sim.up} />
             <Toggle label="Attacker dribbles" shortcut="0" checked={controls.dribble} onChange={setDribble} disabled={!sim.up} />
             <Toggle label="Reset a stuck ball" shortcut="9" checked={!!game?.ball_stuck_enabled} onChange={setBallReset} disabled={!sim.up} />
+            <Toggle label="Paused" shortcut="P" checked={!!game?.paused} onChange={setPaused} disabled={!sim.up} hint="Freezes the clock, the ball and the sim robots" />
             <Toggle
               label="RL kick"
               shortcut="R"
@@ -483,6 +504,24 @@ export function Simulator() {
               disabled={!sim.up || (field ? !field.is_default : false)}
               hint={field && !field.is_default ? "Trained on 9 × 6 only" : "Learned kicking policy"}
             />
+          </div>
+          <div className="row game-row">
+            <label className="field">
+              <span>Half length (min)</span>
+              <input
+                key={game?.half_duration ?? "none"}
+                className="input mono"
+                type="number"
+                step="0.5"
+                min={HALF_S[0] / 60}
+                max={HALF_S[1] / 60}
+                defaultValue={(game?.half_duration ?? 300) / 60}
+                disabled={!sim.up || game?.half_duration === undefined}
+                onBlur={(e) => setHalf(e.currentTarget)}
+                onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()}
+              />
+            </label>
+            <button className="btn" disabled={!sim.up} onClick={newGame}>New game</button>
           </div>
         </Card>
 

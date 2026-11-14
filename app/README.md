@@ -117,8 +117,12 @@ rest.
   clicks reach it only through a real robot set to *Follow sim* on the Robots page, and the
   Drive card says so.
 - Strategy, dribble, ball-stuck reset and RL kick toggles; kick; score, clock, goals.
+- Game controls: **Paused** freezes the clock, the ball and the sim robots (real robots
+  following the sim hold still too; camera-owned robots still show where they are),
+  **New game** puts the score, clock and robots back to kickoff, and **Half length**
+  sets the minutes per half (10 s to 60 min; default 5).
 - The same keys as the pygame window: `1`–`4` controller, `5` strategy, `0` dribble,
-  `9` ball reset, `R` RL kick, `K` / `Enter` kick.
+  `9` ball reset, `R` RL kick, `K` / `Enter` kick; and `P` pause (this page only).
 
 Run the pygame viewer **or** this page, not both: both send on the manual-command port
 (9093), and only one can own it. The page says so if it can't.
@@ -266,6 +270,9 @@ Sim commands (`/sim/command` or the socket):
 {"type": "drive", "robot": 0, "forward": 1.0, "left": 0.0, "w": 0.0}  // the robot's own frame (what the page's Keys send)
 {"type": "kick", "robot": 0}
 {"type": "strategy", "enabled": true}                                  // also: dribble, rl_kick, ball_stuck_reset
+{"type": "pause", "paused": true}                                      // freeze the game; false resumes
+{"type": "new_game"}                                                   // score, clock, robots and ball back to kickoff
+{"type": "half_duration", "seconds": 180}                              // 10-3600; applies to the half being played
 ```
 
 A robot being driven is stopped if its driver goes quiet for 0.4 s (closed tab,

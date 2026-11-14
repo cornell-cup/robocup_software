@@ -196,3 +196,14 @@
     flex: none;
   }
 }
+
+/* The end-of-game overlay lets clicks through, except to its New game button. */
+.winner .btn {
+  pointer-events: auto;
+  align-self: center;
+  text-transform: none;
+}
+.game-row {
+  align-items: flex-end;
+  margin-top: 12px;
+}
