@@ -1,3 +1,5 @@
+import math
+
 import numpy as np
 from strategy.state import BLUE_GOAL, RED_GOAL, RobotState
 
@@ -74,3 +76,13 @@ def opp_goal(color: str) -> np.ndarray:
 
 def lerp(a: np.ndarray, b: np.ndarray, t: float) -> np.ndarray:
     return a + (b - a) * t
+
+
+# Heading toward the opponent's goal: blue attacks +x, red attacks -x.
+def attack_angle(color: str) -> float:
+    if color == "blue":
+        return 0.0
+    elif color == "red":
+        return math.pi
+    else:
+        raise ValueError("Invalid color")

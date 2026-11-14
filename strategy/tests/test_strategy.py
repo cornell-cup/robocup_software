@@ -28,6 +28,9 @@ from strategy.state import (
     build_game_state,
 )
 from strategy.strategy_node import Brain, decide, resolve_kick_conflict
+from strategy.tactics.attacker import CONTESTED_SKEW, attack
+from strategy.tactics.defender import defend_goal
+from strategy.tactics.role_assignments import ATTACKER, DEFENDER, SUPPORTER, assign_roles
 
 from config import BALL_DAMP, DT, FIELD_IS_DEFAULT  # sim/config.py, on sys.path via strategy
 
@@ -182,6 +185,41 @@ class TestDecide(unittest.TestCase):
         gs = build_game_state(world(robots, ball=(4.4, 3.0, 0, 0)))
         self.assertEqual(resolve_kick_conflict([4, 1], gs), [1])
         self.assertEqual(resolve_kick_conflict([4], gs), [4])
+
+
+class TestTactics(unittest.TestCase):
+    def test_lone_robot_defends(self):
+        gs = build_game_state(world())
+        sticky = {"blue": 0}
+        self.assertEqual(assign_roles([gs.blue[1]], gs.ball.pos, sticky, "blue"),
+                         [(gs.blue[1], DEFENDER)])
+        self.assertNotIn("blue", sticky)
+
+    def test_roles_by_distance(self):
+        gs = build_game_state(world(ball=(3.2, 4.4, 0, 0)))
+        roles = assign_roles(gs.blue, gs.ball.pos, {}, "blue")
+        self.assertEqual([(r.id, role) for r, role in roles],
+                         [(2, ATTACKER), (1, SUPPORTER), (0, DEFENDER)])
+
+    def test_contested_ball_is_kicked_at_an_angle(self):
+        robots = {1: (4.0, 3.0, 0.0), 4: (4.6, 3.0, math.pi)}
+        gs = build_game_state(world(robots, ball=(4.3, 3.0, 0, 0)))
+        command = attack(gs.blue[1], gs, "blue")
+        self.assertTrue(command.kick)
+        self.assertAlmostEqual(command.angle, CONTESTED_SKEW)
+
+    def test_classic_attacker_gets_behind_the_ball(self):
+        gs = build_game_state(world(ball=(5.0, 3.0, 0, 0)))  # nobody near it
+        command = attack(gs.blue[1], gs, "blue")
+        self.assertFalse(command.kick)
+        self.assertLess(command.x, 5.0)  # blue attacks +x: stands on the -x side
+        command = attack(gs.red[1], gs, "red")
+        self.assertGreater(command.x, 5.0)
+
+    def test_goalie_stays_inside_the_posts(self):
+        command = defend_goal(np.array([1.0, 0.2]), "blue")  # ball wide, near the corner
+        self.assertTrue(GOAL_Y_MIN <= command.y <= GOAL_Y_MAX)
+        self.assertLess(command.x, 2.0)
 
 
 class TestBrain(unittest.TestCase):
