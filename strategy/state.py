@@ -38,6 +38,12 @@ class RobotState:
     angle: float = 0.0  # radians, 0 = facing +x
     omega: float = 0.0  # angular velocity, rad/sec
     has_ball: bool = False  # ball in front of it, where it could kick or dribble it
+    # Mirrored from the camera ("source": "vision"). Such a robot's body only
+    # moves with the real robot, and only while the camera sees it.
+    from_camera: bool = False
+    # The camera hasn't seen it this instant (world state "stale"). Short gaps
+    # are normal; the strategy node decides when a robot counts as lost.
+    stale: bool = False
 
 
 @dataclass
@@ -132,6 +138,8 @@ def _parse_robot(rid: int, raw: dict[str, Any]) -> RobotState:
         vel=np.array([raw.get("vx", 0.0), raw.get("vy", 0.0)]),
         angle=raw.get("angle", 0.0),
         omega=raw.get("omega", 0.0),
+        from_camera=raw.get("source") == "vision",
+        stale=bool(raw.get("stale", False)),
     )
 
 

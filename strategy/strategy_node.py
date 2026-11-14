@@ -176,6 +176,7 @@ def decide(
     sticky_attackers: dict[str, int] | None = None,
     kicked_off: bool = True,
     human_blue_ids: set[int] | None = None,
+    lost_ids: set[int] | None = None,
 ) -> tuple[dict[int, tuple[float, float, float]], list[int], set[int]]:
     # Placeholder for Decision Tree
     targets: dict[int, tuple[float, float, float]] = {}
@@ -183,17 +184,20 @@ def decide(
     attacker_rids: set[int] = set()
     sticky = sticky_attackers if sticky_attackers is not None else {}
     human_ids = human_blue_ids or set()
+    lost = lost_ids or set()
     ball = gamestate.ball
 
     for team_color, team in (("blue", gamestate.blue), ("red", gamestate.red)):
         attacks_right = team_color == "blue"
         team_dir = 0.0 if attacks_right else math.pi
 
-        # Drop human-driven robots so the AI plans only for what it controls.
-        # The remaining team falls into whichever role-count branch fits its
-        # size (1 → goalie, 2 → attacker+supporter, 3 → +defender).
-        if team_color == "blue" and human_ids:
-            team = [r for r in team if r.id not in human_ids]
+        # Drop the robots the AI can't drive: human-driven ones (blue only)
+        # and camera robots the camera has lost. The remaining team falls into
+        # whichever role-count branch fits its size (1 → goalie,
+        # 2 → attacker+supporter, 3 → +defender).
+        skip = (human_ids if team_color == "blue" else set()) | lost
+        if skip:
+            team = [r for r in team if r.id not in skip]
             if not team:
                 sticky.pop(team_color, None)
                 continue
@@ -478,6 +482,10 @@ def main() -> None:
             )
 
 
+# A camera robot the camera hasn't seen for this long is lost, and the team is
+# planned without it. Same as the sim's VISION_ROBOT_COAST_S, after which the
+# sim freezes the body.
+LOST_AFTER_S = 0.5
 # Ball faster than this (m/s) means the kickoff has been taken.
 KICKOFF_BALL_SPEED = 0.1
 
@@ -528,6 +536,7 @@ class Brain:
         self._goal_seq: int | None = None
         self._half: int | None = None
         self._last_t: float | None = None
+        self._stale_since: dict[int, float] = {}
 
     def handle_control(self, msg: dict[str, Any]) -> None:
         """A control message from the manual port (viz_node or the web app)."""
@@ -548,10 +557,11 @@ class Brain:
         """One world-state frame in, one plan out."""
         gamestate = build_game_state(raw, self.color)
         self._update_kickoff(gamestate)
+        lost = self._update_lost(gamestate)
 
         targets, kicks, attackers = self.decide_fn(
             gamestate, self.rl_skill, self.rl_enabled, self.sticky, self.kicked_off,
-            self.human_blue_ids,
+            self.human_blue_ids, lost,
         )
 
         # Our dribblers: on for our attacker (when the toggle is on), off for
@@ -560,7 +570,7 @@ class Brain:
         # (their controller's button, routed through robot_node).
         ours = [
             r for r in gamestate.our_team
-            if not (self.color == "blue" and r.id in self.human_blue_ids)
+            if r.id not in lost and not (self.color == "blue" and r.id in self.human_blue_ids)
         ]
         our_ids = {r.id for r in ours}
         our_attacker = next((rid for rid in attackers if rid in our_ids), None)
@@ -587,6 +597,19 @@ class Brain:
             self.log("[Strategy node] kickoff")
         if not self.kicked_off and gamestate.game_phase == "play":
             gamestate.game_phase = "kickoff"
+
+    def _update_lost(self, gamestate: GameState) -> set[int]:
+        """Camera robots the camera hasn't seen for LOST_AFTER_S."""
+        lost: set[int] = set()
+        now = gamestate.timestamp
+        for r in gamestate.blue + gamestate.red:
+            if r.from_camera and r.stale:
+                since = self._stale_since.setdefault(r.id, now)
+                if now - since >= LOST_AFTER_S:
+                    lost.add(r.id)
+            else:
+                self._stale_since.pop(r.id, None)
+        return lost
 
 
 def _try_load_skill(path: str):
