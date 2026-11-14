@@ -1,10 +1,40 @@
+import math
+
 import numpy as np
-from strategy.state import BallState, RobotState
+
+from strategy.state import BallState, RobotState  # also puts sim/ on sys.path
+
+from config import BALL_DAMP  # noqa: E402  (sim/config.py)
+
+# The sim slows the ball by BALL_DAMP per second (pymunk_world._apply_damping:
+# v *= 1 - k dt every substep), so v(t) = v0 e^(-k t) and the ball travels
+# p(t) = p0 + v0 (1 - e^(-k t)) / k. It comes to rest at p0 + v0 / k.
+# Collisions with robots and walls are not modelled.
 
 
-# predict where the robot will be in `time_ahead` seconds from now
-def predict_ball_position(ball_state: BallState, time_ahead: float) -> np.ndarray:
-    return ball_state.pos + ball_state.vel * time_ahead
+def predict_ball_position(
+    ball_state: BallState, time_ahead: float, damping: float = BALL_DAMP
+) -> np.ndarray:
+    """Where the ball will be in `time_ahead` seconds, slowing down as in the sim."""
+    t = max(0.0, time_ahead)
+    if damping <= 0.0:
+        return ball_state.pos + ball_state.vel * t
+    travel = (1.0 - math.exp(-damping * t)) / damping
+    return ball_state.pos + ball_state.vel * travel
+
+
+def predict_ball_velocity(
+    ball_state: BallState, time_ahead: float, damping: float = BALL_DAMP
+) -> np.ndarray:
+    """The ball's velocity in `time_ahead` seconds."""
+    return ball_state.vel * math.exp(-max(0.0, damping) * max(0.0, time_ahead))
+
+
+def ball_rest_position(ball_state: BallState, damping: float = BALL_DAMP) -> np.ndarray:
+    """Where the ball stops if nothing touches it."""
+    if damping <= 0.0:
+        return ball_state.pos.copy()  # never stops; no meaningful answer
+    return ball_state.pos + ball_state.vel / damping
 
 
 # find the earliest intercept point where the robot can meet the moving ball.
