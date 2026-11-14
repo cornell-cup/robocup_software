@@ -518,8 +518,9 @@ class Plan:
 class Brain:
     """decide() plus everything the strategy remembers between frames.
 
-    strategy_node's main loop runs the strategy through this. `decide_fn`
-    swaps the decision function.
+    strategy_node's main loop and the match runner (eval/match.py) both run the
+    strategy through this, so the two behave the same. `decide_fn` swaps the
+    decision function, e.g. eval/baseline_v0.decide for the frozen baseline.
     """
 
     def __init__(
