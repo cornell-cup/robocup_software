@@ -231,6 +231,10 @@ class FieldCalibration:
         with self._lock:
             if self._capturing:
                 raise CommandError("stop the capture first")
+            if self._clicks is not None and (split, part) != (self._split, self._part):
+                # The points being clicked belong to the current section's layout.
+                raise CommandError("press Start over first: these clicks are for "
+                                   f"section {self._part}")
             if (split, part) != (self._split, self._part):
                 # A result solved for another section (or saved under another
                 # camera's name) would be saved in the wrong place.
