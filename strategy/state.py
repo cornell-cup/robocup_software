@@ -1,3 +1,4 @@
+import math
 import os
 import sys
 from dataclasses import dataclass, field
@@ -5,14 +6,15 @@ from typing import Any
 
 import numpy as np
 
-# Field geometry comes from python/config.py so a custom --field reaches strategy.
+# Field geometry comes from sim/config.py so a custom --field reaches strategy.
 _PYTHON_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "sim")
 if _PYTHON_DIR not in sys.path:
     sys.path.insert(0, _PYTHON_DIR)
 
-from config import FIELD_H, FIELD_SCALE, FIELD_W, GOAL_MOUTH_H, GOAL_Y_MAX, GOAL_Y_MIN  # noqa: E402, F401
+from config import FIELD_H, FIELD_SCALE, FIELD_W, GOAL_MOUTH_H, GOAL_Y_MAX, GOAL_Y_MIN, ROBOT_RADIUS  # noqa: E402, F401
 
-DRIBBLER_RANGE = 0.05 * FIELD_SCALE  # ball within this = "has ball", meters (9 x 6 value)
+from strategy.skills.kick import KICK_ZONE_DEPTH, KICK_ZONE_HALF_WIDTH  # noqa: E402
+
 FIELD_LENGTH = FIELD_W  # meters, along x (9 by default)
 FIELD_WIDTH = FIELD_H  # meters, along y (6 by default)
 # 3v3. Robot ids 0..TEAM_BLUE_SIZE-1 are blue;
@@ -35,12 +37,12 @@ class RobotState:
     vel: np.ndarray = field(default_factory=lambda: np.zeros(2))  # [vx, vy] meters/sec
     angle: float = 0.0  # radians, 0 = facing +x
     omega: float = 0.0  # angular velocity, rad/sec
-    has_ball: bool = False  # is ball within dribbler range
+    has_ball: bool = False  # ball in front of it, where it could kick or dribble it
 
 
 @dataclass
 class GameState:
-    timestamp: float = 0  # time.time() from sim
+    timestamp: float = 0  # sim time, seconds
 
     # Ball
     ball: BallState = field(default_factory=BallState)
@@ -55,6 +57,7 @@ class GameState:
     )  # alias for whichever team we control
     opponents_team: list[RobotState] = field(default_factory=list)  # opponents
     possession: str = "loose"  # "ours", "theirs", "loose"
+    ball_holder: int | None = None  # id of the robot that has the ball, if any
     game_phase: str = "play"  # "play", "kickoff", "freekick", "halt"
 
 
@@ -88,7 +91,7 @@ def build_game_state(raw: dict[str, Any], our_color: str = "blue") -> GameState:
         red_robot = robots_raw.get(str(i + TEAM_BLUE_SIZE), {})
         gamestate.red.append(_parse_robot(i + TEAM_BLUE_SIZE, red_robot))
 
-    # Check the closest robot within the dribble range
+    # Which robot, if any, has the ball in front of it
     _compute_has_ball(gamestate)
 
     # Team Aliases
@@ -121,15 +124,28 @@ def _parse_robot(rid: int, raw: dict[str, Any]) -> RobotState:
     )
 
 
+def ball_in_front(robot: RobotState, ball_pos: np.ndarray) -> bool:
+    """The ball is in the robot's kick zone: in front of it, close enough to
+    kick or dribble. Same box as skills/kick.py's try_kick_ball."""
+    dx, dy = float(ball_pos[0] - robot.pos[0]), float(ball_pos[1] - robot.pos[1])
+    c, s = math.cos(robot.angle), math.sin(robot.angle)
+    local_x = c * dx + s * dy
+    local_y = -s * dx + c * dy
+    return (
+        ROBOT_RADIUS <= local_x <= ROBOT_RADIUS + KICK_ZONE_DEPTH
+        and abs(local_y) <= KICK_ZONE_HALF_WIDTH
+    )
+
+
 def _compute_has_ball(gamestate: GameState) -> None:
-    best_robot = None
-    best_dist = DRIBBLER_RANGE
-
-    for robot in gamestate.blue + gamestate.red:
-        dist = float(np.linalg.norm(gamestate.ball.pos - robot.pos))
-        if dist < best_dist:
-            best_robot = robot
-            best_dist = dist
-
-    if best_robot is not None:
-        best_robot.has_ball = True
+    # The ball's centre can never come closer to a robot's centre than the two
+    # radii, so "has ball" is a box in front of the robot, not a distance.
+    # If several robots have it in front, the closest one holds it.
+    holders = [
+        r for r in gamestate.blue + gamestate.red if ball_in_front(r, gamestate.ball.pos)
+    ]
+    if not holders:
+        return
+    best = min(holders, key=lambda r: float(np.linalg.norm(gamestate.ball.pos - r.pos)))
+    best.has_ball = True
+    gamestate.ball_holder = best.id
