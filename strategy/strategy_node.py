@@ -27,8 +27,9 @@ DEFAULT_RL_CHECKPOINT = os.path.join(
     "rl", "checkpoints", "first_final", "final.zip",
 )
 
-from strategy.geometry import distance, lerp, opp_goal, our_goal  # noqa: E402
-from strategy.prediction import predict_intercept_point  # noqa: E402
+from dataclasses import dataclass  # noqa: E402
+
+from strategy.geometry import distance, opp_goal, our_goal  # noqa: E402
 from strategy.state import (  # noqa: E402
     FIELD_LENGTH,
     GOAL_Y_MAX,
@@ -435,17 +436,7 @@ def main() -> None:
     print(f"[Strategy node] {args.mode} mode: started")
     print(f"[Strategy node] controlling BOTH teams (blue attacks right, red attacks left)")
 
-    rl_skill = None
-    rl_enabled = False
-    dribble_attacker_enabled = False
-    sticky_attackers: dict[str, int] = {}
-    # Blue robot ids driven by human controllers; AI skips planning for them.
-    # viz_node publishes this on the manual port at startup and on toggles.
-    human_blue_ids: set[int] = set()
-    # Flips True once the ball has been kicked/pushed. Before that, supporters
-    # hold on their own half so they don't barrel into each other at midfield.
-    kicked_off = False
-    KICKOFF_BALL_SPEED = 0.1
+    brain = Brain(args.color, rl_checkpoint=args.rl_checkpoint, log=print)
 
     frame = 0
     while True:
@@ -453,51 +444,23 @@ def main() -> None:
         if raw is None:
             continue
 
-        # Handle manual-port control messages (RL toggle from viz).
+        # Control messages from viz / the web app: RL kick, dribble, human ids.
         for msg in backend.drain_manual():
-            if "rl_kick_enabled" in msg:
-                want = bool(msg["rl_kick_enabled"])
-                if want and rl_skill is None:
-                    rl_skill = _try_load_skill(args.rl_checkpoint)
-                rl_enabled = want and rl_skill is not None
-                print(f"[Strategy node] RL kick → {'ON' if rl_enabled else 'OFF'}")
-            if "dribble_attacker" in msg:
-                dribble_attacker_enabled = bool(msg["dribble_attacker"])
-                print(f"[Strategy node] Dribble (attacker) → {'ON' if dribble_attacker_enabled else 'OFF'}")
-            if "human_blue_ids" in msg:
-                human_blue_ids = {int(x) for x in msg["human_blue_ids"]}
-                print(f"[Strategy node] human_blue_ids → {sorted(human_blue_ids)}")
+            brain.handle_control(msg)
 
         try:
-            gamestate = build_game_state(raw, our_color)
-            if not kicked_off and gamestate.ball.speed > KICKOFF_BALL_SPEED:
-                kicked_off = True
-                print("[Strategy node] kickoff")
-            targets, kicks, attacker_rids = decide(
-                gamestate, rl_skill, rl_enabled, sticky_attackers, kicked_off,
-                human_blue_ids,
-            )
+            plan = brain.tick(raw)
             backend.send_targets({
                 "targets": {
                     str(rid): {"x": tx, "y": ty, "angle": ta}
-                    for rid, (tx, ty, ta) in targets.items()
+                    for rid, (tx, ty, ta) in plan.targets.items()
                 },
-                "attackers": sorted(attacker_rids),
+                "attackers": sorted(plan.attackers),
             })
-            for rid in kicks:
+            for rid in plan.kicks:
                 backend.send_kick(rid)
-
-            # Route dribble to our team's attacker (closest to ball); everyone
-            # else gets OFF so stale state never leaks between attacker changes.
-            # Skip human-driven robots — they own their own dribble state via
-            # the controller's RB button, routed through robot_node.
-            our_team = gamestate.blue if our_color == "blue" else gamestate.red
-            if our_color == "blue" and human_blue_ids:
-                our_team = [r for r in our_team if r.id not in human_blue_ids]
-            if our_team:
-                attacker_rid = min(our_team, key=lambda r: distance(r.pos, gamestate.ball.pos)).id
-                for r in our_team:
-                    backend.send_dribble(r.id, dribble_attacker_enabled and r.id == attacker_rid)
+            for rid, on in plan.dribble.items():
+                backend.send_dribble(rid, on)
         except Exception as e:
             print(f"[ERROR] {e}")
             import traceback
@@ -506,11 +469,106 @@ def main() -> None:
 
         frame += 1
         if frame % 300 == 0:
+            gamestate = plan.gamestate
             print(
-                f"[Strategy node] frame={frame}  possession={gamestate.possession}  "
-                + f"rl_kick={'ON' if rl_enabled else 'OFF'}  "
+                f"[Strategy node] frame={frame}  phase={gamestate.game_phase}  "
+                + f"possession={gamestate.possession}  "
+                + f"rl_kick={'ON' if brain.rl_enabled else 'OFF'}  "
                 + f"ball=({gamestate.ball.pos[0]:.1f}, {gamestate.ball.pos[1]:.1f})"
             )
+
+
+# Ball faster than this (m/s) means the kickoff has been taken.
+KICKOFF_BALL_SPEED = 0.1
+
+
+@dataclass
+class Plan:
+    """What the strategy wants this frame."""
+
+    targets: dict[int, tuple[float, float, float]]  # robot id -> (x, y, heading)
+    kicks: list[int]
+    dribble: dict[int, bool]  # dribbler on/off for each of our AI-driven robots
+    attackers: set[int]  # both teams' attackers (viewers ring them)
+    gamestate: GameState
+
+
+class Brain:
+    """decide() plus everything the strategy remembers between frames.
+
+    strategy_node's main loop runs the strategy through this. `decide_fn`
+    swaps the decision function.
+    """
+
+    def __init__(
+        self,
+        color: str = "blue",
+        decide_fn: Any = None,
+        rl_checkpoint: str = DEFAULT_RL_CHECKPOINT,
+        log: Any = None,
+    ):
+        self.color = color
+        self.decide_fn = decide_fn or decide
+        self.rl_checkpoint = rl_checkpoint
+        self.log = log or (lambda _msg: None)
+        self.rl_skill: "RLKickSkill | None" = None
+        self.rl_enabled = False
+        self.dribble_attacker = False
+        # Blue robot ids driven by human controllers; AI skips planning for them.
+        # viz_node / the web app publish this at startup and on toggles.
+        self.human_blue_ids: set[int] = set()
+        self._reset_memory()
+
+    def _reset_memory(self) -> None:
+        self.sticky: dict[str, int] = {}
+        # Flips True once the ball has been kicked/pushed. Before that, supporters
+        # hold on their own half so they don't barrel into each other at midfield.
+        self.kicked_off = False
+
+    def handle_control(self, msg: dict[str, Any]) -> None:
+        """A control message from the manual port (viz_node or the web app)."""
+        if "rl_kick_enabled" in msg:
+            want = bool(msg["rl_kick_enabled"])
+            if want and self.rl_skill is None:
+                self.rl_skill = _try_load_skill(self.rl_checkpoint)
+            self.rl_enabled = want and self.rl_skill is not None
+            self.log(f"[Strategy node] RL kick → {'ON' if self.rl_enabled else 'OFF'}")
+        if "dribble_attacker" in msg:
+            self.dribble_attacker = bool(msg["dribble_attacker"])
+            self.log(f"[Strategy node] Dribble (attacker) → {'ON' if self.dribble_attacker else 'OFF'}")
+        if "human_blue_ids" in msg:
+            self.human_blue_ids = {int(x) for x in msg["human_blue_ids"]}
+            self.log(f"[Strategy node] human_blue_ids → {sorted(self.human_blue_ids)}")
+
+    def tick(self, raw: dict[str, Any]) -> Plan:
+        """One world-state frame in, one plan out."""
+        gamestate = build_game_state(raw, self.color)
+        self._update_kickoff(gamestate)
+
+        targets, kicks, attackers = self.decide_fn(
+            gamestate, self.rl_skill, self.rl_enabled, self.sticky, self.kicked_off,
+            self.human_blue_ids,
+        )
+
+        # Route dribble to our team's attacker (closest to ball); everyone
+        # else gets OFF so stale state never leaks between attacker changes.
+        # Skip human-driven robots — they own their own dribble state via
+        # the controller's RB button, routed through robot_node.
+        ours = [
+            r for r in gamestate.our_team
+            if not (self.color == "blue" and r.id in self.human_blue_ids)
+        ]
+        dribble: dict[int, bool] = {}
+        if ours:
+            attacker_rid = min(ours, key=lambda r: distance(r.pos, gamestate.ball.pos)).id
+            dribble = {r.id: self.dribble_attacker and r.id == attacker_rid for r in ours}
+
+        return Plan(targets, kicks, dribble, attackers, gamestate)
+
+    def _update_kickoff(self, gamestate: GameState) -> None:
+        if not self.kicked_off and gamestate.ball.speed > KICKOFF_BALL_SPEED:
+            self.kicked_off = True
+            self.log("[Strategy node] kickoff")
 
 
 def _try_load_skill(path: str):
