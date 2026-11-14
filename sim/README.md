@@ -274,7 +274,8 @@ uv run python run_pipeline.py --vision ..\vision\test.jsonl --field 1.93 1.32
 - `--field W H` in metres, or the tracker's `calib/field_pose.json` (reads its saved `field` size). Use the same size the tracker was calibrated with; the sim warns if the tracker's `field` differs by more than 5 mm.
 - Every node gets it, via the `ROBOCUP_FIELD` environment variable that `run_pipeline.py` sets.
 - What follows the field: walls, goal mouth (same fraction of the field height as on 9 x 6, ~0.31 m on a 1.32 m table), spawn points, the strategy's field and goal positions, and the window, which stays ~900 px wide.
-- What doesn't: robot and ball size, physics, and the strategy's tuned distances (approach offset, goalie standoff, ...) keep their 9 x 6 values, so simulated robots are oversized on a small table.
+- What shrinks with it (`FIELD_SCALE`): robot and ball size, the kick and dribble zones, and the strategy's tuned distances (approach offset, goalie standoff, ...).
+- What doesn't: physics (motor force, mass, damping) keeps its 9 x 6 values, so on a small table robots are much faster relative to the field.
 - The RL kick policy was trained on 9 x 6 and is off: `R` in the viewer does nothing, and the attacker always uses the classic approach.
 - Works with or without `--vision`.
 

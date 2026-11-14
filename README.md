@@ -242,7 +242,10 @@ robocup_software/
 ├── strategy/                   # team strategy (Python package `strategy`)
 │   ├── strategy_node.py        # entry point: world state -> robot targets
 │   ├── state.py, geometry.py, prediction.py
-│   ├── skills/                 # kick, dribble, rl_kick (plays/, tactics/, BT/ are stubs)
+│   ├── tactics/                # role assignment, attacker, supporter, defender
+│   ├── skills/                 # navigate, kick, dribble, rl_kick (plays/, BT/ are stubs; plan in strategy/README.md)
+│   ├── eval/                   # headless match runner + frozen baseline strategy (v0)
+│   ├── tests/                  # strategy unit tests
 │   └── rl/                     # PPO kick skill: env, reward, train, eval, checkpoints/
 ├── vision/                     # camera tracking (members of the root uv workspace)
 │   ├── vision-core/            # field geometry, camera<->field transform, Kalman filter
@@ -391,6 +394,15 @@ Run from the repo root. Needs the RL extra: `uv sync --extra rl` once, or the
 | `uv run --extra rl python strategy/rl/train.py --timesteps 500000` | Full PPO training run |
 | `uv run --extra rl python strategy/rl/eval.py --checkpoint PATH` | Evaluate a checkpoint |
 
+#### Strategy tests and matches
+
+Run from the repo root; no sim running ([details](strategy/README.md#testing-and-matches)).
+
+| Command | What it does |
+| --- | --- |
+| `uv run python -m unittest discover -s strategy/tests -t .` | Strategy unit tests: world state, ball prediction, roles, kickoff, lost robots |
+| `uv run python -m strategy.eval.match` | Headless matches, current strategy vs the frozen baseline v0 (`--games N`, `--duration S`, `--a` / `--b`) |
+
 | Flag | Command | Meaning | Default |
 | --- | --- | --- | --- |
 | `--timesteps N` | train | Training steps | `500000` |
@@ -469,15 +481,29 @@ at commit `80eb3ad`; that repo has its history.
 
 ## Status and caveats
 
-- `strategy/plays/`, `tactics/`, `BT/tree.py` and `skills/navigate.py`
-  are empty placeholders for the planned plays → tactics → skills structure.
-  The working strategy currently lives in `strategy_node.py`.
+- The team AI is `decide()` in `strategy/strategy_node.py`, running the role
+  assignment and tactics in `strategy/tactics/` for both teams.
+  `strategy/plays/` and `BT/tree.py` are empty placeholders. The plan for
+  plays → roles → tactics → skills, based on CMU's Skills, Tactics and Plays and on what current Small
+  Size League teams (CMDragons, TIGERs Mannheim, RoboJackets) do, is in
+  [strategy/README.md](strategy/README.md#design), with its references and
+  [known issues](strategy/README.md#known-issues). Steps 1-3 (fixes, a
+  headless match runner, unit tests, tactics split out of `decide()`, a
+  time-based analysis layer) are done, and the attacker now pushes the ball
+  through, so the robots score on the real table's size too.
+- The sim's scoreboard used to give each goal to the wrong team (fixed
+  2026-11-14): scores shown before then are swapped.
+- The real robots have a kicker, but nothing fires it yet: kicks work in the
+  sim only ([robot/README.md](robot/README.md#1-wire-the-motors)).
 - The RL kick policy was trained on the 9 × 6 field and is disabled when
   `--field` changes the size.
-- With `--field`, robot/ball sizes and the strategy's tuned distances keep
-  their 9 × 6 values.
-- There is no automated test suite beyond `robot/tests/`; `selfcheck` and the
-  `--synthetic` modes are the closest thing for the rest.
+- With `--field`, robot and ball sizes, the kick zone and the strategy's tuned
+  distances shrink with the field (`FIELD_SCALE`), but the physics (motor
+  force, mass, damping) keeps its 9 × 6 values: on a small table the robots are
+  much faster relative to the field.
+- Automated tests: `robot/tests/` and `strategy/tests/` (see the command
+  reference); `selfcheck` and the `--synthetic` modes are the closest thing for
+  the rest.
 - Real robots following the sim get robot_node's controller output as is: the
   gains and the sim's drive model (`sim/config.py`, `TODO(hardware)`) were tuned
   for the simulated robot, not measured on the XRP, so expect to tune them.
