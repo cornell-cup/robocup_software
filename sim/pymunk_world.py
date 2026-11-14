@@ -31,6 +31,7 @@ from config import (  # noqa: E402
     DEFAULT_FIELD_W,
     DT,
     FIELD_H,
+    FIELD_SCALE,
     FIELD_W,
     GOAL_Y_MAX,
     GOAL_Y_MIN,
@@ -56,6 +57,11 @@ CATEGORY_WALL  = 0b100
 # Wall half-thickness, meters. Must exceed |v_max| * DT so pymunk's discrete
 # collision detection catches fast balls without CCD.
 WALL_HALF_THICKNESS = 0.10
+
+# How far past the goal line robots may reach before the back of the goal
+# stops them (the ball goes through it). 9 x 6 value (the original layout put
+# it there), scaled with the robot.
+GOAL_BACK_DEPTH = (20.0 / 140.0 - WALL_HALF_THICKNESS) * FIELD_SCALE
 
 # MAX_BALL_SPEED (config) doubles as a tunneling safety: ball travel/substep
 # stays well under the wall band even at full speed.
@@ -164,8 +170,13 @@ def _add_walls(space: pymunk.Space) -> None:
     add_seg((FIELD_W + r, GOAL_Y_MAX), (FIELD_W + r, FIELD_H + r), wall_filter)
 
     # --- BACK OF GOALS (robots blocked, ball passes through)
-    goal_back_x_left = -ROBOT_RADIUS
-    goal_back_x_right = FIELD_W + ROBOT_RADIUS
+    # A capsule of radius r whose inner face is GOAL_BACK_DEPTH past the goal
+    # line, so a robot pushing the ball reaches far enough to put it over the
+    # line. That depth shrinks with the robot; r doesn't. (The centre used to
+    # be ROBOT_RADIUS past the line: the same place on 9 x 6, but on a small
+    # field the face came 69 mm into the field and the ball stopped short.)
+    goal_back_x_left = -GOAL_BACK_DEPTH - r
+    goal_back_x_right = FIELD_W + GOAL_BACK_DEPTH + r
 
     add_seg(
         (goal_back_x_left, GOAL_Y_MIN),
