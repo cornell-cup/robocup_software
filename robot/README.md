@@ -14,6 +14,8 @@ gamepad / keyboard / web app / sim --> laptop --Bluetooth--> XRP robot --> wheel
   and step 5 for a Bluetooth gamepad.
 - **Play:** step 6 drives one robot. Step 7 drives several, lets the simulator
   drive them, or does it all from the browser.
+- **Check it:** step 8 measures how well a robot moves (straight lines,
+  strafing, turning, reacting) with the camera, and grades it.
 
 > **In robocup_software:** skip step 2. Run `uv sync` once at the repo root
 > (it installs bleak, pygame and mpremote into the shared `.venv`), then run
@@ -229,6 +231,109 @@ keyboard or a gamepad, or have it follow a sim robot. The **Tracking** page has 
 a robot's Bluetooth link: quit `python -m laptop` before using the page, and
 the other way round.
 
+## 8. Test how well it moves
+
+The web app's **Robot test** page drives one robot through a set of moves,
+watches each with the camera, and grades what it saw: does it drive straight,
+strafe as fast as it drives, turn on the spot, react quickly, do the same thing
+twice? Use it on a new robot, after changing wheels or motors, or to compare
+two robots.
+
+**Before you start**
+
+- The camera tracks the field: field calibration done
+  ([app/README.md](../app/README.md#try-it)) and **Tracking** started.
+- The tag's heading points at the dribbler (the tracker's *heading offset*).
+  The tests read "forward" from it.
+- The robot is added and **Connected** on the **Robots** page, driven **by
+  hand** (not following the sim), on charged batteries.
+- **Only this robot's tag on the field.** The test takes whichever robot tag the
+  camera sees (the corner tags 0–3 don't count) and won't start with none or
+  several.
+- Room to move: each move is 0.5 m, plus room to coast and the robot's size. On
+  a 1.93 x 1.32 m table every test fits a robot up to about 50 cm across.
+
+No robot handy? Turn on **Fake robot (practice)** to try the page on a pretend
+robot and camera; nothing is saved.
+
+**Measure the robot (once per robot)**
+
+Under *Robot size and tag position*, in centimetres, looking down on the robot
+with its dribbler (its front) away from you. *How to measure* on the page has a
+diagram.
+
+| Box | What to measure |
+| --- | --- |
+| Length | Very front to very back, dribbler and anything else sticking out included |
+| Width | Across the widest point, wheels included |
+| Tag: forward | From the robot's centre (the middle of its three wheels: the point it spins around) to the middle of the tag's black square, along the robot. Towards the front is +, towards the back − |
+| Tag: left | The same, across the robot. Towards the robot's own left is +, its right − |
+
+A tag right on the centre is 0 and 0. If you haven't measured the tag, leave
+**both** tag boxes blank (not 0): run the spin tests, and the profile estimates
+where the tag is, with **Use these numbers** to fill it in.
+
+What they're for: the test measures the robot from its centre, not from its
+tag, and keeps the robot's corners (not just its centre) 5 cm inside the field.
+An unmeasured tag can't be told from a robot that turns about the wrong point,
+so the profile says so instead of grading it.
+
+**Run it**
+
+1. Pick the robot. The checklist turns green once it's connected, driven by
+   hand, tracked, and the only robot tag in view.
+2. Pick the tests (all eight is a good first run), the speeds and the repeats.
+   Speeds are commands, 0 to 1 of the robot's `MAX_EFFORT`; include **1** to
+   compare it with the simulator. **2 or more repeats** to measure consistency.
+3. Put the robot near the middle of the field and press **Run**. Stay clear.
+
+Each run: wait for the robot to stand still with room to move, drive one move
+(0.5 m, or a full turn for a spin) and let it coast to a stop. Between runs it
+drives itself to the next move's start spot, placed so the move runs through
+the middle of the field. If it can't get there, the page says **Move the
+robot**: put it where the dashed outline is, facing the same way, and it
+carries on. A move too big for the field is skipped (*no room*).
+
+It stops the robot at once if the camera loses its tag, if a corner gets
+within 5 cm of the edge, or on **Abort**. A run that stops like that is
+marked, not counted.
+
+**Read the profile**
+
+When the runs are done, the *Profile* card grades six things good / fair /
+poor, with the numbers behind each grade:
+
+| Ability | From |
+| --- | --- |
+| Driving straight | Forward and backward: how far it veers sideways per metre, and how much it turns |
+| Strafing | Left and right: the same, and its speed against forward |
+| Diagonals | Forward-left and forward-right |
+| Turning | The spins: clockwise against counter-clockwise speed, and how much it wobbles |
+| Responsiveness | Every run: command to moving, then to full speed |
+| Consistency | Repeats of the same move: how far apart they end up |
+
+*What stood out* says it in words: "Veers right of its line when strafing left
+(45 mm per metre)", "Turns clockwise 20% slower than counter-clockwise",
+"Doesn't move at 0.4: commands that small may be in a dead band". A robot that
+veers the same way in every direction gets one line: something (often the
+tag's heading offset) turns every move.
+
+*Real robot vs the sim* (runs at speed 1 only) sets its speed, acceleration,
+slowing down and turn rate beside the simulator's robot, measured the same way,
+and suggests `sim/config.py` values (`MOTOR_MAX_FORCE`, `LINEAR_DAMP`,
+`ANGULAR_DAMP`) that would make the sim's robot move more like it. Change one at
+a time and test again.
+
+Click a row under *Each test* to show only that test's paths on the field.
+
+Every session on a real robot is saved as `profiles/<robot>/<date-time>.json`.
+*Show* opens an old one; *Compare with* puts an earlier profile's grade next to
+each ability, for "before and after the new wheels". Compare profiles taken at
+the same `MAX_EFFORT`: speeds are a fraction of it.
+
+The grades' thresholds are judgement calls for a small robot on a table, not
+standards: they're the constants at the top of `laptop/motion_report.py`.
+
 ## Troubleshooting
 
 - **`python -m laptop` says "not found nearby":** check the robot is switched on
@@ -266,6 +371,21 @@ the other way round.
 - **Follow sim: it drives the wrong way, but by hand it is right:** the tag's
   heading doesn't point at the dribbler. Set the tracker's heading offset, or
   check `--flip-x` / `--flip-y` on the sim.
+- **Robot test won't start:** the checklist on the page says what's missing.
+  "Several robot tags" means another tag is in view: take it off the field (the
+  corner tags 0–3 are fine).
+- **Robot test keeps saying "Move the robot":** it couldn't drive itself to the
+  start spot. Put it on the dashed outline, facing the same way. If it happens
+  every time, check the tag's heading offset: driving back steers by it.
+- **Every run says "tag lost":** the camera is losing the tag mid-move. Check
+  the light, the tag's size setting on the Tracking page, and that the whole
+  move is in the camera's view.
+- **The profile says it veers the same way in every direction:** usually the
+  tag's heading offset, not the robot. Fix the offset on the Tracking page and
+  test again.
+- **The tag's position estimate looks wrong:** the robot really might turn off
+  its centre (a weak wheel). Measure the tag with a ruler and enter that: the
+  profile then tells the two apart.
 
 ## For developers
 
@@ -283,7 +403,7 @@ the other way round.
 | `laptop/motion_profile.py` | Laptop | The motion tests, and what one run measured from the camera's samples (drift, speed, delay, coasting) |
 | `laptop/motion_runner.py` | Laptop | Runs the motion tests on one robot: drives it, records the camera's view, stops it on a lost tag, the field's edge or abort |
 | `laptop/motion_report.py` | Laptop | A session's motion profile: each ability graded good / fair / poor, what stood out, each test averaged |
-| `profiles/` | Laptop | Saved motion profiles from the web app's Robot test page, one folder per robot |
+| `profiles/` | Laptop | Saved motion profiles from the web app's Robot test page ([step 8](#8-test-how-well-it-moves)), one folder per robot |
 | `laptop/fake_robot.py` | Laptop | A pretend robot and camera with adjustable flaws, to test motion tests without hardware |
 | `tests/` | Laptop | Unit tests, no hardware needed |
 

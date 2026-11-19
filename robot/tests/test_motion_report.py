@@ -153,6 +153,21 @@ class TagOffsetTest(unittest.TestCase):
         self.assertLess(_wobble(r["records"][0]), 0.006)
 
 
+class PartialRunsTest(unittest.TestCase):
+    def test_runs_that_stopped_partway_are_not_graded(self):
+        r = session(tests=["forward", "backward"], repeats=2)
+        records = json.loads(json.dumps(r["records"]))
+        # The first forward run "hit the edge" with a wild drift: not counted.
+        records[0]["ended"] = "edge"
+        records[0]["result"]["drift_per_m"] = 0.5
+        records[0]["result"]["drift_m"] = 0.2
+        again = build_report(records, robot="FAKE-01")
+        self.assertEqual(ability(again, "straight")["grade"], "good")
+        self.assertTrue(found(again, "1 run stopped at the field's edge"), again["findings"])
+        forward = next(t for t in again["by_test"] if t["test"] == "forward")
+        self.assertEqual((forward["runs"], forward["reached"], forward["moved"]), (2, 1, 1))
+
+
 class HardwareTest(unittest.TestCase):
     def test_measures_the_robot_at_full_command(self):
         r = session(tests=["forward", "backward", "strafe_left", "strafe_right", "spin_ccw", "spin_cw"],

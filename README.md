@@ -15,7 +15,7 @@ something from [Play with it](#play-with-it).
 
 | Folder | What it is | Start here |
 | --- | --- | --- |
-| [`app/`](app/) | The web app, `uv run robocup-web`: simulator, robots, camera setup in a browser | [`app/README.md`](app/README.md) |
+| [`app/`](app/) | The web app, `uv run robocup-web`: simulator, robots, robot tests, camera setup in a browser | [`app/README.md`](app/README.md) |
 | [`sim/`](sim/) | The simulator: physics, robot controllers, Pygame window, camera mirror | [`sim/README.md`](sim/README.md) |
 | [`strategy/`](strategy/) | The team AI, and the learned (RL) kick | [`strategy/README.md`](strategy/README.md) |
 | [`vision/`](vision/) | Camera tracking of AprilTags and the ball, with PhotonVision | [`vision/README.md`](vision/README.md) |
@@ -188,6 +188,15 @@ while the camera sees it.
 Before the first run: the tag's heading must point at the robot's dribbler
 (the tracker's heading offset), and `MAX_EFFORT` in the robot's `config.py`
 caps its speed. Start slow. More in [robot/README.md](robot/README.md), step 7.
+
+### 7. Test how well a robot moves
+
+Web app **Robot test** page, with tracking running (4) and one robot on the
+field: enter its size, pick the tests, **Run**. It drives the robot through
+straight lines, strafes, diagonals and spins, watches each with the camera, and
+grades it: "veers right when strafing", "turns clockwise 20% slower". The
+profile is saved per robot, to compare before and after a change. Step by step:
+[robot/README.md](robot/README.md#8-test-how-well-it-moves).
 
 ## How it fits together
 

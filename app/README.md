@@ -149,6 +149,27 @@ unplugged gamepad, a sim that went away. The **Tracking** page has a *Drive robo
 card with the same by-hand driving, so you can drive while watching the camera; while
 the keyboard drives a robot, its keys go to the robot rather than to that page's shortcuts.
 
+**Robot test** measures how well one real robot moves, watched by the camera
+([robot/README.md](../robot/README.md#8-test-how-well-it-moves) has the full how-to):
+
+- **Set up:** the robot (added on the Robots page, driven by hand), a checklist of what
+  still stops it starting (connected, by hand, tracking running, exactly one robot tag in
+  view), the tests (forward, backward, strafe left / right, two diagonals, a spin each way),
+  the speeds and repeats, and the robot's **size and tag position** in cm, with a diagram of
+  what to measure (kept for each robot). **Fake robot (practice)** runs it all on a pretend
+  robot and camera.
+- **While it runs:** the field from above with the robot's outline, the start spot, where
+  each move should go (dashed) and where it went. Between moves it drives itself to the
+  next start spot, or asks to be moved. It stops the robot if the camera loses its tag, a
+  corner nears the edge, or on **Abort**. Nothing else can drive the robot meanwhile (the
+  Robots page says so).
+- **The profile:** driving straight, strafing, diagonals, turning, responsiveness and
+  consistency graded good / fair / poor; what stood out, in words; each test averaged
+  (click one to see only its paths); the robot beside the simulator's robot with suggested
+  `sim/config.py` values; where the spins put the tag. Saved as
+  `robot/profiles/<robot>/<date-time>.json` (not for the fake robot); *Show* and *Compare
+  with* open earlier ones.
+
 **Tracking** runs `track-combined` (headless, publishing on ZMQ port 5556 for the sim):
 tag size, ball profile, *record this session* (to `vision/runs/`, for replaying), and under
 *more options* every other flag it has, grouped: tags (tag height, heading offset, how long

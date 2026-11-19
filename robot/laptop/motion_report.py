@@ -82,7 +82,7 @@ def build_report(records, robot, tag_id=None, fake=False, started=None,
     hardware() of the simulated robot, to compare against; `sim_config`: the
     sim/config.py values its suggestions start from; `body`: the robot's shape
     the runs were measured with (Body.to_dict())."""
-    runs = [r for r in records if r.get("result") and r["result"].get("moved")]
+    runs = [r for r in records if _complete(r)]
     report = {
         "version": VERSION,
         "robot": robot,
@@ -419,8 +419,7 @@ def hardware(records):
     run. A 0.5 m run can end before the robot levels off, so top_speed is the
     speed it reached, not necessarily its limit: compare it with another
     robot measured the same way."""
-    runs = [r for r in records if r.get("result") and r["result"].get("moved")
-            and r["speed"] == FULL]
+    runs = [r for r in records if _complete(r) and r["speed"] == FULL]
     straight = _of(runs, STRAIGHT)
     spins = _of(runs, SPINS)
     top = _mean_rate(straight)
@@ -485,7 +484,7 @@ def compare_with_sim(real, sim, config):
 def _by_test(records):
     out = []
     for (test, speed), group in _groups(records).items():
-        moved = [r for r in group if r.get("result") and r["result"].get("moved")]
+        moved = [r for r in group if _complete(r)]
 
         def avg(field, rs=moved):
             return _mean([r["result"][field] for r in rs if r["result"][field] is not None])
@@ -516,6 +515,14 @@ def _by_test(records):
 
 
 # -- helpers ----------------------------------------------------------------------
+
+
+def _complete(run):
+    """A run that went the whole move: the ones graded and averaged. One the
+    camera lost, that hit the edge or was aborted stopped partway, and would
+    pull the numbers off; a timeout never got there."""
+    return bool(run.get("result") and run["result"].get("moved")
+                and run.get("ended", "reached") == "reached")
 
 
 def _of(runs, names):
