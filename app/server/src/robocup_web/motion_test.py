@@ -27,6 +27,9 @@ from .robots import ROBOT_DIR, RealRobots, _laptop
 
 #: Repeats of the whole set the page may ask for.
 MAX_REPEATS = 5
+#: Robot sizes and tag positions the page may give, centimetres.
+SIZE_CM = (5.0, 80.0)
+TAG_CM = 40.0
 #: Saved profiles: one folder per robot, one file per session.
 PROFILES = ROBOT_DIR / "profiles"
 #: What a saved profile's robot folder and file names look like; anything
@@ -84,8 +87,10 @@ class MotionTests:
 
     def start(self, opts: dict[str, Any]) -> None:
         """{"robot", "tests": [names], "speeds": [0..1], "repeats", "return_home",
-        "fake"}. Checks everything it can before returning, so a bad start is
-        an error here, not a failed session later."""
+        "fake", "body": {"length_cm", "width_cm", "tag_forward_cm", "tag_left_cm"}}
+        (the tag's position null if not measured). Checks everything it can
+        before returning, so a bad start is an error here, not a failed session
+        later."""
         with self._lock:
             if self.running:
                 raise CommandError("a motion test is already running; abort it first")
@@ -99,6 +104,7 @@ class MotionTests:
             raise CommandError(f"repeats must be 1-{MAX_REPEATS}")
         return_home = bool(opts.get("return_home", True))
         fake = bool(opts.get("fake"))
+        body = self._body(opts.get("body"))
 
         if fake:
             world = self._fake_module.FakeWorld(
@@ -119,7 +125,7 @@ class MotionTests:
 
         runner = self._runner_module.MotionRunner(
             fleet, feed, name, tests, speeds, repeats,
-            clock=clock, sleep=sleep, return_home=return_home)
+            clock=clock, sleep=sleep, return_home=return_home, body=body)
         try:
             runner.check()
         except self._runner_module.RunnerError as e:
@@ -130,7 +136,8 @@ class MotionTests:
         with self._lock:
             self._runner, self._error, self._fake = runner, None, fake
             self._started = time.time()
-            self._opts = {"speeds": speeds, "tests": [t.name for t in tests], "repeats": repeats}
+            self._opts = {"speeds": speeds, "tests": [t.name for t in tests], "repeats": repeats,
+                          "body": body.to_dict()}
             self._report = self._report_file = None
             self._thread = threading.Thread(target=self._run, args=(runner, name, fake),
                                             name="motion-test", daemon=True)
@@ -269,6 +276,34 @@ class MotionTests:
         # The catalog's order, whatever order they were ticked in: opposite
         # moves stay next to each other.
         return [t for t in self._profile.TESTS if t.name in names]
+
+    def _body(self, body: Any) -> Any:
+        """The robot's shape from the page's centimetres, as a Body."""
+        Body = self._runner_module.Body
+        if body is None:
+            return Body()
+        if not isinstance(body, dict):
+            raise CommandError("body must be {length_cm, width_cm, tag_forward_cm, tag_left_cm}")
+
+        def cm(key: str, lo: float, hi: float, optional: bool = False) -> float | None:
+            v = body.get(key)
+            if v is None or v == "":
+                if optional:
+                    return None
+                raise CommandError(f"give the robot's {key.replace('_cm', '').replace('_', ' ')}")
+            try:
+                v = float(v)
+            except (TypeError, ValueError):
+                raise CommandError(f"{key} must be a number of centimetres") from None
+            if not lo <= v <= hi:
+                raise CommandError(f"{key} must be {lo:g}-{hi:g} cm")
+            return v / 100.0
+
+        fwd = cm("tag_forward_cm", -TAG_CM, TAG_CM, optional=True)
+        left = cm("tag_left_cm", -TAG_CM, TAG_CM, optional=True)
+        if (fwd is None) != (left is None):
+            raise CommandError("give both of the tag's position numbers, or neither")
+        return Body(cm("length_cm", *SIZE_CM), cm("width_cm", *SIZE_CM), fwd, left)
 
     def _speeds(self, speeds: Any) -> list[float]:
         if speeds is None:

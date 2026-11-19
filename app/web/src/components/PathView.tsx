@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { MotionTestInfo, Pose } from "../lib/types";
+import type { Body, MotionTestInfo, Pose } from "../lib/types";
 
 /** The field from above, for the Robot test page: where each run went against
  *  where it should have. Field metres, y up; the canvas keeps the field's shape. */
@@ -18,14 +18,21 @@ const PATH = "#3d8bff";
 const PATH_OLD = "rgba(61, 139, 255, 0.6)";
 const HOME = "#f4f4f4";
 const ROBOT = "#e0261a";
-/** The runner keeps the robot's centre this far inside the edges (KEEP_OUT_M). */
-const KEEP_OUT_M = 0.15;
+const BODY = "rgba(224, 38, 26, 0.18)";
+/** The runner's margin when it hasn't said (EDGE_MARGIN_M). */
+const MARGIN_M = 0.05;
 
 export function PathView({
-  field, home, start, test, lines,
+  field, home, start, test, lines, body = null, pose = null, margin = MARGIN_M,
 }: {
   field: { width: number; height: number; x0?: number; y0?: number } | null;
   home: Pose | null;
+  /** the robot's footprint, drawn at the start spot and where it is now */
+  body?: Body | null;
+  /** where the robot is now (its centre) */
+  pose?: Pose | null;
+  /** how far inside the edges its corners are kept */
+  margin?: number;
   /** the run in progress: where it set off from, and what it was told to do */
   start: Pose | null;
   test: MotionTestInfo | null;
@@ -59,17 +66,45 @@ export function PathView({
     const sx = (x: number) => ox + (x - x0) * s;
     const sy = (y: number) => oy + (field.height - (y - y0)) * s;
 
-    // the field, and the band the robot is kept out of
+    // the field, and the band the robot's corners are kept out of
     g.fillStyle = KEEP_OUT;
     g.fillRect(ox, oy, field.width * s, field.height * s);
     g.fillStyle = FIELD;
-    const k = KEEP_OUT_M * s;
+    const k = margin * s;
     g.fillRect(ox + k, oy + k, field.width * s - 2 * k, field.height * s - 2 * k);
     g.strokeStyle = EDGE;
     g.lineWidth = 2;
     g.strokeRect(ox, oy, field.width * s, field.height * s);
 
-    if (home) marker(g, sx(home[0]), sy(home[1]), home[2], HOME, 10);
+    // the robot's outline: dashed where the run starts, filled where it is
+    const outline = (p: Pose, fill: boolean) => {
+      if (!body) return;
+      const a = (p[2] * Math.PI) / 180, c = Math.cos(a), n = Math.sin(a);
+      const hl = body.length_m / 2, hw = body.width_m / 2;
+      g.beginPath();
+      ([[hl, hw], [-hl, hw], [-hl, -hw], [hl, -hw]] as const).forEach(([f, l], i) => {
+        const x = sx(p[0] + c * f - n * l), y = sy(p[1] + n * f + c * l);
+        if (i) g.lineTo(x, y);
+        else g.moveTo(x, y);
+      });
+      g.closePath();
+      if (fill) {
+        g.fillStyle = BODY;
+        g.fill();
+        g.strokeStyle = ROBOT;
+      } else {
+        g.strokeStyle = HOME;
+        g.setLineDash([4, 4]);
+      }
+      g.lineWidth = 1.5;
+      g.stroke();
+      g.setLineDash([]);
+    };
+    if (home) {
+      outline(home, false);
+      marker(g, sx(home[0]), sy(home[1]), home[2], HOME, 10);
+    }
+    if (pose) outline(pose, true);
 
     // what the run in progress should do
     if (start && test) {

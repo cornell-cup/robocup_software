@@ -63,6 +63,7 @@ export function useMotionTest(): MotionState {
 export const motionTest = {
   start: (opts: {
     robot?: string; tests: string[]; speeds: number[]; repeats: number; return_home: boolean; fake: boolean;
+    body: { length_cm: number; width_cm: number; tag_forward_cm: number | null; tag_left_cm: number | null };
   }) => api.post<MotionStatus>("/motion-test/start", opts),
   abort: () => api.post<MotionStatus>("/motion-test/abort"),
   /** the newest session's profile */

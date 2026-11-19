@@ -3,7 +3,7 @@ import unittest
 
 from laptop.fake_robot import Camera, FakeWorld, Flaws
 from laptop.motion_profile import TESTS_BY_NAME, Sample
-from laptop.motion_runner import MotionRunner, RunnerError
+from laptop.motion_runner import Body, MotionRunner, RunnerError
 
 FORWARD, BACKWARD = TESTS_BY_NAME["forward"], TESTS_BY_NAME["backward"]
 STRAFE_LEFT, SPIN = TESTS_BY_NAME["strafe_left"], TESTS_BY_NAME["spin_ccw"]
@@ -196,6 +196,44 @@ class RepositionTest(unittest.TestCase):
         records = runner.run()
         self.assertEqual(records[0].ended, "aborted")
         self.assertIsNone(records[0].result)
+
+
+class BodyTest(unittest.TestCase):
+    def test_measures_from_the_robot_centre_not_the_tag(self):
+        world = started(FakeWorld(camera=Camera(tag_offset=(0.05, 0.02))))
+        record = runner_for(world, [FORWARD], body=Body(tag_forward=0.05, tag_left=0.02)).run()[0]
+        self.assertAlmostEqual(record.start.x, 0.96, delta=0.002)
+        self.assertAlmostEqual(record.start.y, 0.66, delta=0.002)
+
+    def test_a_bigger_robot_needs_more_room(self):
+        # A strafe on the 1.32 m deep table needs the 0.6 m move, the body and
+        # a margin each side: 1.2 m for a 50 cm robot, 1.4 m for a 70 cm one.
+        small = runner_for(started(FakeWorld()), [STRAFE_LEFT], body=Body(0.5, 0.5)).run()[0]
+        big = runner_for(started(FakeWorld()), [STRAFE_LEFT], body=Body(0.7, 0.7)).run()[0]
+        self.assertEqual((small.ended, big.ended), ("reached", "no_room"))
+
+    def test_edge_stop_keeps_the_corners_inside(self):
+        def stop_y(body):
+            world = started(FakeWorld(Flaws(drift_deg=-50.0), y=0.5))
+            record = runner_for(world, [FORWARD], body=body).run()[0]
+            self.assertEqual(record.ended, "edge")
+            return record.samples[-1].y
+        # A wider robot's corners reach the edge sooner.
+        self.assertGreater(stop_y(Body(0.2, 0.4)), stop_y(Body(0.2, 0.2)) + 0.05)
+
+    def test_corners(self):
+        body = Body(0.4, 0.2)
+        corners = body.corners(Sample(0, 1.0, 1.0, math.radians(90)))
+        xs, ys = sorted(c[0] for c in corners), sorted(c[1] for c in corners)
+        self.assertAlmostEqual(xs[0], 0.9)    # width across x when facing +y
+        self.assertAlmostEqual(ys[-1], 1.2)   # length along y
+        self.assertAlmostEqual(body.reach, math.hypot(0.4, 0.2) / 2)
+
+    def test_status_reports_the_body(self):
+        runner = runner_for(started(FakeWorld()), [FORWARD], body=Body(0.25, 0.18, 0.0, 0.0))
+        runner.run()
+        body = runner.status()["body"]
+        self.assertEqual((body["length_m"], body["width_m"], body["tag_known"]), (0.25, 0.18, True))
 
 
 class ReturnHomeTest(unittest.TestCase):

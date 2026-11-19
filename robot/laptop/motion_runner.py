@@ -14,6 +14,10 @@ One robot on the field at a time: the runner takes whichever tag the camera
 sees (other than `ignore_tags`, the corner tags), and refuses to start with
 none or several.
 
+The robot's shape (`body`, a Body): every sample is moved from the tag to the
+robot's centre before anything is measured, and the room and edge checks keep
+the body's corners -- not just its centre -- EDGE_MARGIN_M inside the field.
+
 For each run (one test, one speed, one repeat):
   1. wait until the robot has room for the move, holding still -- if it hasn't,
      drive it to the test's start spot, placed so the move runs through the
@@ -42,9 +46,10 @@ START_S = 0.3
 SETTLE_S = 0.8
 #: Stop at once if the camera hasn't seen the tag for this long.
 LOST_STOP_S = 0.3
-#: Keep the robot's centre this far inside the field's edges: about its
-#: radius plus a margin.
-KEEP_OUT_M = 0.15
+#: Keep the robot's body (its corners) this far inside the field's edges.
+EDGE_MARGIN_M = 0.05
+#: A robot whose size wasn't given: about an XRP's footprint.
+DEFAULT_SIZE_M = 0.2
 #: Room left beyond a straight move's distance, for it to coast into.
 COAST_ROOM_M = 0.1
 #: Still: moved less than this over STILL_S.
@@ -69,6 +74,45 @@ HOME_TOLERANCE_RAD = math.radians(4.0)
 #: getting any closer.
 HOME_TIMEOUT_S = 10.0
 HOME_STUCK_S = 2.0
+
+
+class Body(object):
+    """A robot's footprint and where its tag sits on it. Metres: `length`
+    front to back, `width` side to side, centred on the robot's centre (where
+    it turns about); `tag_forward`, `tag_left`: the tag's centre from the
+    robot's centre, in the robot's own frame -- None if nobody measured it
+    (taken as centred, but the report then can't tell an off-centre tag from
+    a robot that turns about the wrong point)."""
+
+    def __init__(self, length=DEFAULT_SIZE_M, width=DEFAULT_SIZE_M, tag_forward=None, tag_left=None):
+        self.length = length
+        self.width = width
+        self.tag_known = tag_forward is not None and tag_left is not None
+        self.tag_forward = tag_forward or 0.0
+        self.tag_left = tag_left or 0.0
+
+    @property
+    def reach(self):
+        """Centre to the furthest corner: what it sweeps when it spins."""
+        return math.hypot(self.length, self.width) / 2.0
+
+    def centre(self, tag):
+        """The robot's centre, from a Sample of its tag."""
+        c, s = math.cos(tag.theta), math.sin(tag.theta)
+        return Sample(tag.t, tag.x - (c * self.tag_forward - s * self.tag_left),
+                      tag.y - (s * self.tag_forward + c * self.tag_left), tag.theta)
+
+    def corners(self, pose):
+        """The footprint's 4 corners in field coordinates, at `pose` (a Sample
+        of the robot's centre)."""
+        c, s = math.cos(pose.theta), math.sin(pose.theta)
+        hl, hw = self.length / 2.0, self.width / 2.0
+        return [(pose.x + c * f - s * l, pose.y + s * f + c * l)
+                for f, l in ((hl, hw), (-hl, hw), (-hl, -hw), (hl, -hw))]
+
+    def to_dict(self):
+        return {"length_m": self.length, "width_m": self.width, "tag_known": self.tag_known,
+                "tag_forward_m": self.tag_forward, "tag_left_m": self.tag_left}
 
 
 class RunRecord(object):
@@ -115,7 +159,7 @@ class RunnerError(Exception):
 class MotionRunner(object):
     def __init__(self, fleet, feed, name, tests, speeds, repeats=1,
                  clock=time.time, sleep=time.sleep, ignore_tags=IGNORE_TAGS,
-                 keep_out_m=KEEP_OUT_M, return_home=True):
+                 body=None, margin_m=EDGE_MARGIN_M, return_home=True):
         self.fleet = fleet
         self.feed = feed
         self.name = name
@@ -126,7 +170,8 @@ class MotionRunner(object):
         self.clock = clock
         self.sleep = sleep
         self.ignore_tags = set(ignore_tags)
-        self.keep_out_m = keep_out_m
+        self.body = body or Body()
+        self.margin_m = margin_m
         self.return_home = return_home
         # Where the first run started: its heading is the one every run starts
         # at, and with no field to place start spots on, it's where the robot
@@ -142,6 +187,7 @@ class MotionRunner(object):
         self._current = None   # the RunRecord in progress
         self._last_n = -1
         self._camera_age = None
+        self._pose = None      # the newest camera sample of the robot's centre
 
     # -- from other threads -----------------------------------------------------
 
@@ -159,7 +205,11 @@ class MotionRunner(object):
                 "done": len(self.records),
                 "total": len(self.plan),
                 "field": self._field(),
+                "body": self.body.to_dict(),
+                "margin_m": self.margin_m,
                 "home": _pose(self.spot),
+                # where the robot is (its centre), whatever it's doing
+                "pose": _pose(self._pose),
                 "current": None if current is None else {
                     "test": current.test.name, "label": current.test.label,
                     "speed": current.speed, "repeat": current.repeat,
@@ -270,7 +320,7 @@ class MotionRunner(object):
                 record.ended = "tag_lost"
             elif new and test.reached(start, new[-1], counter.total):
                 record.ended = "reached"
-            elif new and not self._inside(new[-1], 0.0):
+            elif new and not self._inside(new[-1], 0.0, spinning=test.spin):
                 record.ended = "edge"
             elif now - record.t_start >= test.timeout_s:
                 record.ended = "timeout"
@@ -327,7 +377,7 @@ class MotionRunner(object):
                 # Heading the wrong way (a tag heading that's off steers it
                 # astray): stop before the edge. Half the margin, so a run that
                 # stopped at the margin can still drive back from there.
-                if not self._inside(sample, -self.keep_out_m / 2.0):
+                if not self._inside(sample, -self.margin_m / 2.0, spinning=True):
                     return False
                 dx, dy = home.x - sample.x, home.y - sample.y
                 dist = math.hypot(dx, dy)
@@ -371,7 +421,8 @@ class MotionRunner(object):
         if tag is None:
             return None, False
         t = doc.get("t_tags") or doc.get("t_capture")
-        return Sample(t, tag["x"], tag["y"], math.radians(tag["theta_deg"])), new
+        self._pose = self.body.centre(Sample(t, tag["x"], tag["y"], math.radians(tag["theta_deg"])))
+        return self._pose, new
 
     def _take(self, record):
         """Add the camera's new sample, if any, to the record; returns [it] or []."""
@@ -389,15 +440,21 @@ class MotionRunner(object):
         doc = self.feed.snapshot().get("doc") or {}
         return doc.get("field")
 
-    def _inside(self, pose, extra):
-        """Whether `pose` is at least keep_out_m + extra inside the field."""
+    def _inside(self, pose, extra, spinning=False):
+        """Whether the robot's body at `pose` is at least margin_m + extra
+        inside the field: its corners, or for a robot spinning (or about to)
+        the whole circle they sweep."""
         field = self._field()
         if field is None:
             return True  # no field in the message: nothing to check against
-        m = self.keep_out_m + extra
+        m = self.margin_m + extra
         x0, y0 = field.get("x0", 0.0), field.get("y0", 0.0)
-        return (x0 + m <= pose.x <= x0 + field["width"] - m
-                and y0 + m <= pose.y <= y0 + field["height"] - m)
+        x1, y1 = x0 + field["width"], y0 + field["height"]
+        if spinning:
+            r = self.body.reach + m
+            return x0 + r <= pose.x <= x1 - r and y0 + r <= pose.y <= y1 - r
+        return all(x0 + m <= x <= x1 - m and y0 + m <= y <= y1 - m
+                   for x, y in self.body.corners(pose))
 
     def _ready(self, test):
         """The robot is seen, standing still, with room for the test."""
@@ -420,7 +477,7 @@ class MotionRunner(object):
 
     def _has_room(self, test, start):
         if test.spin:
-            return self._inside(start, 0.0)
+            return self._inside(start, 0.0, spinning=True)
         a = start.theta + math.radians(test.direction_deg)
         reach = test.distance_m + COAST_ROOM_M
         end = Sample(start.t, start.x + reach * math.cos(a), start.y + reach * math.sin(a),

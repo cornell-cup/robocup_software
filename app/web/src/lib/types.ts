@@ -481,8 +481,14 @@ export interface RunnerStatus {
   done: number;
   total: number;
   field: { width: number; height: number; x0?: number; y0?: number } | null;
+  /** the robot's shape the runner measures with */
+  body: Body;
+  /** how far inside the field the body's corners are kept, metres */
+  margin_m: number;
   /** the start spot of the run in progress: where it drives back to */
   home: Pose | null;
+  /** where the robot is now (its centre), whatever it's doing */
+  pose: Pose | null;
   current: {
     test: string;
     label: string;
@@ -491,6 +497,30 @@ export interface RunnerStatus {
     start: Pose | null;
     path: [number, number][];
   } | null;
+}
+
+/** A robot's footprint and where its tag sits (robot/laptop/motion_runner.py Body). */
+export interface Body {
+  length_m: number;
+  width_m: number;
+  /** whether the tag's position was measured, not just taken as centred */
+  tag_known: boolean;
+  tag_forward_m: number;
+  tag_left_m: number;
+}
+
+/** Where the spins put the tag (motion_report.tag_offset()). */
+export interface TagOffset {
+  /** the whole offset: what to enter as the tag's position */
+  forward_m: number;
+  left_m: number;
+  /** beyond the position the runs used */
+  off_forward_m: number;
+  off_left_m: number;
+  off_by_m: number;
+  /** that position was measured: what's left is the robot turning off-centre */
+  known: boolean;
+  runs: number;
 }
 
 export interface MotionStatus {
@@ -564,6 +594,8 @@ export interface MotionReport {
   speeds: number[];
   tests: string[];
   repeats: number;
+  body: Body | null;
+  tag_offset: TagOffset | null;
   abilities: Ability[];
   findings: string[];
   by_test: ByTest[];

@@ -12,6 +12,12 @@ speed.
 The thresholds are judgement calls for a small omni-wheel robot on a table,
 not standards: change them here if they grade too hard or too soft.
 
+Spins also measure where the tag sits on the robot (spin_fit()): the tag
+circles the robot's turning centre, so a tag that isn't on that centre traces a
+circle even when the robot spins perfectly in place. The fit separates the two:
+the offset is reported (to enter as the robot's tag position), and only what's
+left -- real wobble -- is graded.
+
 hardware() pulls out what the robot does at full command -- top speed,
 acceleration, how quickly it slows, turn rate -- the numbers the simulator's
 drive model (sim/config.py) is built from. Given the same numbers for the
@@ -49,6 +55,8 @@ SPREAD_M = (0.010, 0.025)
 NONLINEAR = 0.25
 #: Coasting further than this after a stop at the top speed is worth saying.
 COAST_M = 0.05
+#: A tag this far from where the robot's size puts it is worth saying.
+TAG_OFFSET_M = 0.01
 
 GRADES = ("good", "fair", "poor")
 #: hardware() measures at this command: full.
@@ -69,10 +77,11 @@ DOING = {
 
 def build_report(records, robot, tag_id=None, fake=False, started=None,
                  finished=None, state=None, speeds=(), tests=(), repeats=1,
-                 sim=None, sim_config=None):
+                 sim=None, sim_config=None, body=None):
     """The profile for one session. Everything in it is plain JSON. `sim`:
     hardware() of the simulated robot, to compare against; `sim_config`: the
-    sim/config.py values its suggestions start from."""
+    sim/config.py values its suggestions start from; `body`: the robot's shape
+    the runs were measured with (Body.to_dict())."""
     runs = [r for r in records if r.get("result") and r["result"].get("moved")]
     report = {
         "version": VERSION,
@@ -85,6 +94,8 @@ def build_report(records, robot, tag_id=None, fake=False, started=None,
         "speeds": list(speeds),
         "tests": list(tests),
         "repeats": repeats,
+        "body": body,
+        "tag_offset": tag_offset(records, body),
         "abilities": [],
         "findings": [],
         "by_test": _by_test(records),
@@ -98,11 +109,24 @@ def build_report(records, robot, tag_id=None, fake=False, started=None,
         _straight("straight", "Driving straight", _of(runs, STRAIGHT)),
         _strafing(runs),
         _straight("diagonal", "Diagonals", _of(runs, DIAGONALS)),
-        _turning(runs),
+        _turning(runs, report["tag_offset"]),
         _responsiveness(runs),
         _consistency(runs),
     ]
     report["findings"] = _findings(records, runs)
+    off = report["tag_offset"]
+    if off and off["off_by_m"] >= TAG_OFFSET_M:
+        if off["known"]:
+            # The tag is where it was measured to be: the robot itself turns
+            # about a point that far from its centre.
+            report["findings"].insert(0, (
+                "Turns about a point {} its centre, not on the spot: one side's wheels may be "
+                "weaker").format(_where(-off["off_forward_m"], -off["off_left_m"])))
+        else:
+            report["findings"].insert(0, (
+                "Spinning, the tag circles a point {} it. Either the tag sits that far from the "
+                "robot's centre, or the robot turns about a point off its centre: measure where the "
+                "tag is and enter it to tell which").format(_where(-off["forward_m"], -off["left_m"])))
     return report
 
 
@@ -139,12 +163,15 @@ def _strafing(runs):
     return ability
 
 
-def _turning(runs):
+def _turning(runs, off=None):
     ccw, cw = _of(runs, ("spin_ccw",)), _of(runs, ("spin_cw",))
     if not ccw and not cw:
         return _none("turning", "Turning", "Not tested")
-    wander = _mean([r["result"]["max_deviation_m"] for r in ccw + cw
-                    if r["result"]["max_deviation_m"] is not None])
+    # With the tag's position measured, turning about a point off the centre
+    # counts against it too; without, it can't be told from the tag's offset.
+    pivot = off["off_by_m"] if off and off["known"] else 0.0
+    wander = _mean([_wobble(r) for r in ccw + cw])
+    wander = None if wander is None else wander + pivot
     asym = _asymmetry(_mean_rate(ccw), _mean_rate(cw))
     grades = [_grade(wander, WANDER_M)]
     if asym is not None:
@@ -154,7 +181,9 @@ def _turning(runs):
         parts.append("{}°/s ccw".format(_n(_mean_rate(ccw), 1)))
     if cw:
         parts.append("{}°/s cw".format(_n(_mean_rate(cw), 1)))
-    parts.append("{} mm wander".format(_n(wander, 1000)))
+    parts.append("{} mm wobble".format(_n(wander, 1000)))
+    if off and not off["known"]:
+        parts.append("tag position not measured")
     return _ability("turning", "Turning", _worst(grades), ", ".join(parts),
                     "At {}".format(_speeds_text(ccw + cw)))
 
@@ -232,8 +261,8 @@ def _findings(records, runs):
                 what, _n(asym, 100), "slower" if rb < ra else "faster",
                 {"forward": "forward", "strafe_left": "left", "spin_ccw": "counter-clockwise"}[a]))
 
-    # Spins that wander.
-    wander = max([r["result"]["max_deviation_m"] or 0.0 for r in _of(runs, SPINS)], default=0.0)
+    # Spins that wander, once the tag's offset is taken out.
+    wander = max([_wobble(r) or 0.0 for r in _of(runs, SPINS)], default=0.0)
     if wander >= WANDER_M[0]:
         out.append("Wobbles when spinning: its centre moves up to {} mm".format(_n(wander, 1000)))
 
@@ -281,6 +310,102 @@ def _findings(records, runs):
     for end, n in sorted(ends.items()):
         out.append("{} run{} {}".format(n, "" if n == 1 else "s", words.get(end, end)))
     return out
+
+
+# -- where the tag sits ------------------------------------------------------------
+
+
+def spin_fit(path):
+    """Fit one spin's path ([t, x, y, heading deg] points) as a fixed turning
+    centre with the tag at a fixed offset from it: x = cx + cos(h) f - sin(h) l,
+    y = cy + sin(h) f + cos(h) l. Returns (cx, cy, f, l, wobble): the offset
+    in the robot's frame, and the furthest any point is from the fit -- how
+    much the centre really moved. None if the spin is too short to tell."""
+    if len(path) < 6:
+        return None
+    hs = [math.radians(p[3]) for p in path]
+    if max(hs) - min(hs) < math.radians(60) and _turned(hs) < math.radians(60):
+        return None
+    rows, rhs = [], []
+    for (_, x, y, _), h in zip(path, hs):
+        c, s = math.cos(h), math.sin(h)
+        rows += [[1.0, 0.0, c, -s], [0.0, 1.0, s, c]]
+        rhs += [x, y]
+    sol = _least_squares(rows, rhs)
+    if sol is None:
+        return None
+    cx, cy, f, l = sol
+    wobble = max(math.hypot(x - (cx + math.cos(h) * f - math.sin(h) * l),
+                            y - (cy + math.sin(h) * f + math.cos(h) * l))
+                 for (_, x, y, _), h in zip(path, hs))
+    return cx, cy, f, l, wobble
+
+
+def tag_offset(records, body=None):
+    """Where the spins put the tag: the offset the runs still show (paths are
+    already moved by the body's tag position), added to it, so `forward_m`,
+    `left_m` is the whole offset to enter. None without a spin to measure."""
+    fits = [spin_fit(r["path"]) for r in records if r["test"] in SPINS and r.get("path")]
+    fits = [f for f in fits if f is not None]
+    if not fits:
+        return None
+    df = statistics.fmean(f[2] for f in fits)
+    dl = statistics.fmean(f[3] for f in fits)
+    body = body or {}
+    return {
+        "forward_m": body.get("tag_forward_m", 0.0) + df,
+        "left_m": body.get("tag_left_m", 0.0) + dl,
+        # what the spins show beyond the tag position the runs were measured with
+        "off_forward_m": df,
+        "off_left_m": dl,
+        "off_by_m": math.hypot(df, dl),
+        # whether that tag position was measured: if so, what's left is the robot
+        "known": bool(body.get("tag_known")),
+        "runs": len(fits),
+    }
+
+
+def _where(forward, left):
+    """'12 mm forward and 4 mm right from', for a sentence ending in what
+    it's measured from."""
+    parts = []
+    if abs(forward) >= 0.001:
+        parts.append("{} mm {}".format(_n(abs(forward), 1000), "forward" if forward > 0 else "back"))
+    if abs(left) >= 0.001:
+        parts.append("{} mm {}".format(_n(abs(left), 1000), "left" if left > 0 else "right"))
+    return " and ".join(parts) + " from" if parts else "at"
+
+
+def _wobble(run):
+    """How far a spin's centre really moved: its fit's leftover, or the raw
+    furthest-from-start if it can't be fitted."""
+    fit = spin_fit(run.get("path") or [])
+    return fit[4] if fit else run["result"]["max_deviation_m"]
+
+
+def _turned(hs):
+    total = 0.0
+    for a, b in zip(hs, hs[1:]):
+        total += abs((b - a + math.pi) % (2 * math.pi) - math.pi)
+    return total
+
+
+def _least_squares(rows, rhs):
+    """Solve rows . x = rhs in the least-squares sense (normal equations,
+    Gaussian elimination). None if they don't pin x down."""
+    n = len(rows[0])
+    a = [[sum(r[i] * r[j] for r in rows) for j in range(n)] + [sum(r[i] * v for r, v in zip(rows, rhs))]
+         for i in range(n)]
+    for col in range(n):
+        piv = max(range(col, n), key=lambda i: abs(a[i][col]))
+        if abs(a[piv][col]) < 1e-12:
+            return None
+        a[col], a[piv] = a[piv], a[col]
+        for i in range(n):
+            if i != col:
+                k = a[i][col] / a[col][col]
+                a[i] = [x - k * y for x, y in zip(a[i], a[col])]
+    return [a[i][n] / a[i][i] for i in range(n)]
 
 
 # -- the robot against the simulator ---------------------------------------------

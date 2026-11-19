@@ -67,10 +67,13 @@ class Camera(object):
       turned with no heading offset set in the tracker.
     coast: while the tag is lost, keep reporting it where it was last seen,
       marked not visible -- as the real tracker does for a moment.
+    tag_offset: (forward, left) metres the tag sits from the robot's centre,
+      in the robot's frame: the camera reports the tag, not the centre.
     """
 
     def __init__(self, rate_hz=30.0, noise_m=0.0, noise_deg=0.0, lag_s=0.0,
-                 lost=(), other_tags=(), heading_offset_deg=0.0, coast=False):
+                 lost=(), other_tags=(), heading_offset_deg=0.0, coast=False,
+                 tag_offset=(0.0, 0.0)):
         self.rate_hz = rate_hz
         self.noise_m = noise_m
         self.noise_deg = noise_deg
@@ -79,6 +82,7 @@ class Camera(object):
         self.other_tags = list(other_tags)
         self.heading_offset_deg = heading_offset_deg
         self.coast = coast
+        self.tag_offset = tag_offset
 
 
 class FakeWorld(object):
@@ -183,10 +187,12 @@ class FakeWorld(object):
         if not any(a <= self._t < b for a, b in cam.lost):
             theta = (math.degrees(self.theta) + cam.heading_offset_deg
                      + self._rng.gauss(0, cam.noise_deg))
+            f, l = cam.tag_offset
+            c, s = math.cos(self.theta), math.sin(self.theta)
             self._last_seen = {
                 "id": self.tag_id,
-                "x": self.x + self._rng.gauss(0, cam.noise_m),
-                "y": self.y + self._rng.gauss(0, cam.noise_m),
+                "x": self.x + c * f - s * l + self._rng.gauss(0, cam.noise_m),
+                "y": self.y + s * f + c * l + self._rng.gauss(0, cam.noise_m),
                 "theta_deg": (theta + 180.0) % 360.0 - 180.0,
                 "visible": True,
             }

@@ -3,22 +3,25 @@ import unittest
 
 from laptop.fake_robot import Camera, FakeWorld, Flaws
 from laptop.motion_profile import TESTS, TESTS_BY_NAME
-from laptop.motion_report import build_report, compare_with_sim, hardware
-from laptop.motion_runner import MotionRunner
+from laptop.motion_report import _wobble, build_report, compare_with_sim, hardware
+from laptop.motion_runner import Body, MotionRunner
 
 
-def session(flaws=None, tests=None, speeds=(0.7,), repeats=1, noise=True):
+def session(flaws=None, tests=None, speeds=(0.7,), repeats=1, noise=True, body=None,
+            tag_offset=(0.0, 0.0)):
     """A whole session on the fake robot, as the plain runs the page gets."""
-    camera = Camera(noise_m=0.001, noise_deg=0.3) if noise else Camera()
+    camera = (Camera(noise_m=0.001, noise_deg=0.3, tag_offset=tag_offset) if noise
+              else Camera(tag_offset=tag_offset))
+    body = body or Body()
     world = FakeWorld(flaws or Flaws(), camera)
     world.sleep(0.1)
     names = tests or [t.name for t in TESTS]
     runner = MotionRunner(world.fleet, world.feed, world.name,
                           [TESTS_BY_NAME[n] for n in names], speeds, repeats,
-                          clock=world.clock, sleep=world.sleep)
+                          clock=world.clock, sleep=world.sleep, body=body)
     records = [r.to_dict() for r in runner.run()]
     return build_report(records, robot=world.name, tag_id=runner.tag_id, speeds=speeds,
-                        tests=names, repeats=repeats, state="done")
+                        tests=names, repeats=repeats, state="done", body=body.to_dict())
 
 
 def ability(report, key):
@@ -87,9 +90,10 @@ class FindsFlawsTest(unittest.TestCase):
         self.assertEqual(ability(r, "turning")["grade"], "poor")
         self.assertTrue(found(r, "Turns clockwise 30% slower than counter-clockwise"), r["findings"])
 
-    def test_wobbly_spin(self):
-        r = session(Flaws(wander_m=0.04), tests=["spin_ccw"])
-        self.assertTrue(found(r, "Wobbles when spinning"), r["findings"])
+    def test_off_centre_turning_with_the_tag_measured(self):
+        r = session(Flaws(wander_m=0.04), tests=["spin_ccw"], body=Body(tag_forward=0, tag_left=0))
+        self.assertTrue(found(r, "Turns about a point 40 mm back from its centre"), r["findings"])
+        self.assertEqual(ability(r, "turning")["grade"], "fair")
 
     def test_dead_band(self):
         r = session(Flaws(dead_band=0.5), tests=["forward"], speeds=(0.4, 0.7))
@@ -105,11 +109,48 @@ class FindsFlawsTest(unittest.TestCase):
         r = session(Flaws(accel=0.8), tests=["forward", "backward"], speeds=(1.0,))
         self.assertTrue(found(r, "Coasts"), r["findings"])
 
+    def test_nothing_turned_on_the_spot_is_nothing(self):
+        r = session(tests=["spin_ccw", "spin_cw"], body=Body(tag_forward=0, tag_left=0))
+        self.assertEqual(ability(r, "turning")["grade"], "good")
+        self.assertEqual(r["findings"], [])
+
     def test_untested_abilities_have_no_grade(self):
         r = session(tests=["forward"])
         self.assertIsNone(ability(r, "turning")["grade"])
         self.assertIsNone(ability(r, "consistency")["grade"])
         self.assertIn("2 or more repeats", ability(r, "consistency")["detail"])
+
+
+class TagOffsetTest(unittest.TestCase):
+    TESTS = ["spin_ccw", "spin_cw"]
+
+    def test_finds_where_the_tag_sits(self):
+        r = session(tests=self.TESTS, tag_offset=(0.03, -0.01))
+        off = r["tag_offset"]
+        self.assertAlmostEqual(off["forward_m"], 0.03, delta=0.002)
+        self.assertAlmostEqual(off["left_m"], -0.01, delta=0.002)
+        self.assertFalse(off["known"])
+
+    def test_an_unmeasured_tag_is_ambiguous_not_a_flaw(self):
+        r = session(tests=self.TESTS, tag_offset=(0.03, -0.01))
+        self.assertTrue(found(r, "Spinning, the tag circles a point 30 mm back and 10 mm left from it"),
+                        r["findings"])
+        self.assertTrue(found(r, "measure where the tag is"))
+        self.assertEqual(ability(r, "turning")["grade"], "good")
+        self.assertIn("tag position not measured", ability(r, "turning")["value"])
+
+    def test_entering_it_takes_it_out(self):
+        r = session(tests=self.TESTS, tag_offset=(0.03, -0.01),
+                    body=Body(tag_forward=0.03, tag_left=-0.01))
+        self.assertEqual(r["findings"], [])
+        self.assertLess(r["tag_offset"]["off_by_m"], 0.002)
+        # The runs are measured from the robot's centre: it stayed put.
+        spin = next(rec for rec in r["records"] if rec["test"] == "spin_ccw")
+        self.assertLess(spin["result"]["max_deviation_m"], 0.006)
+
+    def test_real_wobble_is_what_the_fit_leaves(self):
+        r = session(tests=self.TESTS, tag_offset=(0.03, 0.0), body=Body(tag_forward=0.03, tag_left=0))
+        self.assertLess(_wobble(r["records"][0]), 0.006)
 
 
 class HardwareTest(unittest.TestCase):

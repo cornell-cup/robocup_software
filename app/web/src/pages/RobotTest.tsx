@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { Card } from "../components/Card";
+import { BodyFields, type BodyForm, DEFAULT_BODY, checkBody } from "../components/BodyFields";
 import { type PathLine, PathView } from "../components/PathView";
 import { ProfileCard, fmt } from "../components/ProfileCard";
 import { Toggle } from "../components/Toggle";
@@ -34,6 +35,23 @@ export function RobotTest() {
     robot: "", tests: null as string[] | null, speeds: [0.4, 0.7, 1.0], repeats: 1, returnHome: true, fake: false,
   });
   const set = <K extends keyof typeof opts>(k: K, v: (typeof opts)[K]) => setOpts((o) => ({ ...o, [k]: v }));
+
+  // Each robot's size and tag position, in cm as typed; the tag's left blank
+  // when nobody has measured it.
+  const [bodies, setBodies] = useSavedState<Record<string, BodyForm>>("robotTest.bodies", {});
+  const bodyKey = opts.fake ? "(fake)" : opts.robot;
+  const form = bodies[bodyKey] ?? DEFAULT_BODY;
+  const setForm = (k: keyof BodyForm, v: string) =>
+    setBodies((b) => ({ ...b, [bodyKey]: { ...(b[bodyKey] ?? DEFAULT_BODY), [k]: v } }));
+  const useTag = (rep: MotionReport) => {
+    const off = rep.tag_offset;
+    if (!off) return;
+    const key = rep.fake ? "(fake)" : rep.robot;
+    setBodies((b) => ({ ...b, [key]: { ...(b[key] ?? DEFAULT_BODY),
+      tagForward: (off.forward_m * 100).toFixed(1), tagLeft: (off.left_m * 100).toFixed(1) } }));
+    toasts.push("ok", `Tag position set for ${rep.fake ? "the fake robot" : rep.robot}`);
+  };
+  const bodyProblem = checkBody(form);
 
   useEffect(() => {
     api.get<MotionCatalog>("/motion-test/catalog").then(setCatalog).catch(toasts.error);
@@ -79,7 +97,7 @@ export function RobotTest() {
       { ok: robotTags.length === 1, text: robotTags.length === 1 ? `Sees tag ${robotTags[0].id}` : robotTags.length === 0 ? "No robot tag in view" : `${robotTags.length} robot tags in view: one robot at a time` },
     ];
   const runs = tests.length * opts.speeds.length * opts.repeats;
-  const canStart = !running && !busy && checks.every((c) => c.ok) && runs > 0;
+  const canStart = !running && !busy && checks.every((c) => c.ok) && runs > 0 && !bodyProblem;
 
   async function start() {
     setBusy(true);
@@ -87,6 +105,11 @@ export function RobotTest() {
       await motionTest.start({
         robot: opts.fake ? undefined : opts.robot, tests, speeds: opts.speeds,
         repeats: opts.repeats, return_home: opts.returnHome, fake: opts.fake,
+        body: {
+          length_cm: Number(form.length), width_cm: Number(form.width),
+          tag_forward_cm: form.tagForward.trim() === "" ? null : Number(form.tagForward),
+          tag_left_cm: form.tagLeft.trim() === "" ? null : Number(form.tagLeft),
+        },
       });
     } catch (e) {
       toasts.error(e);
@@ -141,6 +164,9 @@ export function RobotTest() {
           start={current?.start ?? null}
           test={testInfo}
           lines={lines}
+          body={runner?.body ?? null}
+          pose={running ? runner?.pose ?? null : null}
+          margin={runner?.margin_m}
         />
         <footer className="rt-foot">
           <span><span className="legend ideal" /> where it should go</span>
@@ -154,7 +180,7 @@ export function RobotTest() {
         {!running && (report || saved.length > 0) && (
           <ProfileCard report={report} compare={compare} saved={saved} viewing={viewing}
             onView={view} onCompare={(key) => loadSaved(key, setCompare)}
-            selected={selected} onSelect={setSelected} />
+            selected={selected} onSelect={setSelected} onUseTag={useTag} />
         )}
 
         <Card title="Set up" aside={running ? <span className="muted">running…</span> : undefined}>
@@ -202,6 +228,7 @@ export function RobotTest() {
                 ))}
               </div>
             </div>
+            <BodyFields form={form} onChange={setForm} problem={bodyProblem} isNew={!(bodyKey in bodies)} />
             <Toggle label="Drive back between runs" checked={opts.returnHome} onChange={(v) => set("returnHome", v)} hint="Otherwise it asks you to move the robot when it has no room" />
             <button className="btn primary block" disabled={!canStart} onClick={start}>
               {running ? "Running…" : `Run ${runs} run${runs === 1 ? "" : "s"}`}

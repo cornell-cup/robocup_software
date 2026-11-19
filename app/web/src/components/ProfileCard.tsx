@@ -4,7 +4,7 @@ import type { Ability, ByTest, MotionReport, SavedReport, VsSimRow } from "../li
 /** A robot's motion profile: each ability graded, what stood out, and each
  *  test averaged. Optionally against an earlier profile (`compare`). */
 export function ProfileCard({
-  report, compare, saved, viewing, onView, onCompare, selected, onSelect,
+  report, compare, saved, viewing, onView, onCompare, selected, onSelect, onUseTag,
 }: {
   report: MotionReport | null;
   compare: MotionReport | null;
@@ -17,6 +17,8 @@ export function ProfileCard({
   /** the test whose paths the field shows, or null for all */
   selected: string | null;
   onSelect: (test: string | null) => void;
+  /** put this profile's estimate of the tag's position into the robot's size */
+  onUseTag: (report: MotionReport) => void;
 }) {
   const keyOf = (r: SavedReport) => `${r.robot}/${r.file}`;
   const title = report ? `Profile: ${report.robot}${report.fake ? " (fake)" : ""}` : "Profile";
@@ -51,6 +53,19 @@ export function ProfileCard({
                 <AbilityRow key={a.key} ability={a} was={compare?.abilities.find((b) => b.key === a.key) ?? null} />
               ))}
             </ul>
+
+            {report.tag_offset && !report.tag_offset.known && report.tag_offset.off_by_m >= 0.01 && (
+              <div className="rt-tag">
+                <span>
+                  The spins put the middle of the tag <b>{side(report.tag_offset.forward_m, "forward", "back")}</b> and{" "}
+                  <b>{side(report.tag_offset.left_m, "left", "right")}</b> of the robot's turning centre.
+                </span>
+                <button className="btn sm" title="Fill in the tag's forward and left boxes in Set up with these"
+                  onClick={() => onUseTag(report)}>
+                  Use these numbers
+                </button>
+              </div>
+            )}
 
             <div>
               <h3 className="rt-sub">What stood out</h3>
@@ -164,6 +179,11 @@ function TestRow({ row: t, on, onClick }: { row: ByTest; on: boolean; onClick: (
       <td className="mono">{fmt(t.reaction_s, 1000, "ms")}</td>
     </tr>
   );
+}
+
+/** "3.0 cm forward" / "1.0 cm right": a signed offset in words. */
+function side(m: number, plus: string, minus: string) {
+  return `${Math.abs(m * 100).toFixed(1)} cm ${m >= 0 ? plus : minus}`;
 }
 
 function compareKey(r: MotionReport, saved: SavedReport[]) {
