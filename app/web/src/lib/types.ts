@@ -495,6 +495,10 @@ export interface MotionStatus {
   fake: boolean;
   started: number | null;
   error: string | null;
+  /** the session's profile is built (fetch it from /motion-test/report) */
+  report_ready: boolean;
+  /** where it was saved, robot/profiles/<robot>/<file>; null for the fake robot */
+  report_file: string | null;
   runner: RunnerStatus | null;
   records: MotionRecord[];
   records_from: number;
@@ -513,4 +517,63 @@ export interface RobotDrive {
   left: number;
   turn: number;
   dribble: boolean;
+}
+
+export type Grade = "good" | "fair" | "poor" | null;
+
+/** One graded ability in a profile (robot/laptop/motion_report.py). */
+export interface Ability {
+  key: string;
+  label: string;
+  grade: Grade;
+  value: string;
+  detail: string;
+}
+
+/** One test at one speed, averaged over its repeats. */
+export interface ByTest {
+  test: string;
+  label: string;
+  speed: number;
+  runs: number;
+  reached: number;
+  moved: number;
+  drift_m: number | null;
+  drift_sd_m: number | null;
+  drift_per_m: number | null;
+  heading_change_deg: number | null;
+  rate: number | null;
+  rate_sd: number | null;
+  reaction_s: number | null;
+  rise_s: number | null;
+  max_deviation_m: number | null;
+  coast_m: number | null;
+}
+
+export interface MotionReport {
+  version: number;
+  robot: string;
+  tag_id: number | null;
+  fake: boolean;
+  started: number | null;
+  finished: number | null;
+  state: string | null;
+  speeds: number[];
+  tests: string[];
+  repeats: number;
+  abilities: Ability[];
+  findings: string[];
+  by_test: ByTest[];
+  records: MotionRecord[];
+}
+
+/** A saved profile in the list: enough to pick one. */
+export interface SavedReport {
+  robot: string;
+  file: string;
+  started: number | null;
+  speeds: number[];
+  tests: string[];
+  runs: number;
+  grades: Record<string, Grade>;
 }

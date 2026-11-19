@@ -240,6 +240,9 @@ HTTP 400 with `{"error": "..."}`.
 | GET | `/motion-test/catalog` | the motion tests (`name`, `label`, …), default speeds, max repeats |
 | GET | `/motion-test/status?records_from=N` | the session: `running`, `error`, the runner's state and live path, finished runs from N on |
 | POST | `/motion-test/start` | `{"robot", "tests": ["forward", ...], "speeds": [0.4, 0.7, 1.0], "repeats": 1, "return_home": true, "fake": false}`; the robot is reserved (nothing else drives it) until it ends |
+| GET | `/motion-test/report` | the newest session's profile: graded abilities, findings, each test averaged, every run |
+| GET | `/motion-test/reports?robot=NAME` | saved profiles (`robot/profiles/`), newest first, with their grades |
+| GET | `/motion-test/reports/{robot}/{file}` | one saved profile |
 | POST | `/motion-test/abort` | stops the robot and the session |
 | WS | `/motion-test/ws` | the status 10×/s, each finished run sent once |
 | GET | `/photonvision/status` | found jar / Java / versions, running, up, failure, setup hints |

@@ -275,6 +275,18 @@ def create_app(photonvision_dir: Path | None = None, start_photonvision: bool = 
         await asyncio.to_thread(state.motion.start, opts)
         return state.motion.status()
 
+    @app.get("/api/v1/motion-test/report")
+    def motion_report() -> dict[str, Any]:
+        return state.motion.report()
+
+    @app.get("/api/v1/motion-test/reports")
+    def motion_reports(robot: str | None = None) -> dict[str, Any]:
+        return {"reports": state.motion.saved(robot)}
+
+    @app.get("/api/v1/motion-test/reports/{robot}/{file}")
+    def motion_saved_report(robot: str, file: str) -> dict[str, Any]:
+        return state.motion.load(robot, file)
+
     @app.post("/api/v1/motion-test/abort")
     def motion_abort() -> dict[str, Any]:
         state.motion.abort()

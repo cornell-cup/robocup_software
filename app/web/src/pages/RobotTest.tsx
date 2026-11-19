@@ -1,13 +1,14 @@
 import { useEffect, useState } from "react";
 import { Card } from "../components/Card";
 import { type PathLine, PathView } from "../components/PathView";
+import { ProfileCard, fmt } from "../components/ProfileCard";
 import { Toggle } from "../components/Toggle";
 import { api } from "../lib/api";
 import { motionTest, useMotionTest } from "../lib/motionTest";
 import { useRobots } from "../lib/robots";
 import { toasts } from "../lib/toast";
 import { useTrackingFeed } from "../lib/tracking";
-import type { MotionCatalog, MotionRecord, RunEnd, RunnerState } from "../lib/types";
+import type { MotionCatalog, MotionRecord, MotionReport, RunEnd, RunnerState, SavedReport } from "../lib/types";
 import { useSavedState } from "../lib/useSavedState";
 import "../styles/robotTest.css";
 
@@ -37,6 +38,29 @@ export function RobotTest() {
   useEffect(() => {
     api.get<MotionCatalog>("/motion-test/catalog").then(setCatalog).catch(toasts.error);
   }, []);
+
+  // Profiles: the newest session's once it's built, saved ones to look back at.
+  const [latest, setLatest] = useState<MotionReport | null>(null);
+  const [saved, setSaved] = useState<SavedReport[]>([]);
+  const [viewing, setViewing] = useState<string | null>(null);
+  const [viewed, setViewed] = useState<MotionReport | null>(null);
+  const [compare, setCompare] = useState<MotionReport | null>(null);
+  const [selected, setSelected] = useState<string | null>(null);
+  useEffect(() => {
+    if (session.report_ready) motionTest.report().then(setLatest).catch(() => setLatest(null));
+    motionTest.saved().then((r) => setSaved(r.reports)).catch(() => {});
+  }, [session.report_ready, session.started]);
+  const loadSaved = (key: string | null, then: (r: MotionReport | null) => void) => {
+    if (!key) return then(null);
+    const [robot, file] = key.split("/");
+    motionTest.load(robot, file).then(then).catch(toasts.error);
+  };
+  const view = (key: string | null) => {
+    setViewing(key);
+    setSelected(null);
+    loadSaved(key, setViewed);
+  };
+  const report = viewing ? viewed : latest;
 
   const runner = session.runner;
   const running = session.running;
@@ -84,7 +108,9 @@ export function RobotTest() {
   // The field: the finished runs of the test in progress faded under the live
   // one; between sessions, every run.
   const current = runner?.current ?? null;
-  const shown = current ? session.records.filter((r) => r.test === current.test) : session.records;
+  const shown = current ? session.records.filter((r) => r.test === current.test)
+    : report && !running ? report.records.filter((r) => !selected || r.test === selected)
+    : session.records;
   const lines: PathLine[] = shown.map((r) => ({ points: r.path.map(([, x, y]) => [x, y] as [number, number]) }));
   if (current) lines.push({ points: current.path, live: true });
   const testInfo = catalog?.tests.find((t) => t.name === current?.test) ?? null;
@@ -125,6 +151,12 @@ export function RobotTest() {
       </section>
 
       <aside className="side">
+        {!running && (report || saved.length > 0) && (
+          <ProfileCard report={report} compare={compare} saved={saved} viewing={viewing}
+            onView={view} onCompare={(key) => loadSaved(key, setCompare)}
+            selected={selected} onSelect={setSelected} />
+        )}
+
         <Card title="Set up" aside={running ? <span className="muted">running…</span> : undefined}>
           <fieldset className="stack rt-setup" disabled={running}>
             <Toggle label="Fake robot (practice)" checked={opts.fake} onChange={(v) => set("fake", v)} hint="Runs the tests on a pretend robot and camera" />
@@ -215,6 +247,3 @@ function RunRow({ record: r, label }: { record: MotionRecord; label: string }) {
   );
 }
 
-function fmt(v: number | null | undefined, scale: number, unit: string, digits = 0) {
-  return v === null || v === undefined ? "–" : `${(v * scale).toFixed(digits)} ${unit}`;
-}

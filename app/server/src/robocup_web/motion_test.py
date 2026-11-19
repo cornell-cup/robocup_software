@@ -7,25 +7,38 @@ hands the page its progress.
 
 `fake: true` runs the same tests on robot/laptop/fake_robot.py's pretend robot
 and camera, in real time, to try the page without a robot or a camera.
+
+When a session ends, its profile (robot/laptop/motion_report.py) is built and
+saved as robot/profiles/<robot>/<date-time>.json -- not for the fake robot --
+so robots can be compared, and one robot before and after a fix.
 """
 
 from __future__ import annotations
 
+import json
+import re
 import threading
 import time
 from typing import Any
 
 from .procs import CommandError
-from .robots import RealRobots, _laptop
+from .robots import ROBOT_DIR, RealRobots, _laptop
 
 #: Repeats of the whole set the page may ask for.
 MAX_REPEATS = 5
+#: Saved profiles: one folder per robot, one file per session.
+PROFILES = ROBOT_DIR / "profiles"
+#: What a saved profile's robot folder and file names look like; anything
+#: else asked for is refused (no reaching outside PROFILES).
+ROBOT_NAME = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
+REPORT_FILE = re.compile(r"^\d{8}-\d{6}\.json$")
 
 
 def _modules():
     laptop = _laptop()
     import laptop.fake_robot
     import laptop.motion_profile
+    import laptop.motion_report
     import laptop.motion_runner
 
     return laptop
@@ -42,6 +55,7 @@ class MotionTests:
         laptop = _modules()
         self._profile = laptop.motion_profile
         self._runner_module = laptop.motion_runner
+        self._report_module = laptop.motion_report
         self._fake_module = laptop.fake_robot
         self._lock = threading.Lock()
         self._runner: Any = None
@@ -49,6 +63,9 @@ class MotionTests:
         self._error: str | None = None
         self._started: float | None = None
         self._fake = False
+        self._opts: dict[str, Any] = {}
+        self._report: dict[str, Any] | None = None
+        self._report_file: str | None = None
 
     # -- what can be run --------------------------------------------------------
 
@@ -112,6 +129,8 @@ class MotionTests:
         with self._lock:
             self._runner, self._error, self._fake = runner, None, fake
             self._started = time.time()
+            self._opts = {"speeds": speeds, "tests": [t.name for t in tests], "repeats": repeats}
+            self._report = self._report_file = None
             self._thread = threading.Thread(target=self._run, args=(runner, name, fake),
                                             name="motion-test", daemon=True)
             self._thread.start()
@@ -128,6 +147,74 @@ class MotionTests:
         finally:
             if not fake:
                 self._robots.release(name)
+            self._finish(runner, fake)
+
+    def _finish(self, runner: Any, fake: bool) -> None:
+        """Build the session's profile, and save it unless it's the fake robot's."""
+        records = [r.to_dict() for r in runner.records]
+        if not any(r["result"] for r in records):
+            return  # nothing measured: nothing to report
+        with self._lock:
+            opts, started, error = dict(self._opts), self._started, self._error
+        report = self._report_module.build_report(
+            records, robot=runner.name, tag_id=runner.tag_id, fake=fake, started=started,
+            finished=time.time(), state="error" if error else runner.status()["state"], **opts)
+        path = None
+        if not fake:
+            try:
+                folder = PROFILES / _safe_name(runner.name)
+                folder.mkdir(parents=True, exist_ok=True)
+                path = folder / time.strftime("%Y%m%d-%H%M%S.json", time.localtime(started))
+                path.write_text(json.dumps(report, indent=1))
+            except OSError as e:
+                with self._lock:
+                    self._error = f"the profile couldn't be saved: {e}"
+                path = None
+        with self._lock:
+            self._report = report
+            self._report_file = None if path is None else path.name
+
+    def report(self) -> dict[str, Any]:
+        """The newest session's profile."""
+        with self._lock:
+            if self._report is None:
+                raise CommandError("no profile yet: run some tests first")
+            return self._report
+
+    # -- saved profiles ---------------------------------------------------------
+
+    def saved(self, robot: str | None = None) -> list[dict[str, Any]]:
+        """Saved profiles, newest first: enough to pick one, not the runs."""
+        if not PROFILES.is_dir():
+            return []
+        out = []
+        for folder in sorted(PROFILES.iterdir()):
+            if not folder.is_dir() or (robot and folder.name != _safe_name(robot)):
+                continue
+            for f in folder.glob("*.json"):
+                if not REPORT_FILE.match(f.name):
+                    continue
+                try:
+                    rep = json.loads(f.read_text())
+                except (OSError, ValueError):
+                    continue
+                out.append({
+                    "robot": folder.name, "file": f.name, "started": rep.get("started"),
+                    "speeds": rep.get("speeds"), "tests": rep.get("tests"),
+                    "runs": len(rep.get("records", [])),
+                    "grades": {a["key"]: a["grade"] for a in rep.get("abilities", [])},
+                })
+        out.sort(key=lambda r: r["file"], reverse=True)
+        return out
+
+    def load(self, robot: str, file: str) -> dict[str, Any]:
+        if not ROBOT_NAME.match(robot) or not REPORT_FILE.match(file):
+            raise CommandError("no such profile")
+        path = PROFILES / robot / file
+        try:
+            return json.loads(path.read_text())
+        except (OSError, ValueError):
+            raise CommandError("no such profile") from None
 
     def abort(self) -> None:
         with self._lock:
@@ -153,7 +240,9 @@ class MotionTests:
         with self._lock:
             runner, error = self._runner, self._error
             out: dict[str, Any] = {"running": self.running, "fake": self._fake,
-                                   "started": self._started, "error": error}
+                                   "started": self._started, "error": error,
+                                   "report_ready": self._report is not None,
+                                   "report_file": self._report_file}
         if runner is None:
             return {**out, "runner": None, "records": [], "records_from": 0}
         records = list(runner.records)
@@ -184,3 +273,9 @@ class MotionTests:
         if not values or not all(0.05 <= s <= 1.0 for s in values):
             raise CommandError("speeds must be 0.05-1")
         return values
+
+
+def _safe_name(name: str) -> str:
+    """A robot name as a folder name: robot names are short and plain, but
+    keep anything else out of the path."""
+    return re.sub(r"[^A-Za-z0-9_-]", "_", name)[:32] or "robot"

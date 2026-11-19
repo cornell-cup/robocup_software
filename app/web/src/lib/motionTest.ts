@@ -5,7 +5,7 @@
 import { useEffect } from "react";
 import { api, wsUrl } from "./api";
 import { createStore, refCounted, useStore } from "./store";
-import type { MotionRecord, MotionStatus } from "./types";
+import type { MotionRecord, MotionReport, MotionStatus, SavedReport } from "./types";
 
 export interface MotionState extends Omit<MotionStatus, "records" | "records_from"> {
   connected: boolean;
@@ -14,7 +14,8 @@ export interface MotionState extends Omit<MotionStatus, "records" | "records_fro
 }
 
 const EMPTY: MotionState = {
-  connected: false, running: false, fake: false, started: null, error: null, runner: null, records: [],
+  connected: false, running: false, fake: false, started: null, error: null,
+  report_ready: false, report_file: null, runner: null, records: [],
 };
 const store = createStore<MotionState>(EMPTY);
 
@@ -64,4 +65,10 @@ export const motionTest = {
     robot?: string; tests: string[]; speeds: number[]; repeats: number; return_home: boolean; fake: boolean;
   }) => api.post<MotionStatus>("/motion-test/start", opts),
   abort: () => api.post<MotionStatus>("/motion-test/abort"),
+  /** the newest session's profile */
+  report: () => api.get<MotionReport>("/motion-test/report"),
+  saved: (robot?: string) =>
+    api.get<{ reports: SavedReport[] }>(`/motion-test/reports${robot ? `?robot=${encodeURIComponent(robot)}` : ""}`),
+  load: (robot: string, file: string) =>
+    api.get<MotionReport>(`/motion-test/reports/${encodeURIComponent(robot)}/${encodeURIComponent(file)}`),
 };

@@ -282,6 +282,8 @@ the other way round.
 | `laptop/sim_follow.py` | Laptop | Reads the sim's robot_node commands (port 9094) for `--sim` and the web app |
 | `laptop/motion_profile.py` | Laptop | The motion tests, and what one run measured from the camera's samples (drift, speed, delay, coasting) |
 | `laptop/motion_runner.py` | Laptop | Runs the motion tests on one robot: drives it, records the camera's view, stops it on a lost tag, the field's edge or abort |
+| `laptop/motion_report.py` | Laptop | A session's motion profile: each ability graded good / fair / poor, what stood out, each test averaged |
+| `profiles/` | Laptop | Saved motion profiles from the web app's Robot test page, one folder per robot |
 | `laptop/fake_robot.py` | Laptop | A pretend robot and camera with adjustable flaws, to test motion tests without hardware |
 | `tests/` | Laptop | Unit tests, no hardware needed |
 
