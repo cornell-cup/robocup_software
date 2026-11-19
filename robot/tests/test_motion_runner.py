@@ -56,7 +56,8 @@ class PreconditionTest(unittest.TestCase):
         runner.run()
         status = runner.status()
         self.assertEqual(status["field"]["width"], 1.93)
-        self.assertAlmostEqual(status["home"][0], 0.96, delta=0.01)
+        # The forward test's start spot: the 0.6 m move centred on the field.
+        self.assertAlmostEqual(status["home"][0], 1.93 / 2 - 0.3, delta=0.01)
 
     def test_corner_tags_are_not_robots(self):
         world = started(FakeWorld(camera=Camera(other_tags=CORNERS)))
@@ -100,6 +101,8 @@ class RunTest(unittest.TestCase):
         world = started(FakeWorld())
         d = json.loads(json.dumps(runner_for(world, [FORWARD]).run()[0].to_dict()))
         self.assertEqual((d["test"], d["ended"]), ("forward", "reached"))
+        self.assertAlmostEqual(d["start"][0], 0.96, delta=0.01)
+        self.assertAlmostEqual(d["start"][2], 0.0, delta=1.0)
         self.assertGreater(len(d["path"]), 20)
         self.assertLess(d["path"][0][0], 0)  # samples from before the command
 
@@ -159,7 +162,7 @@ class RepositionTest(unittest.TestCase):
                 if len(asked) == 25:     # half a second later, someone moves it
                     world.x = 0.6
 
-        runner = runner_for(world, [FORWARD], sleep=sleep)
+        runner = runner_for(world, [FORWARD], sleep=sleep, return_home=False)
         holder["runner"] = runner
         record = runner.run()[0]
         self.assertTrue(asked)
@@ -213,9 +216,10 @@ class ReturnHomeTest(unittest.TestCase):
         self.assertEqual([r.ended for r in records], ["reached", "reached"])
         self.assertIn("returning", states)
         self.assertNotIn("reposition", states)
-        first, second = records[0].samples[0], records[1].samples[0]
-        self.assertAlmostEqual(second.x, first.x, delta=0.03)
-        self.assertAlmostEqual(second.y, first.y, delta=0.03)
+        # Back to the forward test's start spot: the move centred on the field.
+        second = records[1].start
+        self.assertAlmostEqual(second.x, 1.93 / 2 - 0.3, delta=0.03)
+        self.assertAlmostEqual(second.y, 0.66, delta=0.03)
 
     def test_turns_back_to_its_starting_heading(self):
         world = started(FakeWorld(Flaws(curve_deg_per_m=40.0)))
@@ -231,6 +235,29 @@ class ReturnHomeTest(unittest.TestCase):
         self.assertEqual(records[1].ended, "reached")
         self.assertNotIn("reposition", states)
 
+    def test_strafes_fit_on_a_small_table(self):
+        # 1.32 m deep: from the middle there's no room to strafe 0.5 m, but
+        # there is from a spot below it.
+        world = started(FakeWorld())
+        records, states = self.run_watching(world, [STRAFE_LEFT])
+        self.assertEqual([r.ended for r in records], ["reached", "reached"])
+        self.assertIn("returning", states)
+        self.assertNotIn("reposition", states)
+
+    def test_first_run_drives_to_its_spot(self):
+        world = started(FakeWorld(x=1.6))
+        records, states = self.run_watching(world, [FORWARD], repeats=1)
+        self.assertEqual(records[0].ended, "reached")
+        self.assertEqual(states[:2], ["starting", "returning"])
+        self.assertNotIn("reposition", states)
+
+    def test_a_move_too_big_for_the_field_is_skipped(self):
+        world = started(FakeWorld(x=0.4, y=0.4, field=(0.8, 0.8)))
+        records, states = self.run_watching(world, [FORWARD, SPIN], repeats=1)
+        self.assertEqual([r.ended for r in records], ["no_room", "reached"])
+        self.assertIsNone(records[0].result)
+        self.assertNotIn("reposition", states)
+
     def test_asks_for_help_when_it_cannot_get_back(self):
         # Moves in the tests (0.7) but not for the gentle return commands (0.5 at most).
         world = started(FakeWorld(Flaws(dead_band=0.6)))
@@ -244,8 +271,7 @@ class ReturnHomeTest(unittest.TestCase):
         world = started(FakeWorld(y=0.4, camera=Camera(heading_offset_deg=90.0)))
         runner = runner_for(world, [FORWARD])
         runner.tag_id = world.tag_id
-        runner.home = Sample(0.0, 1.5, 0.4, math.radians(90.0))
-        self.assertFalse(runner._go_home())
+        self.assertFalse(runner._go_to(Sample(0.0, 1.5, 0.4, math.radians(90.0))))
         self.assertGreater(world.y, 0.06)
         self.assertLess(world.y, 0.3)  # it did head the wrong way
         self.assertFalse(world.fleet.status()[0]["moving"])

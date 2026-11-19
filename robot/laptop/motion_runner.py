@@ -16,8 +16,10 @@ none or several.
 
 For each run (one test, one speed, one repeat):
   1. wait until the robot has room for the move, holding still -- if it hasn't,
-     drive it back to where the first run started (state "returning"), and if
-     that doesn't work either, ask for it to be moved (state "reposition")
+     drive it to the test's start spot, placed so the move runs through the
+     middle of the field (state "returning"), and if that doesn't work either,
+     ask for it to be moved (state "reposition"). A move that can't fit on
+     the field from any spot is skipped ("no_room").
   2. record where it starts, standing still
   3. send the test's command 50 times a second until it has gone far enough,
      or the test times out
@@ -73,7 +75,8 @@ class RunRecord(object):
     """One run: what was asked, how it ended, and what was measured.
 
     ended: "reached" (went the test's distance), "timeout", "tag_lost",
-    "edge" (stopped short of the field's edge) or "aborted".
+    "edge" (stopped short of the field's edge), "no_room" (the field is too
+    small for the move: skipped) or "aborted".
     samples: the camera's view of it, [Sample], from before the start to rest.
     """
 
@@ -85,6 +88,7 @@ class RunRecord(object):
         self.samples = []
         self.t_start = None
         self.t_stop = None
+        self.start = None      # the pose it set off from: a Sample
         self.result = None
 
     def to_dict(self):
@@ -93,6 +97,7 @@ class RunRecord(object):
             "speed": self.speed,
             "repeat": self.repeat,
             "ended": self.ended,
+            "start": _pose(self.start),
             "result": self.result.to_dict() if self.result else None,
             "path": [[round(s.t - self.t_start, 3), round(s.x, 4), round(s.y, 4),
                       round(math.degrees(s.theta), 2)]
@@ -120,7 +125,11 @@ class MotionRunner(object):
         self.ignore_tags = set(ignore_tags)
         self.keep_out_m = keep_out_m
         self.return_home = return_home
-        self.home = None       # where the first run started: a Sample
+        # Where the first run started: its heading is the one every run starts
+        # at, and with no field to place start spots on, it's where the robot
+        # drives back to.
+        self.home = None
+        self.spot = None       # the start spot of the run in progress: a Sample
         self.tag_id = None
         self.records = []
         self._aborted = threading.Event()
@@ -146,12 +155,11 @@ class MotionRunner(object):
                 "done": len(self.records),
                 "total": len(self.plan),
                 "field": self._field(),
-                "home": None if self.home is None else [
-                    round(self.home.x, 4), round(self.home.y, 4),
-                    round(math.degrees(self.home.theta), 2)],
+                "home": _pose(self.spot),
                 "current": None if current is None else {
                     "test": current.test.name, "label": current.test.label,
                     "speed": current.speed, "repeat": current.repeat,
+                    "start": _pose(current.start),
                     "path": [[round(s.x, 4), round(s.y, 4)] for s in list(current.samples)],
                 },
             }
@@ -205,18 +213,22 @@ class MotionRunner(object):
         test = record.test
         what = "{} at {:g}, run {}".format(test.label, record.speed, record.repeat)
 
-        # 1. Room for the move, standing still: drive back to the start once
+        # 1. Room for the move, standing still: drive to its start spot once
         # if it hasn't, then ask for help.
         self._set("starting", what)
-        tried_home = not self.return_home or self.home is None
+        self.spot = self._start_spot(test)
+        if self.spot is not None and not self._has_room(test, self.spot):
+            record.ended = "no_room"
+            return
+        tried = not self.return_home or self.spot is None
         while not self._ready(test):
             if self._aborted.is_set():
                 record.ended = "aborted"
                 return
-            if not tried_home:
-                tried_home = True
-                self._set("returning", "Driving back to the start for: " + what)
-                self._go_home()
+            if not tried:
+                tried = True
+                self._set("returning", "Driving to the start spot for: " + what)
+                self._go_to(self.spot)
                 continue
             self._set("reposition", "Move the robot to give it room for: " + what)
             self._wait()
@@ -230,7 +242,7 @@ class MotionRunner(object):
         if not record.samples:
             record.ended = "tag_lost"
             return
-        start = record.samples[-1]
+        start = record.start = record.samples[-1]
         if self.home is None:
             self.home = start
         counter = TurnCounter(start.theta)
@@ -271,12 +283,30 @@ class MotionRunner(object):
         record.result = analyse(test, record.speed, record.samples,
                                 record.t_start, record.t_stop)
 
-    def _go_home(self):
-        """Drive to self.home, steered by the camera. Returns whether it got
+    def _start_spot(self, test):
+        """Where `test` should start: facing the first run's heading, placed so
+        the move (and its coasting) is centred on the field. The first run's
+        own start if there's no field to place it on. Before the first run,
+        the robot's heading now; None if the camera can't see it."""
+        ref = self.home
+        if ref is None:
+            ref, _ = self._sample()
+        if ref is None:
+            return None
+        field = self._field()
+        if field is None:
+            return ref
+        cx = field.get("x0", 0.0) + field["width"] / 2.0
+        cy = field.get("y0", 0.0) + field["height"] / 2.0
+        if test.spin:
+            return Sample(0.0, cx, cy, ref.theta)
+        a = ref.theta + math.radians(test.direction_deg)
+        back = (test.distance_m + COAST_ROOM_M) / 2.0
+        return Sample(0.0, cx - back * math.cos(a), cy - back * math.sin(a), ref.theta)
+
+    def _go_to(self, home):
+        """Drive to pose `home`, steered by the camera. Returns whether it got
         there; stops the robot either way."""
-        home = self.home
-        if home is None:
-            return False
         t0 = seen_at = self.clock()
         best, best_at = float("inf"), t0
         try:
@@ -396,6 +426,13 @@ class MotionRunner(object):
         with self._lock:
             self._state = state
             self._message = message
+
+
+def _pose(sample):
+    """[x, y, heading in degrees] for the page, or None."""
+    if sample is None:
+        return None
+    return [round(sample.x, 4), round(sample.y, 4), round(math.degrees(sample.theta), 2)]
 
 
 def _visible(doc):

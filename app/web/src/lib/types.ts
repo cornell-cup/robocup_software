@@ -408,6 +408,96 @@ export interface RealRobot {
   follow: number | null;
   /** following: whether the camera sees it right now (it only moves then) */
   tracked: boolean | null;
+  /** under a motion test: nothing else may drive it */
+  testing?: boolean;
+}
+
+// ── motion tests (the Robot test page) ─────────────────────────────────────
+
+export interface MotionTestInfo {
+  name: string;
+  label: string;
+  spin: boolean;
+  /** the way it drives in the robot's own frame: 0 forward, 90 left; null for a spin */
+  direction_deg: number | null;
+  /** +1 counter-clockwise, -1 clockwise, 0 straight */
+  turn: number;
+  distance_m: number;
+  angle_deg: number;
+}
+
+export interface MotionCatalog {
+  tests: MotionTestInfo[];
+  speeds: number[];
+  max_repeats: number;
+}
+
+/** [x, y, heading in degrees], field metres */
+export type Pose = [number, number, number];
+
+/** What one run measured (robot/laptop/motion_profile.py RunResult). */
+export interface MotionResult {
+  test: string;
+  speed: number;
+  moved: boolean;
+  reaction_s: number | null;
+  rise_s: number | null;
+  rate: number | null;
+  along_m: number | null;
+  drift_m: number | null;
+  drift_per_m: number | null;
+  direction_error_deg: number | null;
+  heading_change_deg: number | null;
+  max_deviation_m: number | null;
+  coast_m: number | null;
+  coast_s: number | null;
+  longest_gap_s: number | null;
+  notes: string[];
+}
+
+export type RunEnd = "reached" | "timeout" | "tag_lost" | "edge" | "no_room" | "aborted";
+
+export interface MotionRecord {
+  test: string;
+  speed: number;
+  repeat: number;
+  ended: RunEnd | null;
+  start: Pose | null;
+  result: MotionResult | null;
+  /** [seconds from the command, x, y, heading in degrees] */
+  path: [number, number, number, number][];
+}
+
+export type RunnerState = "idle" | "starting" | "returning" | "reposition" | "running" | "done" | "aborted" | "error";
+
+export interface RunnerStatus {
+  state: RunnerState;
+  message: string;
+  robot: string;
+  tag_id: number | null;
+  done: number;
+  total: number;
+  field: { width: number; height: number; x0?: number; y0?: number } | null;
+  /** the start spot of the run in progress: where it drives back to */
+  home: Pose | null;
+  current: {
+    test: string;
+    label: string;
+    speed: number;
+    repeat: number;
+    start: Pose | null;
+    path: [number, number][];
+  } | null;
+}
+
+export interface MotionStatus {
+  running: boolean;
+  fake: boolean;
+  started: number | null;
+  error: string | null;
+  runner: RunnerStatus | null;
+  records: MotionRecord[];
+  records_from: number;
 }
 
 export interface RealRobotsStatus {

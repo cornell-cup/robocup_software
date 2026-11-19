@@ -55,6 +55,7 @@ class MotionTests:
     def catalog(self) -> dict[str, Any]:
         return {
             "tests": [{"name": t.name, "label": t.label, "spin": t.spin,
+                       "direction_deg": t.direction_deg, "turn": t.turn,
                        "distance_m": t.distance_m, "angle_deg": t.angle_deg}
                       for t in self._profile.TESTS],
             "speeds": list(self._profile.DEFAULT_SPEEDS),
