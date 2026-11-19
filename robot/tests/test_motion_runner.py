@@ -1,7 +1,8 @@
+import math
 import unittest
 
 from laptop.fake_robot import Camera, FakeWorld, Flaws
-from laptop.motion_profile import TESTS_BY_NAME
+from laptop.motion_profile import TESTS_BY_NAME, Sample
 from laptop.motion_runner import MotionRunner, RunnerError
 
 FORWARD, BACKWARD = TESTS_BY_NAME["forward"], TESTS_BY_NAME["backward"]
@@ -168,6 +169,97 @@ class RepositionTest(unittest.TestCase):
         records = runner.run()
         self.assertEqual(records[0].ended, "aborted")
         self.assertIsNone(records[0].result)
+
+
+class ReturnHomeTest(unittest.TestCase):
+    def run_watching(self, world, tests, repeats=2, move_to=None, **kw):
+        """Run, noting each state; when asked to reposition, `move_to` (x, y)
+        is where someone puts the robot."""
+        holder, states = {}, []
+
+        def sleep(dt):
+            world.sleep(dt)
+            state = holder["runner"].status()["state"]
+            if not states or states[-1] != state:
+                states.append(state)
+            if state == "reposition" and move_to:
+                world.x, world.y = move_to
+
+        runner = runner_for(world, tests, repeats=repeats, sleep=sleep, **kw)
+        holder["runner"] = runner
+        return runner.run(), states
+
+    def test_drives_back_for_a_second_run_the_same_way(self):
+        world = started(FakeWorld(camera=Camera(noise_m=0.001, noise_deg=0.3)))
+        records, states = self.run_watching(world, [FORWARD])
+        self.assertEqual([r.ended for r in records], ["reached", "reached"])
+        self.assertIn("returning", states)
+        self.assertNotIn("reposition", states)
+        first, second = records[0].samples[0], records[1].samples[0]
+        self.assertAlmostEqual(second.x, first.x, delta=0.03)
+        self.assertAlmostEqual(second.y, first.y, delta=0.03)
+
+    def test_turns_back_to_its_starting_heading(self):
+        world = started(FakeWorld(Flaws(curve_deg_per_m=40.0)))
+        records, states = self.run_watching(world, [FORWARD])
+        self.assertIn("returning", states)
+        self.assertGreater(abs(records[0].result.heading_change_deg), 15)
+        first, second = records[0].samples[0], records[1].samples[0]
+        self.assertAlmostEqual(math.degrees(second.theta - first.theta), 0, delta=5)
+
+    def test_gets_past_a_dead_band(self):
+        world = started(FakeWorld(Flaws(dead_band=0.15)))
+        records, states = self.run_watching(world, [FORWARD])
+        self.assertEqual(records[1].ended, "reached")
+        self.assertNotIn("reposition", states)
+
+    def test_asks_for_help_when_it_cannot_get_back(self):
+        # Moves in the tests (0.7) but not for the gentle return commands (0.5 at most).
+        world = started(FakeWorld(Flaws(dead_band=0.6)))
+        records, states = self.run_watching(world, [FORWARD], move_to=(0.6, 0.66))
+        self.assertLess(states.index("returning"), states.index("reposition"))
+        self.assertEqual(records[1].ended, "reached")
+
+    def test_steering_the_wrong_way_stops_before_the_edge(self):
+        # The tag's heading is a quarter turn off: told to go right (+x), it
+        # strafes towards y = 0 instead.
+        world = started(FakeWorld(y=0.4, camera=Camera(heading_offset_deg=90.0)))
+        runner = runner_for(world, [FORWARD])
+        runner.tag_id = world.tag_id
+        runner.home = Sample(0.0, 1.5, 0.4, math.radians(90.0))
+        self.assertFalse(runner._go_home())
+        self.assertGreater(world.y, 0.06)
+        self.assertLess(world.y, 0.3)  # it did head the wrong way
+        self.assertFalse(world.fleet.status()[0]["moving"])
+
+    def test_asks_for_help_when_it_loses_the_tag_on_the_way(self):
+        world = started(FakeWorld(camera=Camera(lost=[(4.5, 6.0)])))
+        records, states = self.run_watching(world, [FORWARD], move_to=(0.6, 0.66))
+        self.assertIn("returning", states)
+        self.assertIn("reposition", states)
+        self.assertEqual(records[1].ended, "reached")
+
+    def test_can_be_turned_off(self):
+        world = started(FakeWorld())
+        records, states = self.run_watching(world, [FORWARD], move_to=(0.6, 0.66),
+                                            return_home=False)
+        self.assertNotIn("returning", states)
+        self.assertIn("reposition", states)
+
+    def test_abort_while_returning_stops_the_robot(self):
+        world = started(FakeWorld())
+        holder = {}
+
+        def sleep(dt):
+            world.sleep(dt)
+            if holder["runner"].status()["state"] == "returning" and world.clock() > 4.5:
+                holder["runner"].abort()
+
+        runner = runner_for(world, [FORWARD], repeats=2, sleep=sleep)
+        holder["runner"] = runner
+        records = runner.run()
+        self.assertEqual(records[-1].ended, "aborted")
+        self.assertFalse(world.fleet.status()[0]["moving"])
 
 
 if __name__ == "__main__":

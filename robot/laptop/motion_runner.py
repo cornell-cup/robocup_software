@@ -16,7 +16,8 @@ none or several.
 
 For each run (one test, one speed, one repeat):
   1. wait until the robot has room for the move, holding still -- if it hasn't,
-     ask for it to be moved (state "reposition")
+     drive it back to where the first run started (state "returning"), and if
+     that doesn't work either, ask for it to be moved (state "reposition")
   2. record where it starts, standing still
   3. send the test's command 50 times a second until it has gone far enough,
      or the test times out
@@ -49,6 +50,23 @@ STILL_M = 0.01
 STILL_S = 0.5
 #: Corner calibration tags, never the robot.
 IGNORE_TAGS = (0, 1, 2, 3)
+
+# Driving back to the start between runs: a gentle proportional controller,
+# steered by the camera.
+#: Command per metre (and per radian) still to go.
+HOME_GAIN = 2.0
+HOME_TURN_GAIN = 1.0
+#: Commands stay between these: the top keeps it gentle, the bottom gets it
+#: past a robot's dead band, where small commands do nothing.
+HOME_MAX = 0.5
+HOME_MIN = 0.2
+#: Close enough to the start.
+HOME_TOLERANCE_M = 0.02
+HOME_TOLERANCE_RAD = math.radians(4.0)
+#: Give up (and ask for it to be moved) after this long, or this long without
+#: getting any closer.
+HOME_TIMEOUT_S = 10.0
+HOME_STUCK_S = 2.0
 
 
 class RunRecord(object):
@@ -89,7 +107,7 @@ class RunnerError(Exception):
 class MotionRunner(object):
     def __init__(self, fleet, feed, name, tests, speeds, repeats=1,
                  clock=time.time, sleep=time.sleep, ignore_tags=IGNORE_TAGS,
-                 keep_out_m=KEEP_OUT_M):
+                 keep_out_m=KEEP_OUT_M, return_home=True):
         self.fleet = fleet
         self.feed = feed
         self.name = name
@@ -101,6 +119,8 @@ class MotionRunner(object):
         self.sleep = sleep
         self.ignore_tags = set(ignore_tags)
         self.keep_out_m = keep_out_m
+        self.return_home = return_home
+        self.home = None       # where the first run started: a Sample
         self.tag_id = None
         self.records = []
         self._aborted = threading.Event()
@@ -179,12 +199,19 @@ class MotionRunner(object):
         test = record.test
         what = "{} at {:g}, run {}".format(test.label, record.speed, record.repeat)
 
-        # 1. Room for the move, standing still.
+        # 1. Room for the move, standing still: drive back to the start once
+        # if it hasn't, then ask for help.
         self._set("starting", what)
+        tried_home = not self.return_home or self.home is None
         while not self._ready(test):
             if self._aborted.is_set():
                 record.ended = "aborted"
                 return
+            if not tried_home:
+                tried_home = True
+                self._set("returning", "Driving back to the start for: " + what)
+                self._go_home()
+                continue
             self._set("reposition", "Move the robot to give it room for: " + what)
             self._wait()
 
@@ -198,6 +225,8 @@ class MotionRunner(object):
             record.ended = "tag_lost"
             return
         start = record.samples[-1]
+        if self.home is None:
+            self.home = start
         counter = TurnCounter(start.theta)
 
         # 3. Drive.
@@ -235,6 +264,53 @@ class MotionRunner(object):
             self._take(record)
         record.result = analyse(test, record.speed, record.samples,
                                 record.t_start, record.t_stop)
+
+    def _go_home(self):
+        """Drive to self.home, steered by the camera. Returns whether it got
+        there; stops the robot either way."""
+        home = self.home
+        if home is None:
+            return False
+        t0 = seen_at = self.clock()
+        best, best_at = float("inf"), t0
+        try:
+            while not self._aborted.is_set():
+                now = self.clock()
+                sample, new = self._sample()
+                if new:
+                    seen_at = now
+                if now - seen_at > LOST_STOP_S:
+                    return False
+                if sample is None:
+                    self._wait()
+                    continue
+                # Heading the wrong way (a tag heading that's off steers it
+                # astray): stop before the edge. Half the margin, so a run that
+                # stopped at the margin can still drive back from there.
+                if not self._inside(sample, -self.keep_out_m / 2.0):
+                    return False
+                dx, dy = home.x - sample.x, home.y - sample.y
+                dist = math.hypot(dx, dy)
+                turn_err = _wrap(home.theta - sample.theta)
+                if dist <= HOME_TOLERANCE_M and abs(turn_err) <= HOME_TOLERANCE_RAD:
+                    return True
+                if dist < best - 0.005:
+                    best, best_at = dist, now
+                if now - t0 > HOME_TIMEOUT_S or now - best_at > HOME_STUCK_S:
+                    return False
+                # Field-frame error into the robot's own frame.
+                c, s = math.cos(sample.theta), math.sin(sample.theta)
+                forward, left = dx * c + dy * s, -dx * s + dy * c
+                move = 0.0 if dist <= HOME_TOLERANCE_M else _limit(HOME_GAIN * dist)
+                if dist > 0:
+                    forward, left = forward / dist * move, left / dist * move
+                turn = 0.0 if abs(turn_err) <= HOME_TOLERANCE_RAD else math.copysign(
+                    _limit(HOME_TURN_GAIN * abs(turn_err)), turn_err)
+                self.fleet.drive(self.name, body_axes(forward, left, turn), [])
+                self._wait()
+            return False
+        finally:
+            self.fleet.stop(self.name)
 
     # -- the camera -------------------------------------------------------------
 
@@ -314,3 +390,12 @@ class MotionRunner(object):
         with self._lock:
             self._state = state
             self._message = message
+
+
+def _limit(v):
+    """A command between HOME_MIN and HOME_MAX."""
+    return max(HOME_MIN, min(HOME_MAX, v))
+
+
+def _wrap(a):
+    return (a + math.pi) % (2.0 * math.pi) - math.pi

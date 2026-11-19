@@ -63,16 +63,19 @@ class Camera(object):
     lag_s: from a sample's capture to it showing up in snapshot().
     lost: (from, to) windows of time when it can't see the tag.
     other_tags: [(id, x, y)] tags that never move (corner tags, say).
+    heading_offset_deg: added to the heading it reports, as for a tag mounted
+      turned with no heading offset set in the tracker.
     """
 
     def __init__(self, rate_hz=30.0, noise_m=0.0, noise_deg=0.0, lag_s=0.0,
-                 lost=(), other_tags=()):
+                 lost=(), other_tags=(), heading_offset_deg=0.0):
         self.rate_hz = rate_hz
         self.noise_m = noise_m
         self.noise_deg = noise_deg
         self.lag_s = lag_s
         self.lost = list(lost)
         self.other_tags = list(other_tags)
+        self.heading_offset_deg = heading_offset_deg
 
 
 class FakeWorld(object):
@@ -174,7 +177,8 @@ class FakeWorld(object):
         tags = [{"id": i, "x": x, "y": y, "theta_deg": 0.0, "visible": True}
                 for i, x, y in cam.other_tags]
         if not any(a <= self._t < b for a, b in cam.lost):
-            theta = math.degrees(self.theta) + self._rng.gauss(0, cam.noise_deg)
+            theta = (math.degrees(self.theta) + cam.heading_offset_deg
+                     + self._rng.gauss(0, cam.noise_deg))
             tags.append({
                 "id": self.tag_id,
                 "x": self.x + self._rng.gauss(0, cam.noise_m),
