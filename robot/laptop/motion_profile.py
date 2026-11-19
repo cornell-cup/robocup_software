@@ -117,11 +117,24 @@ class RunResult(object):
         "max_deviation_m", "coast_m", "coast_s", "longest_gap_s", "notes",
     )
 
-    def __init__(self, **values):
-        for field in self.FIELDS:
-            setattr(self, field, values.get(field))
-        if self.notes is None:
-            self.notes = []
+    def __init__(self, test, speed, moved=False):
+        # Spelled out, not set in a loop over FIELDS, so editors know them.
+        self.test = test
+        self.speed = speed
+        self.moved = moved
+        self.reaction_s = None
+        self.rise_s = None
+        self.rate = None
+        self.along_m = None
+        self.drift_m = None
+        self.drift_per_m = None
+        self.direction_error_deg = None
+        self.heading_change_deg = None
+        self.max_deviation_m = None
+        self.coast_m = None
+        self.coast_s = None
+        self.longest_gap_s = None
+        self.notes = []
 
     def to_dict(self):
         """Plain numbers, rounded, for JSON."""
