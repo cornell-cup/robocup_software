@@ -280,6 +280,7 @@ the other way round.
 | `laptop/` | Laptop | Reads the gamepad/keyboard and sends commands to the robot |
 | `laptop/fleet.py` | Laptop | Links to several robots, callable from any thread; stops a robot whose commands stop (used by the web app) |
 | `laptop/sim_follow.py` | Laptop | Reads the sim's robot_node commands (port 9094) for `--sim` and the web app |
+| `laptop/motion_profile.py` | Laptop | The motion tests, and what one run measured from the camera's samples (drift, speed, delay, coasting) |
 | `tests/` | Laptop | Unit tests, no hardware needed |
 
 The laptop sends PestoLink packets (`laptop/protocol.py`), so the robot could
