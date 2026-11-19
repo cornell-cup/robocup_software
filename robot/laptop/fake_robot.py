@@ -182,7 +182,9 @@ class FakeWorld(object):
                 "theta_deg": (theta + 180.0) % 360.0 - 180.0,
                 "visible": True,
             })
-        self._captures.append((self._t, {"t_tags": self._t, "t_capture": self._t, "tags": tags}))
+        field = {"width": self.field[0], "height": self.field[1], "x0": 0.0, "y0": 0.0}
+        self._captures.append(
+            (self._t, {"t_tags": self._t, "t_capture": self._t, "field": field, "tags": tags}))
 
     def _publish(self):
         while self._captures and self._captures[0][0] <= self._t - self.camera.lag_s + 1e-12:
