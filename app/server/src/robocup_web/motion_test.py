@@ -21,6 +21,7 @@ import threading
 import time
 from typing import Any
 
+from . import motion_sim
 from .procs import CommandError
 from .robots import ROBOT_DIR, RealRobots, _laptop
 
@@ -156,9 +157,15 @@ class MotionTests:
             return  # nothing measured: nothing to report
         with self._lock:
             opts, started, error = dict(self._opts), self._started, self._error
+        try:
+            sim, sim_config = motion_sim.measure(), motion_sim.config_values()
+        except Exception as e:  # the comparison is extra: never lose the profile over it
+            print(f"motion tests: no sim comparison: {e}")
+            sim, sim_config = None, None
         report = self._report_module.build_report(
             records, robot=runner.name, tag_id=runner.tag_id, fake=fake, started=started,
-            finished=time.time(), state="error" if error else runner.status()["state"], **opts)
+            finished=time.time(), state="error" if error else runner.status()["state"],
+            sim=sim, sim_config=sim_config, **opts)
         path = None
         if not fake:
             try:

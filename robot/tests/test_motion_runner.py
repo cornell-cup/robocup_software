@@ -50,6 +50,12 @@ class PreconditionTest(unittest.TestCase):
         world = started(FakeWorld(camera=Camera(lost=[(0.05, 99)], coast=True)))
         self.assert_refused(runner_for(world, [FORWARD]), "sees no robot tag")
 
+    def test_records_how_late_the_camera_is(self):
+        world = started(FakeWorld(camera=Camera(lag_s=0.12)))
+        world.sleep(0.2)
+        record = runner_for(world, [FORWARD]).run()[0]
+        self.assertAlmostEqual(record.to_dict()["camera_latency_s"], 0.12, delta=0.005)
+
     def test_status_shows_the_field_and_home(self):
         world = started(FakeWorld())
         runner = runner_for(world, [FORWARD])

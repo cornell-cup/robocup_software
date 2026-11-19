@@ -1,5 +1,5 @@
 import { Card } from "./Card";
-import type { Ability, ByTest, MotionReport, SavedReport } from "../lib/types";
+import type { Ability, ByTest, MotionReport, SavedReport, VsSimRow } from "../lib/types";
 
 /** A robot's motion profile: each ability graded, what stood out, and each
  *  test averaged. Optionally against an earlier profile (`compare`). */
@@ -61,6 +61,8 @@ export function ProfileCard({
               )}
             </div>
 
+            <VsSim report={report} />
+
             <div>
               <h3 className="rt-sub">
                 Each test <span className="dim">· click one to show only its paths</span>
@@ -81,6 +83,57 @@ export function ProfileCard({
         )}
       </div>
     </Card>
+  );
+}
+
+/** The real robot beside the simulated one, and what to change in sim/config.py. */
+function VsSim({ report }: { report: MotionReport }) {
+  const hw = report.hardware;
+  const rows = report.vs_sim;
+  const measured = hw && Object.entries(hw).some(([k, v]) => k !== "camera_latency_ms" && v !== null);
+  if (!measured) {
+    return <p className="note">Run some tests at speed 1 to measure top speed, acceleration and turn rate against the simulator.</p>;
+  }
+  const suggestions = rows?.filter((r) => r.suggest) ?? [];
+  return (
+    <div>
+      <h3 className="rt-sub">Real robot vs the sim <span className="dim">· at full command</span></h3>
+      <table className="plain rt-runs vs-sim">
+        <thead><tr><th></th><th>Real</th><th>Sim</th><th>Real ÷ sim</th></tr></thead>
+        <tbody>
+          {(rows ?? []).map((r) => <SimRow key={r.key} row={r} />)}
+        </tbody>
+      </table>
+      {suggestions.length > 0 && (
+        <>
+          <p className="note">To make the sim's robot move more like this one, in <code>sim/config.py</code>:</p>
+          <ul className="findings mono small">{suggestions.map((r) => <li key={r.key}>{r.suggest}</li>)}</ul>
+          <p className="note">
+            The sim slows its robot smoothly (<code>LINEAR_DAMP</code>); a robot that brakes hard when its command stops
+            won't fit that well. Change one value at a time and test again.
+          </p>
+        </>
+      )}
+      {hw.camera_latency_ms !== null && hw.camera_latency_ms >= 1 && (
+        <p className="note">
+          The camera's pictures were {hw.camera_latency_ms.toFixed(0)} ms old when they arrived. The timings above use
+          when each picture was taken, so that isn't counted against the robot.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function SimRow({ row: r }: { row: VsSimRow }) {
+  const v = (x: number | null) => (x === null ? "–" : `${x.toFixed(r.digits)} ${r.unit}`);
+  const off = r.ratio !== null && (r.ratio < 0.8 || r.ratio > 1.25);
+  return (
+    <tr>
+      <td>{r.label}</td>
+      <td className="mono">{v(r.real)}</td>
+      <td className="mono">{v(r.sim)}</td>
+      <td className={`mono${off ? " warn-text" : ""}`}>{r.ratio === null ? "–" : `× ${r.ratio.toFixed(2)}`}</td>
+    </tr>
   );
 }
 

@@ -199,7 +199,7 @@ class FakeWorld(object):
 
     def _publish(self):
         while self._captures and self._captures[0][0] <= self._t - self.camera.lag_s + 1e-12:
-            self._published = self._captures.pop(0)[1]
+            self._published = dict(self._captures.pop(0)[1], t_publish=self._t)
             self._n += 1
 
 

@@ -90,6 +90,7 @@ class RunRecord(object):
         self.t_stop = None
         self.start = None      # the pose it set off from: a Sample
         self.result = None
+        self.camera_ages = []  # how old each camera message was when it came, seconds
 
     def to_dict(self):
         return {
@@ -98,6 +99,8 @@ class RunRecord(object):
             "repeat": self.repeat,
             "ended": self.ended,
             "start": _pose(self.start),
+            "camera_latency_s": (round(sum(self.camera_ages) / len(self.camera_ages), 4)
+                                 if self.camera_ages else None),
             "result": self.result.to_dict() if self.result else None,
             "path": [[round(s.t - self.t_start, 3), round(s.x, 4), round(s.y, 4),
                       round(math.degrees(s.theta), 2)]
@@ -138,6 +141,7 @@ class MotionRunner(object):
         self._message = ""
         self._current = None   # the RunRecord in progress
         self._last_n = -1
+        self._camera_age = None
 
     # -- from other threads -----------------------------------------------------
 
@@ -359,6 +363,10 @@ class MotionRunner(object):
             return None, False
         new = snap.get("n") != self._last_n
         self._last_n = snap.get("n")
+        if new and doc.get("t_publish") and doc.get("t_tags"):
+            # Capture to publish: the camera's lag. Timings use capture
+            # times, so it isn't counted against the robot; it's reported.
+            self._camera_age = doc["t_publish"] - doc["t_tags"]
         tag = next((t for t in _visible(doc) if t["id"] == self.tag_id), None)
         if tag is None:
             return None, False
@@ -373,6 +381,8 @@ class MotionRunner(object):
         if record.samples and sample.t <= record.samples[-1].t:
             return []
         record.samples.append(sample)
+        if self._camera_age is not None:
+            record.camera_ages.append(self._camera_age)
         return [sample]
 
     def _field(self):

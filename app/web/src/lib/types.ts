@@ -443,6 +443,7 @@ export interface MotionResult {
   reaction_s: number | null;
   rise_s: number | null;
   rate: number | null;
+  accel: number | null;
   along_m: number | null;
   drift_m: number | null;
   drift_per_m: number | null;
@@ -463,6 +464,8 @@ export interface MotionRecord {
   repeat: number;
   ended: RunEnd | null;
   start: Pose | null;
+  /** how old the camera's messages were when they came, on average */
+  camera_latency_s: number | null;
   result: MotionResult | null;
   /** [seconds from the command, x, y, heading in degrees] */
   path: [number, number, number, number][];
@@ -564,7 +567,34 @@ export interface MotionReport {
   abilities: Ability[];
   findings: string[];
   by_test: ByTest[];
+  /** what it does at full command (robot/laptop/motion_report.py hardware()) */
+  hardware: Hardware;
+  /** real against the simulated robot, measured the same way; null without the sim */
+  vs_sim: VsSimRow[] | null;
   records: MotionRecord[];
+}
+
+export interface Hardware {
+  top_speed: number | null;
+  accel: number | null;
+  stop_m: number | null;
+  damping: number | null;
+  strafe_speed: number | null;
+  turn_rate: number | null;
+  turn_accel: number | null;
+  camera_latency_ms: number | null;
+}
+
+export interface VsSimRow {
+  key: string;
+  label: string;
+  unit: string;
+  digits: number;
+  real: number | null;
+  sim: number | null;
+  ratio: number | null;
+  /** what to set in sim/config.py */
+  suggest: string | null;
 }
 
 /** A saved profile in the list: enough to pick one. */

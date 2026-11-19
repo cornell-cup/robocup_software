@@ -133,6 +133,11 @@ class StraightRunTest(unittest.TestCase):
         # Drove 0.05 s ramp-up short of 1.0 s at 0.5 m/s, plus the coast.
         self.assertAlmostEqual(r.along_m, 0.5 * (0.9 - 0.1) + 0.075, delta=0.01)
 
+    def test_measures_acceleration(self):
+        # 0.5 m/s reached evenly over 0.2 s: 2.5 m/s^2.
+        r = self.run_test("forward", speed=0.5, rise=0.2, noise=0.001, seed=4)
+        self.assertAlmostEqual(r.accel, 2.5, delta=0.3)
+
     def test_drift_to_the_right_is_negative(self):
         r = self.run_test("forward", drift_deg=-3.0)
         self.assertLess(r.drift_m, 0)

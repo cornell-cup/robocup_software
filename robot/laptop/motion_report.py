@@ -11,6 +11,12 @@ speed.
 
 The thresholds are judgement calls for a small omni-wheel robot on a table,
 not standards: change them here if they grade too hard or too soft.
+
+hardware() pulls out what the robot does at full command -- top speed,
+acceleration, how quickly it slows, turn rate -- the numbers the simulator's
+drive model (sim/config.py) is built from. Given the same numbers for the
+simulated robot (measured the same way), the report sets the two side by side
+and suggests config values that would bring the sim closer.
 """
 
 import math
@@ -45,6 +51,8 @@ NONLINEAR = 0.25
 COAST_M = 0.05
 
 GRADES = ("good", "fair", "poor")
+#: hardware() measures at this command: full.
+FULL = 1.0
 
 STRAIGHT = ("forward", "backward")
 STRAFES = ("strafe_left", "strafe_right")
@@ -60,8 +68,11 @@ DOING = {
 
 
 def build_report(records, robot, tag_id=None, fake=False, started=None,
-                 finished=None, state=None, speeds=(), tests=(), repeats=1):
-    """The profile for one session. Everything in it is plain JSON."""
+                 finished=None, state=None, speeds=(), tests=(), repeats=1,
+                 sim=None, sim_config=None):
+    """The profile for one session. Everything in it is plain JSON. `sim`:
+    hardware() of the simulated robot, to compare against; `sim_config`: the
+    sim/config.py values its suggestions start from."""
     runs = [r for r in records if r.get("result") and r["result"].get("moved")]
     report = {
         "version": VERSION,
@@ -77,8 +88,12 @@ def build_report(records, robot, tag_id=None, fake=False, started=None,
         "abilities": [],
         "findings": [],
         "by_test": _by_test(records),
+        "hardware": hardware(records),
+        "vs_sim": None,
         "records": list(records),
     }
+    if sim:
+        report["vs_sim"] = compare_with_sim(report["hardware"], sim, sim_config or {})
     report["abilities"] = [
         _straight("straight", "Driving straight", _of(runs, STRAIGHT)),
         _strafing(runs),
@@ -266,6 +281,77 @@ def _findings(records, runs):
     for end, n in sorted(ends.items()):
         out.append("{} run{} {}".format(n, "" if n == 1 else "s", words.get(end, end)))
     return out
+
+
+# -- the robot against the simulator ---------------------------------------------
+
+
+def hardware(records):
+    """What it does at full command (FULL), averaged over the runs that
+    measured each: speeds in m/s, turning in deg/s, damping per second (how
+    quickly it slows on its own: speed over stopping distance, the sim's
+    LINEAR_DAMP). None for anything not measured; camera_latency_ms from every
+    run. A 0.5 m run can end before the robot levels off, so top_speed is the
+    speed it reached, not necessarily its limit: compare it with another
+    robot measured the same way."""
+    runs = [r for r in records if r.get("result") and r["result"].get("moved")
+            and r["speed"] == FULL]
+    straight = _of(runs, STRAIGHT)
+    spins = _of(runs, SPINS)
+    top = _mean_rate(straight)
+    stop = _mean([r["result"]["coast_m"] for r in straight])
+    lat = _mean([r.get("camera_latency_s") for r in records])
+    return {
+        "top_speed": top,
+        "accel": _mean([r["result"]["accel"] for r in straight]),
+        "stop_m": stop,
+        "damping": top / stop if top and stop and stop > 0.005 else None,
+        "strafe_speed": _mean_rate(_of(runs, STRAFES)),
+        "turn_rate": _mean_rate(spins),
+        "turn_accel": _mean([r["result"]["accel"] for r in spins]),
+        "camera_latency_ms": None if lat is None else lat * 1000.0,
+    }
+
+
+#: The rows of the comparison: key, label, unit, digits.
+VS_SIM = (
+    ("top_speed", "Speed over 0.5 m", "m/s", 2),
+    ("accel", "Speeding up", "m/s²", 1),
+    ("damping", "Slowing down", "/s", 1),
+    ("strafe_speed", "Strafe speed", "m/s", 2),
+    ("turn_rate", "Turn rate", "°/s", 0),
+    ("turn_accel", "Turn speeding up", "°/s²", 0),
+)
+
+
+def compare_with_sim(real, sim, config):
+    """Real against simulated, row by row, with what to change in
+    sim/config.py. In the sim's model a robot pushes with MOTOR_MAX_FORCE and
+    is slowed by LINEAR_DAMP (ANGULAR_DAMP turning), so: acceleration scales
+    with MOTOR_MAX_FORCE, slowing down is LINEAR_DAMP, and the top turn rate
+    is the turn acceleration over ANGULAR_DAMP."""
+    rows = []
+    for key, label, unit, digits in VS_SIM:
+        r, m = real.get(key), sim.get(key)
+        rows.append({"key": key, "label": label, "unit": unit, "digits": digits,
+                     "real": r, "sim": m, "ratio": r / m if r is not None and m else None,
+                     "suggest": None})
+    by = {row["key"]: row for row in rows}
+
+    force = config.get("MOTOR_MAX_FORCE")
+    scale = by["accel"]["ratio"]
+    if force and scale:
+        by["accel"]["suggest"] = "MOTOR_MAX_FORCE ≈ {:.2f} (now {:.2f})".format(force * scale, force)
+    damp = config.get("LINEAR_DAMP")
+    if damp and real.get("damping"):
+        by["damping"]["suggest"] = "LINEAR_DAMP ≈ {:.1f} (now {:g})".format(real["damping"], damp)
+    ang = config.get("ANGULAR_DAMP")
+    if ang and real.get("turn_rate") and sim.get("turn_rate") and scale:
+        # With the new force the sim's turn acceleration scales by `scale`;
+        # ANGULAR_DAMP then sets the top rate.
+        new = ang * sim["turn_rate"] * scale / real["turn_rate"]
+        by["turn_rate"]["suggest"] = "ANGULAR_DAMP ≈ {:.1f} (now {:g})".format(new, ang)
+    return rows
 
 
 # -- per test ---------------------------------------------------------------------

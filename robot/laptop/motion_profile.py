@@ -33,6 +33,10 @@ MOVE_RAD = math.radians(3.0)
 POSE_WINDOW_S = 0.2
 #: Rates (speed, turn rate) are measured over at least this long.
 RATE_WINDOW_S = 0.1
+#: Acceleration is fitted from this much movement on: smaller is mostly the
+#: camera's noise.
+ACCEL_FROM_M = 0.004
+ACCEL_FROM_RAD = math.radians(1.5)
 #: Up to speed at this fraction of the steady rate; stopped below the second.
 RISE_FRACTION = 0.9
 STOPPED_FRACTION = 0.1
@@ -102,6 +106,8 @@ class RunResult(object):
     reaction_s: command to the first MOVE_M (or MOVE_RAD) of movement.
     rise_s: from then until up to RISE_FRACTION of the steady rate.
     rate: steady speed (m/s) or turn rate (deg/s), over the drive's second half.
+    accel: how fast it sped up (m/s^2 or deg/s^2), from the distance covered
+      until it was up to speed (see _accel).
     along_m, drift_m: where it ended, along the test's direction and to the
       left of it. drift_per_m is drift over along; direction_error_deg the
       angle it actually went at, left positive.
@@ -112,7 +118,7 @@ class RunResult(object):
     longest_gap_s: longest stretch without a camera sample."""
 
     FIELDS = (
-        "test", "speed", "moved", "reaction_s", "rise_s", "rate", "along_m",
+        "test", "speed", "moved", "reaction_s", "rise_s", "rate", "accel", "along_m",
         "drift_m", "drift_per_m", "direction_error_deg", "heading_change_deg",
         "max_deviation_m", "coast_m", "coast_s", "longest_gap_s", "notes",
     )
@@ -125,6 +131,7 @@ class RunResult(object):
         self.reaction_s = None
         self.rise_s = None
         self.rate = None
+        self.accel = None
         self.along_m = None
         self.drift_m = None
         self.drift_per_m = None
@@ -198,6 +205,11 @@ def analyse(test, speed, samples, t_start, t_stop):
                 if r is not None and r >= RISE_FRACTION * rate:
                     result.rise_s = t - t_move
                     break
+        if result.rise_s is not None:
+            accel = _accel(times, progress, t_start, t_move + result.rise_s,
+                           ACCEL_FROM_RAD if test.spin else ACCEL_FROM_M)
+            if accel is not None and accel > 0:
+                result.accel = math.degrees(accel) if test.spin else accel
         # Coasting: from the stop until the rate falls under STOPPED_FRACTION.
         for i, t in enumerate(times):
             if t >= t_stop:
@@ -302,6 +314,21 @@ def _slope(points):
     if var == 0:
         return None
     return sum((t - mt) * (v - mv) for t, v in points) / var
+
+
+def _accel(times, values, t_from, t_to, least):
+    """Average acceleration while speeding up, from the (time, value) points
+    between t_from and t_to. Speeding up evenly from rest at an unknown moment
+    t0 covers a(t - t0)^2 / 2, so its square root rises in a straight line
+    of slope sqrt(a / 2): fit that line and the delay before it moved drops
+    out. Only points past `least` count, where the camera's noise no longer
+    dominates. None with fewer than 2."""
+    pts = [(t, math.sqrt(v)) for t, v in zip(times, values)
+           if t_from <= t <= t_to and v >= least]
+    slope = _slope(pts)
+    if slope is None or slope <= 0:
+        return None
+    return 2.0 * slope * slope
 
 
 def _rate_at(times, values, i):

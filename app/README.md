@@ -323,4 +323,5 @@ npm run build    # rebuild static/ -- commit the result with your change
 Server code, in `server/src/robocup_web/`: `app.py` (routes), `procs.py` (starting and stopping
 programs), `sim.py` (the sim link and process), `tracking.py` (the tracker), `calib.py`
 (field calibration), `ball.py` (ball colour profiles), `photonvision.py` (starting
-PhotonVision).
+PhotonVision), `robots.py` (the real robots), `motion_test.py` (motion tests and their saved
+profiles), `motion_sim.py` (the same tests on the simulator's robot, to compare against).

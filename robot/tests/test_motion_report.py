@@ -3,7 +3,7 @@ import unittest
 
 from laptop.fake_robot import Camera, FakeWorld, Flaws
 from laptop.motion_profile import TESTS, TESTS_BY_NAME
-from laptop.motion_report import build_report
+from laptop.motion_report import build_report, compare_with_sim, hardware
 from laptop.motion_runner import MotionRunner
 
 
@@ -110,6 +110,49 @@ class FindsFlawsTest(unittest.TestCase):
         self.assertIsNone(ability(r, "turning")["grade"])
         self.assertIsNone(ability(r, "consistency")["grade"])
         self.assertIn("2 or more repeats", ability(r, "consistency")["detail"])
+
+
+class HardwareTest(unittest.TestCase):
+    def test_measures_the_robot_at_full_command(self):
+        r = session(tests=["forward", "backward", "strafe_left", "strafe_right", "spin_ccw", "spin_cw"],
+                    speeds=(0.7, 1.0))
+        hw = r["hardware"]
+        self.assertAlmostEqual(hw["top_speed"], 0.5, delta=0.02)      # Flaws().max_speed
+        self.assertAlmostEqual(hw["accel"], 4.0, delta=0.5)           # Flaws().accel
+        self.assertAlmostEqual(hw["strafe_speed"], 0.5, delta=0.02)
+        self.assertAlmostEqual(hw["turn_rate"], 240.0, delta=5.0)     # Flaws().max_turn_deg
+        self.assertAlmostEqual(hw["stop_m"], 0.5 ** 2 / (2 * 4.0), delta=0.01)
+
+    def test_needs_a_run_at_full_command(self):
+        hw = session(tests=["forward"], speeds=(0.7,))["hardware"]
+        self.assertIsNone(hw["top_speed"])
+        self.assertIsNone(hw["accel"])
+
+    def test_no_comparison_without_the_sim(self):
+        self.assertIsNone(session(tests=["forward"], speeds=(1.0,))["vs_sim"])
+
+    def test_suggests_config_values(self):
+        real = {"top_speed": 0.5, "accel": 2.0, "damping": 6.0, "stop_m": 0.08,
+                "strafe_speed": None, "turn_rate": 200.0, "turn_accel": 1000.0}
+        sim = {"top_speed": 0.8, "accel": 1.0, "damping": 3.0, "stop_m": 0.27,
+               "strafe_speed": 0.8, "turn_rate": 800.0, "turn_accel": 1800.0}
+        rows = {r["key"]: r for r in compare_with_sim(
+            real, sim, {"MOTOR_MAX_FORCE": 1.5, "LINEAR_DAMP": 3.0, "ANGULAR_DAMP": 3.0})}
+        self.assertAlmostEqual(rows["accel"]["ratio"], 2.0)
+        self.assertEqual(rows["accel"]["suggest"], "MOTOR_MAX_FORCE ≈ 3.00 (now 1.50)")
+        self.assertEqual(rows["damping"]["suggest"], "LINEAR_DAMP ≈ 6.0 (now 3)")
+        # Twice the force doubles the sim's turn acceleration: 1600 deg/s top
+        # rate at ANGULAR_DAMP 3, so 24 brings it down to the real 200.
+        self.assertEqual(rows["turn_rate"]["suggest"], "ANGULAR_DAMP ≈ 24.0 (now 3)")
+        self.assertIsNone(rows["strafe_speed"]["ratio"])
+
+    def test_report_with_the_sim(self):
+        sim = hardware(session(tests=["forward", "backward"], speeds=(1.0,))["records"])
+        r = session(Flaws(accel=2.0), tests=["forward", "backward"], speeds=(1.0,))
+        again = build_report(r["records"], robot="FAKE-01", sim=sim, sim_config={"MOTOR_MAX_FORCE": 1.0})
+        accel = next(row for row in again["vs_sim"] if row["key"] == "accel")
+        self.assertAlmostEqual(accel["ratio"], 0.5, delta=0.08)
+        self.assertIn("MOTOR_MAX_FORCE", accel["suggest"])
 
 
 if __name__ == "__main__":
