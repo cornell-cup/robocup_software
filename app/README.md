@@ -237,6 +237,11 @@ HTTP 400 with `{"error": "..."}`.
 | POST | `/robots/follow` | `{"name", "sim_robot": 0}` to follow a sim robot, `null` to drive it by hand |
 | POST | `/robots/scan` | `{"devices": [{"name", "rssi"}]}`, the Bluetooth devices nearby |
 | WS | `/robots/ws` | robot status pushed 5×/s; send `{"type": "drive", "name", "forward", "left", "turn", "dribble"}` |
+| GET | `/motion-test/catalog` | the motion tests (`name`, `label`, …), default speeds, max repeats |
+| GET | `/motion-test/status?records_from=N` | the session: `running`, `error`, the runner's state and live path, finished runs from N on |
+| POST | `/motion-test/start` | `{"robot", "tests": ["forward", ...], "speeds": [0.4, 0.7, 1.0], "repeats": 1, "return_home": true, "fake": false}`; the robot is reserved (nothing else drives it) until it ends |
+| POST | `/motion-test/abort` | stops the robot and the session |
+| WS | `/motion-test/ws` | the status 10×/s, each finished run sent once |
 | GET | `/photonvision/status` | found jar / Java / versions, running, up, failure, setup hints |
 | POST | `/photonvision/start`, `/photonvision/stop` | stop only stops one this app started |
 | GET | `/photonvision/log?after=N` | PhotonVision's output lines after line N |

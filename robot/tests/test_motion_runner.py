@@ -46,6 +46,18 @@ class PreconditionTest(unittest.TestCase):
         world = started(FakeWorld(camera=Camera(other_tags=[(9, 0.5, 0.5)])))
         self.assert_refused(runner_for(world, [FORWARD]), "several robot tags (7, 9)")
 
+    def test_a_predicted_tag_is_not_a_robot_in_view(self):
+        world = started(FakeWorld(camera=Camera(lost=[(0.05, 99)], coast=True)))
+        self.assert_refused(runner_for(world, [FORWARD]), "sees no robot tag")
+
+    def test_status_shows_the_field_and_home(self):
+        world = started(FakeWorld())
+        runner = runner_for(world, [FORWARD])
+        runner.run()
+        status = runner.status()
+        self.assertEqual(status["field"]["width"], 1.93)
+        self.assertAlmostEqual(status["home"][0], 0.96, delta=0.01)
+
     def test_corner_tags_are_not_robots(self):
         world = started(FakeWorld(camera=Camera(other_tags=CORNERS)))
         runner = runner_for(world, [FORWARD])
@@ -100,6 +112,12 @@ class SafetyTest(unittest.TestCase):
         self.assertEqual(record.ended, "tag_lost")
         # Stopped within LOST_STOP_S plus a command period of losing it.
         self.assertLess(record.t_stop, 1.2 + 0.3 + 0.05)
+        self.assertFalse(world.fleet.status()[0]["moving"])
+
+    def test_a_tag_the_tracker_only_predicts_counts_as_lost(self):
+        world = started(FakeWorld(camera=Camera(lost=[(1.2, 99)], coast=True)))
+        record = runner_for(world, [FORWARD]).run()[0]
+        self.assertEqual(record.ended, "tag_lost")
         self.assertFalse(world.fleet.status()[0]["moving"])
 
     def test_stops_short_of_the_edge(self):

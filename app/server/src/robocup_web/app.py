@@ -33,6 +33,7 @@ from .ball import VIEWS, BallCalibration
 from .calib import FieldCalibration
 from .photonvision import ENV_DIR, PhotonVisionProcess
 from .procs import CommandError
+from .motion_test import MotionTests
 from .robots import RealRobots
 from .sim import SIM_DIR, SimBridge, SimProcess
 from .tracking import (
@@ -52,6 +53,8 @@ CALIB_STREAM_FPS = 15
 TRACKING_WS_HZ = 30
 #: Robot link status to the Robots page.
 ROBOTS_WS_HZ = 5
+#: Motion test progress to the Robot test page: enough for a smooth live path.
+MOTION_TEST_WS_HZ = 10
 #: The sim/sounds files the pages may play.
 SIM_SOUNDS = {"goal", "cheer"}
 
@@ -74,6 +77,7 @@ class App:
         self.tracker = TrackerProcess()
         self.feed = TrackingFeed()
         self.robots = RealRobots()
+        self.motion = MotionTests(self.robots, self.feed)
 
 
 def create_app(photonvision_dir: Path | None = None, start_photonvision: bool = False) -> FastAPI:
@@ -100,6 +104,7 @@ def create_app(photonvision_dir: Path | None = None, start_photonvision: bool = 
             await asyncio.to_thread(state.calib.disconnect)
             await asyncio.to_thread(state.ball.disconnect)
             await asyncio.to_thread(state.photon.stop)
+            await asyncio.to_thread(state.motion.close)
             await asyncio.to_thread(state.robots.close)
             state.bridge.close()
             state.feed.close()
@@ -252,6 +257,47 @@ def create_app(photonvision_dir: Path | None = None, start_photonvision: bool = 
         finally:
             sender.cancel()
             state.robots.stop(driven)
+
+    # -- motion tests on a real robot ---------------------------------------
+
+    @app.get("/api/v1/motion-test/catalog")
+    def motion_catalog() -> dict[str, Any]:
+        return state.motion.catalog()
+
+    @app.get("/api/v1/motion-test/status")
+    def motion_status(records_from: int = 0) -> dict[str, Any]:
+        return state.motion.status(max(0, records_from))
+
+    # async: start checks the robot and the camera, and the robot's link is
+    # driven from the runner's thread, not this one.
+    @app.post("/api/v1/motion-test/start")
+    async def motion_start(opts: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
+        await asyncio.to_thread(state.motion.start, opts)
+        return state.motion.status()
+
+    @app.post("/api/v1/motion-test/abort")
+    def motion_abort() -> dict[str, Any]:
+        state.motion.abort()
+        return state.motion.status()
+
+    @app.websocket("/api/v1/motion-test/ws")
+    async def motion_ws(ws: WebSocket) -> None:
+        """Progress, MOTION_TEST_WS_HZ times a second: the status, with each
+        finished run sent once (its "records" are only the new ones)."""
+        await ws.accept()
+        sent = 0
+        started = None
+        try:
+            while True:
+                status = state.motion.status(sent)
+                if status["started"] != started:  # a new session: start over
+                    started, sent = status["started"], 0
+                    status = state.motion.status(0)
+                sent += len(status["records"])
+                await ws.send_text(json.dumps(status))
+                await asyncio.sleep(1.0 / MOTION_TEST_WS_HZ)
+        except (WebSocketDisconnect, RuntimeError):
+            pass
 
     # -- PhotonVision -------------------------------------------------------
 

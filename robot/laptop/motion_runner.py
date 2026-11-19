@@ -145,6 +145,10 @@ class MotionRunner(object):
                 "tag_id": self.tag_id,
                 "done": len(self.records),
                 "total": len(self.plan),
+                "field": self._field(),
+                "home": None if self.home is None else [
+                    round(self.home.x, 4), round(self.home.y, 4),
+                    round(math.degrees(self.home.theta), 2)],
                 "current": None if current is None else {
                     "test": current.test.name, "label": current.test.label,
                     "speed": current.speed, "repeat": current.repeat,
@@ -158,7 +162,7 @@ class MotionRunner(object):
         """Every run in the plan, in order. Returns the RunRecords; raises
         RunnerError if the tests can't start."""
         try:
-            self._check()
+            self.check()
             for test, speed, repeat in self.plan:
                 if self._aborted.is_set():
                     break
@@ -178,7 +182,9 @@ class MotionRunner(object):
             self.fleet.stop(self.name)
         return self.records
 
-    def _check(self):
+    def check(self):
+        """Raise RunnerError unless the tests can start: the robot connected,
+        the camera up, exactly one robot tag in view. Picks that tag."""
         robots = {r["name"]: r for r in self.fleet.status()}
         if self.name not in robots:
             raise RunnerError("{} isn't connected: add it on the Robots page".format(self.name))
@@ -187,7 +193,7 @@ class MotionRunner(object):
         doc = self.feed.snapshot().get("doc")
         if doc is None:
             raise RunnerError("no camera: start tracking first")
-        tags = [t["id"] for t in doc.get("tags", []) if t["id"] not in self.ignore_tags]
+        tags = [t["id"] for t in _visible(doc) if t["id"] not in self.ignore_tags]
         if not tags:
             raise RunnerError("the camera sees no robot tag: put one robot on the field")
         if len(tags) > 1:
@@ -323,7 +329,7 @@ class MotionRunner(object):
             return None, False
         new = snap.get("n") != self._last_n
         self._last_n = snap.get("n")
-        tag = next((t for t in doc.get("tags", []) if t["id"] == self.tag_id), None)
+        tag = next((t for t in _visible(doc) if t["id"] == self.tag_id), None)
         if tag is None:
             return None, False
         t = doc.get("t_tags") or doc.get("t_capture")
@@ -390,6 +396,13 @@ class MotionRunner(object):
         with self._lock:
             self._state = state
             self._message = message
+
+
+def _visible(doc):
+    """The tags the camera sees in this message. The tracker keeps a tag it
+    has just lost for a moment at a predicted position, marked not visible:
+    that's a guess, not a sample."""
+    return [t for t in doc.get("tags", []) if t.get("visible", True)]
 
 
 def _limit(v):

@@ -65,10 +65,12 @@ class Camera(object):
     other_tags: [(id, x, y)] tags that never move (corner tags, say).
     heading_offset_deg: added to the heading it reports, as for a tag mounted
       turned with no heading offset set in the tracker.
+    coast: while the tag is lost, keep reporting it where it was last seen,
+      marked not visible -- as the real tracker does for a moment.
     """
 
     def __init__(self, rate_hz=30.0, noise_m=0.0, noise_deg=0.0, lag_s=0.0,
-                 lost=(), other_tags=(), heading_offset_deg=0.0):
+                 lost=(), other_tags=(), heading_offset_deg=0.0, coast=False):
         self.rate_hz = rate_hz
         self.noise_m = noise_m
         self.noise_deg = noise_deg
@@ -76,6 +78,7 @@ class Camera(object):
         self.lost = list(lost)
         self.other_tags = list(other_tags)
         self.heading_offset_deg = heading_offset_deg
+        self.coast = coast
 
 
 class FakeWorld(object):
@@ -100,6 +103,7 @@ class FakeWorld(object):
         self._next_capture = 0.0
         self._captures = []                   # [(t_capture, doc)], oldest first
         self._published = None
+        self._last_seen = None
         self._n = 0
         self._capture()
 
@@ -179,13 +183,16 @@ class FakeWorld(object):
         if not any(a <= self._t < b for a, b in cam.lost):
             theta = (math.degrees(self.theta) + cam.heading_offset_deg
                      + self._rng.gauss(0, cam.noise_deg))
-            tags.append({
+            self._last_seen = {
                 "id": self.tag_id,
                 "x": self.x + self._rng.gauss(0, cam.noise_m),
                 "y": self.y + self._rng.gauss(0, cam.noise_m),
                 "theta_deg": (theta + 180.0) % 360.0 - 180.0,
                 "visible": True,
-            })
+            }
+            tags.append(self._last_seen)
+        elif cam.coast and self._last_seen is not None:
+            tags.append(dict(self._last_seen, visible=False))
         field = {"width": self.field[0], "height": self.field[1], "x0": 0.0, "y0": 0.0}
         self._captures.append(
             (self._t, {"t_tags": self._t, "t_capture": self._t, "field": field, "tags": tags}))
