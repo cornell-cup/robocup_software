@@ -20,8 +20,14 @@ folder was reorganised around it: the process and `api.py` at the top, the
 built-in `tactics/` written against `api.py`, the machinery in `core/` and
 `world/` (see the [Files](README.md#files) list). The built-in team is
 frozen as `v1`, the match runner's default opponent, and student team files
-load, play and reload (build order step 2 below). Next: strategy step 2,
-and the web Code page.
+load, play and reload, each in its own process, and the web app's Code page
+edits, plays and tests them (build order steps 2 and 3 below). Step 1 of
+[what students can code](docs/student_code.md#build-order) is done too: code
+draws on the field and shows values, gets game events and a `prepare` slot,
+and can dribble and limit its speed; and steps 2-5: workspaces of several
+files, every team in its own process with safe mode for someone else's,
+upload and download, and students playing each other's code. Next on the
+platform: `team()` and plays (step 6 there); and strategy step 2.
 
 ## 1. Strategy: next steps
 
@@ -104,6 +110,10 @@ runner (`python -m strategy.eval.match`).
 
 ### Replaceable pieces (slots)
 
+The full design, from settings and skills to plays, the whole team and
+driving, with the drills, limits and build order:
+[docs/student_code.md](docs/student_code.md). In short:
+
 Three levels, each slot with a built-in default. A student replaces one slot
 and the rest of the team keeps playing with the defaults.
 
@@ -143,7 +153,9 @@ is the student's code in a separate Python process next to the strategy:
 
 If the platform is ever hosted for many students online, running Python in
 the browser ([Pyodide](https://pyodide.org)) is the safer option; not needed
-yet.
+yet. Once students upload each other's code, a classmate's workspace runs in
+safe mode (no files, programs or network; a list of allowed imports):
+[Running other people's code safely](docs/student_code.md#running-other-peoples-code-safely).
 
 ### A "Code" page in the web app
 
@@ -160,16 +172,36 @@ for a pass; write a goalie; decide who plays which role.
 
 ### Build order
 
+From here on the platform's build order lives in
+[docs/student_code.md](docs/student_code.md#build-order), which adds
+workspaces (a team is a folder of Python files), sharing them by upload and
+download, students playing each other, and safe mode for running a
+classmate's code. Done so far:
+
 1. The slot interface (strategy step 1). **Done.**
 2. Student Python files: loaded, isolated, reloaded on save; a match-runner
-   option such as `--blue mycode.py`. **Done 2026-11-20, except isolation:**
+   option such as `--blue mycode.py`. **Done 2026-11-20:**
    `core/loader.py`, `examples/`, `--a my_team.py` in the match runner and
    `--blue` / `--red` on the strategy node and `run_pipeline.py`; a slot that
    raises, returns junk or takes over 10 ms falls back to the built-in one,
-   with the error on the file's line. The file still runs inside the
-   strategy process, so an endless loop stops the strategy: running it in a
-   separate process with a hard timeout is still to do, before students use
-   the platform unsupervised.
-3. The Code page with a Python editor.
-4. Blockly blocks that generate that Python.
-5. Lessons and examples.
+   with the error on the file's line. Live, the file runs in its own process
+   (`core/worker.py`): a frame it misses (20 ms) is played by the built-in
+   team, and an endless loop or crash restarts it after 0.5 s, so the
+   strategy never stops. The match runner still loads the file in its own
+   process; the web app puts a time limit on the whole match.
+3. The Code page with a Python editor. **Done 2026-11-20:** files in
+   `teams/` (new from the template, the get-open example or blank; save with
+   Ctrl+S; delete), a load check on every save, **Play** in the simulator as
+   blue or red with the live field and log, **Test match** against `v1`,
+   `v0`, `current` or another file, and every problem (loading, live,
+   match) listed with its line and highlighted in the editor. Not yet:
+   blocks, and Follow sim for real robots from the page.
+4. Seeing what code does (`world.draw`, `world.show`), events, `prepare`,
+   dribble and speed limits, and the students' guide in the Code page's
+   Guide tab. **Done 2026-11-20.**
+
+5. Workspaces, every team in its own process with safe mode, upload and
+   download, and playing each other. **Done 2026-11-20.**
+
+Next, in order: `team()` and plays; skills; drills; tournaments; settings
+and Blocks; the driving slot.
