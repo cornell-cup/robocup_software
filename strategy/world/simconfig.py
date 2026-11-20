@@ -18,4 +18,4 @@ SIM_DIR = os.path.join(_REPO, "sim")
 if SIM_DIR not in sys.path:
     sys.path.insert(0, SIM_DIR)
 
-from config import *  # noqa: E402, F401, F403
+from config import *  # noqa: E402, F403

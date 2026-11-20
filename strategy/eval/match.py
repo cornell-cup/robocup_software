@@ -32,9 +32,9 @@ from strategy.core.slots import Team
 from strategy.core.team import decide, resolve_kick_conflict
 
 # sim/ modules, importable through strategy.world.simconfig
-from pymunk_world import PymunkWorld, scorer  # noqa: E402
-from robot_node import RobotController  # noqa: E402
-from simulation_node import BALL_STUCK_DURATION, BALL_STUCK_THRESHOLD  # noqa: E402
+from pymunk_world import PymunkWorld, scorer
+from robot_node import RobotController
+from simulation_node import BALL_STUCK_DURATION, BALL_STUCK_THRESHOLD
 
 STRATEGIES: dict[str, Callable[..., Any]] = {
     "current": decide,
