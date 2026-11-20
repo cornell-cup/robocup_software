@@ -80,6 +80,11 @@ cd sim
 uv run python run_pipeline.py      # then: 5 = strategy on, click = send robot 0, 4 = drive it with W A S D
 ```
 
+To program the team yourself: **Code** page → **New…** → change a slot (the
+supporter, say) → **Play** to watch it in the sim, or **Test match** to play
+it against the built-in team. See
+[Write your own team](strategy/README.md#write-your-own-team).
+
 ### 2. Replay a recorded camera session (no hardware)
 
 ```powershell
@@ -267,6 +272,7 @@ robocup_software/
 │   ├── combined-tracking/      # tags + ball from one camera, publishes to other programs
 │   ├── calib/                  # intrinsics.json, field_pose.json, ball_color.json
 │   └── test.jsonl              # recorded tracking session for replay
+├── teams/                      # your workspaces from the web app's Code page (not committed)
 ├── app/                        # web app (`uv run robocup-web`)
 │   ├── server/                 # Python API (FastAPI); serves the built pages
 │   └── web/                    # the pages (React), built into server/.../static/
