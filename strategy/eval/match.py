@@ -9,11 +9,13 @@ From the repo root:
     uv run python -m strategy.eval.match                      # current vs v1, 10 games of 120 s
     uv run python -m strategy.eval.match --a current --b current --games 4   # sanity: about even
     uv run python -m strategy.eval.match --games 40 --duration 300
+    uv run python -m strategy.eval.match --a strategy/examples/get_open.py   # a team file vs v1
 
 Strategies are named in STRATEGIES: "current" is core/team.py's decide, "v1"
 and "v0" the frozen baselines (baseline_v1.py, the team on 2026-11-20, the
-default opponent; baseline_v0.py, before the attacker pushed the ball). Each
-game is seeded, so a rerun with
+default opponent; baseline_v0.py, before the attacker pushed the ball). A
+side can also be a team file (core/loader.py): the built-in team with the
+slots the file defines swapped in. Each game is seeded, so a rerun with
 the same flags plays the same games. Set ROBOCUP_FIELD to play on another
 field size, as for the sim.
 """
@@ -23,11 +25,14 @@ from __future__ import annotations
 import argparse
 import math
 import statistics
+import sys
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable
 
 from strategy.core.brain import Brain
+from strategy.core.loader import TeamFileError, load_team
 from strategy.core.slots import Team
 from strategy.core.team import decide, resolve_kick_conflict
 from strategy.eval import baseline_v0, baseline_v1
@@ -65,6 +70,9 @@ class GameResult:
     kicks_b: int = 0
     stuck_resets: int = 0  # ball sat still for BALL_STUCK_DURATION and was reset
     goal_times: list[float] = field(default_factory=list)
+    # Replaced slots that failed (each once): those robots fell back to the built-in slot.
+    errors_a: list[str] = field(default_factory=list)
+    errors_b: list[str] = field(default_factory=list)
 
     @property
     def diff(self) -> int:
@@ -123,6 +131,8 @@ def play_game(
         dribbling: set[int] = set()
         for color, brain in brains.items():
             plan = brain.tick(raw)
+            seen = result.errors_a if color == a_color else result.errors_b
+            seen += [e for e in plan.errors if e not in seen]
             mine = team_ids[color]
             targets.update({rid: t for rid, t in plan.targets.items() if rid in mine})
             kicks += [rid for rid in plan.kicks if rid in mine]
@@ -192,6 +202,16 @@ def play_game(
     return result
 
 
+def resolve(side: str) -> tuple[Callable[..., Any], Team | None, str]:
+    """A side given on the command line: a name in STRATEGIES, or a team file.
+    Returns (decide function, its Team or None for built-in, a short label)."""
+    if side in STRATEGIES:
+        return STRATEGIES[side], None, side
+    if side.endswith(".py"):
+        return decide, load_team(side), Path(side).name
+    raise ValueError(f"{side!r} is neither a strategy ({', '.join(STRATEGIES)}) nor a .py team file")
+
+
 def run_match(
     name_a: str,
     name_b: str,
@@ -201,12 +221,13 @@ def run_match(
     stuck_reset: bool = True,
     report: Callable[[GameResult], None] | None = None,
 ) -> list[GameResult]:
-    """`games` games, A as blue in even games and red in odd ones."""
-    decide_a, decide_b = STRATEGIES[name_a], STRATEGIES[name_b]
+    """`games` games, A as blue in even games and red in odd ones. A side is
+    a name in STRATEGIES or a team file's path."""
+    (decide_a, team_a, _), (decide_b, team_b, _) = resolve(name_a), resolve(name_b)
     results = []
     for g in range(games):
         r = play_game(decide_a, decide_b, a_is_blue=(g % 2 == 0), seed=seed + g,
-                      duration_s=duration_s, stuck_reset=stuck_reset)
+                      duration_s=duration_s, stuck_reset=stuck_reset, team_a=team_a, team_b=team_b)
         results.append(r)
         if report:
             report(r)
@@ -239,16 +260,21 @@ def summarize(results: list[GameResult], name_a: str, name_b: str) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Headless matches between two strategies")
-    _ = parser.add_argument("--a", default="current", choices=sorted(STRATEGIES))
-    _ = parser.add_argument("--b", default="v1", choices=sorted(STRATEGIES))
+    sides = f"{', '.join(STRATEGIES)}, or a team file (.py)"
+    _ = parser.add_argument("--a", default="current", help=f"side A: {sides} (default current)")
+    _ = parser.add_argument("--b", default="v1", help=f"side B: {sides} (default v1)")
     _ = parser.add_argument("--games", type=int, default=10)
     _ = parser.add_argument("--duration", type=float, default=120.0, help="sim seconds per game")
     _ = parser.add_argument("--seed", type=int, default=0, help="seed of the first game")
     _ = parser.add_argument("--no-stuck-reset", action="store_true",
                             help="never reset a ball that sits still for 10 s")
     args = parser.parse_args()
+    try:
+        label_a, label_b = resolve(args.a)[2], resolve(args.b)[2]
+    except (TeamFileError, ValueError) as e:
+        sys.exit(f"error: {e}")
 
-    print(f"{args.a} (A) vs {args.b} (B), {args.games} x {args.duration:.0f} s, sides swap every game")
+    print(f"{label_a} (A) vs {label_b} (B), {args.games} x {args.duration:.0f} s, sides swap every game")
     print(" game  A is   score A-B   possession A/B   stuck")
     t0 = time.perf_counter()
 
@@ -264,8 +290,18 @@ def main() -> None:
     wall = time.perf_counter() - t0
     sim_s = sum(r.ticks for r in results) * DT
     print()
-    print(summarize(results, args.a, args.b))
+    print(summarize(results, label_a, label_b))
     print(f"  ({sim_s:.0f} sim s in {wall:.0f} s wall, {sim_s / wall:.1f}x real time)")
+    for label, errs in ((label_a, [e for r in results for e in r.errors_a]),
+                        (label_b, [e for r in results for e in r.errors_b])):
+        unique = list(dict.fromkeys(e.split(" ", 1)[1] for e in errs))  # drop the team colour
+        if unique:
+            print()
+            print(f"Errors in {label}'s slots (those robots used the built-in slot instead):")
+            for e in unique[:10]:
+                print(f"  {e}")
+            if len(unique) > 10:
+                print(f"  ... and {len(unique) - 10} more")
 
 
 if __name__ == "__main__":
