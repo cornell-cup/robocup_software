@@ -97,7 +97,7 @@ strategy/
 ├── examples/             # teams to start from: template.py (every slot), get_open.py (a supporter)
 ├── tactics/              # the built-in slots, written against api.py: examples to read and copy
 │   ├── role_assignments.py  # roles(): closest to the ball attacks, next supports, rest defend
-│   ├── attacker.py       # attacker(): contested kick / RL kick / push toward goal
+│   ├── attacker.py       # attacker(): contested kick / RL kick / push toward goal; meets rolling balls
 │   ├── supporter.py      # supporter(): wait ahead of the ball
 │   └── defender.py       # defender(): goalie on the goal-to-ball line
 ├── skills/
@@ -196,6 +196,11 @@ cd sim; uv run python run_pipeline.py --blue ..\my_team.py        # live; --red 
 | `supporter` | `supporter(me, world) -> Command` | `tactics/supporter.py` |
 | `defender` | `defender(me, world) -> Command` (also a robot playing alone) | `tactics/defender.py` |
 | `prepare` | `prepare(world)`: once a frame, before the robots' slots; keep results in `world.memory` | nothing |
+| `goalie` | `goalie(me, world) -> Command`: a role for plays and `roles()` | as the built-in defender |
+| your own roles | any other function in `team.py`, `name(me, world) -> Command`, given to robots by `roles()` or a play (`runner`, `marker`) | none |
+| `PLAYS`, `pick_play` | `PLAYS = {"attack": ["attacker", "supporter", "goalie"], ...}` (roles most important first, to the robots closest to the ball first) and `pick_play(world) -> name`; a new pick takes over after 0.25 s; `world.play` | no plays |
+| `team` | `team(robots, world) -> {robot: Command}`: any robots at once; the rest play their roles | none |
+| `kickoff` | `kickoff(robots, world) -> {robot: (x, y)}`: spots on our half before a kickoff | none |
 
 - `me`: `id`, `pos`, `vel`, `angle`, `has_ball`, `distance_to()`, `angle_to()`;
   commands `go_to(target, face=..., kick=..., dribble=..., max_speed=...)`,

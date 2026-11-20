@@ -511,7 +511,9 @@ at commit `80eb3ad`; that repo has its history.
   [known issues](strategy/README.md#known-issues). Steps 1-3 (fixes, a
   headless match runner, unit tests, tactics split out of `decide()`, a
   time-based analysis layer) are done, and the attacker now pushes the ball
-  through, so the robots score on the real table's size too.
+  through, so the robots score on the real table's size too, and meets a
+  rolling ball where it can first reach it (+0.58 goals a game against the
+  frozen v1 over 80 test games).
 - The sim's scoreboard used to give each goal to the wrong team (fixed
   2026-11-14): scores shown before then are swapped.
 - The real robots have a kicker, but nothing fires it yet: kicks work in the
