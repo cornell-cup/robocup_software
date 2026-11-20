@@ -33,6 +33,12 @@ def defender(me: Me, world: World) -> Command:
     return defend_goal(world.ball.pos, world.color)
 
 
+def goalie(me: Me, world: World) -> Command:
+    """The built-in goalie role (for plays and your own roles()): the goalie
+    spot for this ball, as the built-in defender plays it."""
+    return defend_goal(world.ball.pos, world.color)
+
+
 def defend_goal(ball_pos: np.ndarray, team_color: str) -> Command:
     """Stand on the goal-to-ball line, farther out as the ball comes closer,
     inside the posts, facing the ball."""
