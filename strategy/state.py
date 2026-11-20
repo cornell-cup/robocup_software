@@ -12,9 +12,10 @@ from strategy.simconfig import (  # noqa: F401  (re-exported for the rest of str
     GOAL_MOUTH_H,
     GOAL_Y_MAX,
     GOAL_Y_MIN,
+    KICK_ZONE_DEPTH,
+    KICK_ZONE_HALF_WIDTH,
     ROBOT_RADIUS,
 )
-from strategy.skills.kick import KICK_ZONE_DEPTH, KICK_ZONE_HALF_WIDTH
 
 FIELD_LENGTH = FIELD_W  # meters, along x (9 by default)
 FIELD_WIDTH = FIELD_H  # meters, along y (6 by default)
@@ -158,7 +159,7 @@ def _parse_game(gamestate: GameState, raw: dict[str, Any], our_color: str) -> No
 
 def ball_in_front(robot: RobotState, ball_pos: np.ndarray) -> bool:
     """The ball is in the robot's kick zone: in front of it, close enough to
-    kick or dribble. Same box as skills/kick.py's try_kick_ball."""
+    kick or dribble. Same box as sim/ball_contact.py's try_kick_ball."""
     dx, dy = float(ball_pos[0] - robot.pos[0]), float(ball_pos[1] - robot.pos[1])
     c, s = math.cos(robot.angle), math.sin(robot.angle)
     local_x = c * dx + s * dy

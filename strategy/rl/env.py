@@ -39,12 +39,13 @@ from strategy.simconfig import (  # noqa: E402
     GOAL_Y_MAX,
     GOAL_Y_MIN,
     KD,
+    KICK_ZONE_DEPTH,
+    KICK_ZONE_HALF_WIDTH,
     KP,
     ROBOT_RADIUS,
     WHEEL_ANGLES,
     WHEEL_DISTANCE,
 )
-from strategy.skills.kick import KICK_ZONE_DEPTH, KICK_ZONE_HALF_WIDTH  # noqa: E402
 
 from pymunk_world import PymunkWorld  # noqa: E402  (sim/, on sys.path via strategy.simconfig)
 
@@ -100,7 +101,7 @@ def _ball_in_kick_zone(
     ball_x: float,
     ball_y: float,
 ) -> bool:
-    # Keep in sync with strategy.skills.kick.try_kick_ball.
+    # Keep in sync with sim/ball_contact.py's try_kick_ball.
     dx, dy = ball_x - robot_x, ball_y - robot_y
     local_x = math.cos(robot_angle) * dx + math.sin(robot_angle) * dy
     local_y = -math.sin(robot_angle) * dx + math.cos(robot_angle) * dy

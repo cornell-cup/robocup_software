@@ -1,25 +1,27 @@
-"""Dribble skill — simulates dribbler bar behaviour.
+"""Ball contact: the kicker and the dribbler, as the simulator's physics.
 
-Modeled as:
+Kick: a ball in the kick zone (config.KICK_ZONE_*) gets an impulse along the
+robot's heading.
+
+Dribble, modelled as:
   1. Check the ball is inside the dribble capture zone (front of robot,
      slightly wider and shallower than the kick zone).
   2. Pull the ball toward the ideal dribble point (centre of front face).
   3. Damp the ball velocity to match the robot velocity — this simulates
      the backspin friction that stops the ball escaping sideways.
+
+Used by pymunk_world.py every physics tick, and by the RL kick env. (These
+used to be strategy/skills/kick.py and dribble.py; they are physics, not
+strategy.)
 """
 
 import math
-import os
-import sys
 
 import pymunk
 
-_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-_PYTHON_DIR = os.path.join(_ROOT, "sim")
-if _PYTHON_DIR not in sys.path:
-    sys.path.insert(0, _PYTHON_DIR)
+from config import FIELD_SCALE, KICK_ZONE_DEPTH, KICK_ZONE_HALF_WIDTH, ROBOT_RADIUS
 
-from config import FIELD_SCALE, ROBOT_RADIUS
+KICK_IMPULSE = 0.22  # N s along the robot's heading
 
 # Zone sizes are 9 x 6 values, shrunk with the robot on a custom --field.
 DRIBBLE_ZONE_DEPTH      = 0.08 * FIELD_SCALE   # metres — how far in front the zone extends
@@ -110,4 +112,25 @@ def try_dribble_ball(robot: pymunk.Body, ball: pymunk.Body, dt: float) -> bool:
         robot.velocity.y + new_rel_wy,
     )
 
+    return True
+
+
+def try_kick_ball(robot: pymunk.Body, ball: pymunk.Body) -> bool:
+    """Kick if ball is in a small front tangent zone of the robot."""
+    dx = ball.position.x - robot.position.x
+    dy = ball.position.y - robot.position.y
+    a = robot.angle
+
+    # World -> robot local frame where +x is robot forward.
+    local_x = math.cos(a) * dx + math.sin(a) * dy
+    local_y = -math.sin(a) * dx + math.cos(a) * dy
+
+    zone_min_x = ROBOT_RADIUS
+    zone_max_x = ROBOT_RADIUS + KICK_ZONE_DEPTH
+    in_zone = zone_min_x <= local_x <= zone_max_x and abs(local_y) <= KICK_ZONE_HALF_WIDTH
+    if not in_zone:
+        return False
+
+    impulse = (math.cos(a) * KICK_IMPULSE, math.sin(a) * KICK_IMPULSE)
+    ball.apply_impulse_at_world_point(impulse, ball.position)
     return True

@@ -102,6 +102,15 @@ WHEEL_DISTANCE = 15.0 / 140.0 * FIELD_SCALE  # ≈ 0.107 m on 9 x 6, radius of w
 MOTOR_MAX_FORCE = 200.0 / 140.0  # ≈ 1.429 N per wheel at full command
 WHEEL_ANGLES = [0.0, 2 * math.pi / 3, 4 * math.pi / 3]
 
+# ── Kicker (SI units) ────────────────────────────────────────────────────────
+# The kick zone: a box in front of the robot, ROBOT_RADIUS .. ROBOT_RADIUS +
+# KICK_ZONE_DEPTH forward and +/- KICK_ZONE_HALF_WIDTH sideways. A kick only
+# fires with the ball's centre in it (ball_contact.py), and the strategy
+# counts a robot as having the ball when it's there. 9 x 6 values, shrunk
+# with the robot on a custom field.
+KICK_ZONE_DEPTH = 0.12 * FIELD_SCALE
+KICK_ZONE_HALF_WIDTH = 0.10 * FIELD_SCALE
+
 # ── Ball (SI units) ──────────────────────────────────────────────────────────
 # TODO(hardware): real SSL golf ball is 0.0215 m radius / 46 g. The radius
 # value below does not match the comment and needs to be reconciled.

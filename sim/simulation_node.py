@@ -39,7 +39,6 @@ from typing import Any
 import zmq
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.dirname(_HERE))
 sys.path.insert(0, _HERE)
 from config import (
     BALL_RADIUS,
@@ -68,7 +67,6 @@ from vision_bridge import (
     parse_ids,
     parse_tag_map,
 )
-from strategy.skills.dribble import try_dribble_ball
 
 HALF_DURATION = 300.0  # seconds per half, unless a game_half_duration command changes it
 HALF_DURATION_RANGE = (10.0, 3600.0)
