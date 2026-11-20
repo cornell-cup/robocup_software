@@ -23,7 +23,14 @@ import numpy as np
 from strategy.core.command import Command
 from strategy.world.geometry import attack_angle, is_blocking, opp_goal, our_goal
 from strategy.world.simconfig import BALL_RADIUS
-from strategy.world.state import ROBOT_RADIUS, BallState, GameState, RobotState
+from strategy.world.state import (
+    FIELD_LENGTH,
+    FIELD_WIDTH,
+    ROBOT_RADIUS,
+    BallState,
+    GameState,
+    RobotState,
+)
 
 if TYPE_CHECKING:
     from strategy.skills.rl_kick import RLKickSkill
@@ -131,6 +138,11 @@ class World:
     @property
     def ball(self) -> BallState:
         return self.gamestate.ball
+
+    @property
+    def field_size(self) -> tuple[float, float]:
+        """(length along x, width along y), metres: 9 x 6, or the real table's."""
+        return (FIELD_LENGTH, FIELD_WIDTH)
 
     @property
     def our_goal(self) -> np.ndarray:
