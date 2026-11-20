@@ -1,7 +1,15 @@
 // Thin wrappers over the server's /api/v1. Errors come back as {"error": "..."}
 // and are thrown with that message, ready to show.
 
-const BASE = "/api/v1";
+export const BASE = "/api/v1";
+
+/** A request the server refused: its message, HTTP status and whole answer
+ *  (a 409 for a taken name carries {"taken", "suggest"}). */
+export class ApiError extends Error {
+  constructor(message: string, readonly status: number, readonly data: any) {
+    super(message);
+  }
+}
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(BASE + path, {
@@ -17,7 +25,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   }
   if (!res.ok) {
     const detail = data?.error ?? data?.detail ?? `${res.status} ${res.statusText}`;
-    throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+    throw new ApiError(typeof detail === "string" ? detail : JSON.stringify(detail), res.status, data);
   }
   return data as T;
 }
