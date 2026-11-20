@@ -8,7 +8,10 @@ From the repo root (no hardware, no running sim):
 from __future__ import annotations
 
 import math
+import tempfile
+import textwrap
 import unittest
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -16,6 +19,7 @@ import numpy as np
 from strategy.api import Me, World
 from strategy.core.brain import Brain
 from strategy.core.command import Command
+from strategy.core.loader import TeamFile, TeamFileError, load_team, replaced_slots
 from strategy.core.slots import DEFAULT_TEAM, Team
 from strategy.core.team import decide, resolve_kick_conflict
 from strategy.eval import match
@@ -561,6 +565,113 @@ class TestSlots(unittest.TestCase):
         r = match.play_game(decide, decide, True, seed=1, duration_s=5,
                             team_a=DEFAULT_TEAM.replace(supporter=to_spot))
         self.assertEqual(r.ticks, round(5 / DT))
+
+
+EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
+
+
+class TestTeamFiles(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def write(self, name: str, text: str) -> Path:
+        p = self.dir / name
+        p.write_text(textwrap.dedent(text), encoding="utf-8")
+        return p
+
+    def test_template_plays_like_the_built_in_team(self):
+        team = load_team(EXAMPLES / "template.py")
+        self.assertEqual(replaced_slots(team), ["roles", "attacker", "supporter", "defender"])
+        a = match.play_game(decide, decide, True, seed=2, duration_s=10, team_a=team)
+        b = match.play_game(decide, decide, True, seed=2, duration_s=10)
+        self.assertEqual((a.goals_a, a.goals_b, a.kicks_a, a.kicks_b, a.possession_a, a.attacking_a),
+                         (b.goals_a, b.goals_b, b.kicks_a, b.kicks_b, b.possession_a, b.attacking_a))
+        self.assertEqual(a.errors_a, [])
+
+    def test_example_replaces_only_its_slot(self):
+        team = load_team(EXAMPLES / "get_open.py")
+        self.assertEqual(replaced_slots(team), ["supporter"])
+        r = match.play_game(decide, decide, True, seed=1, duration_s=10, team_a=team)
+        self.assertEqual(r.errors_a, [])
+
+    def test_load_errors_say_where(self):
+        cases = {
+            "syntax.py": ("def supporter(me, world)\n    return me.stop()\n", "syntax.py:1: syntax error"),
+            "crash.py": ("x = 1\nraise RuntimeError('boom')\n", "crash.py:2: RuntimeError: boom"),
+            "empty.py": ("def helper():\n    pass\n", "defines none of the slots"),
+        }
+        for name, (code, expected) in cases.items():
+            with self.assertRaises(TeamFileError) as ctx:
+                load_team(self.write(name, code))
+            self.assertIn(expected, str(ctx.exception), name)
+        with self.assertRaises(TeamFileError):
+            load_team(self.dir / "missing.py")
+
+    def test_errors_while_playing_point_at_your_line(self):
+        team = load_team(self.write("buggy.py", """\
+            def supporter(me, world):
+                spot = world.ball.pos
+                return me.go_to(spot, face="the ball")
+            """))
+        errors: list[str] = []
+        gs = build_game_state(world())
+        expected = decide(gs, sticky_attackers={})
+        self.assertEqual(decide(gs, sticky_attackers={}, teams={"blue": team}, errors=errors), expected)
+        self.assertIn("buggy.py:3", errors[0])  # their line, not inside api.py
+
+    def test_saved_edits_reload_and_broken_ones_keep_the_last(self):
+        path = self.write("live.py", "def supporter(me, world):\n    return me.stop()\n")
+        live = TeamFile(path)
+        self.assertEqual(replaced_slots(live.team), ["supporter"])
+        self.assertFalse(live.reload_if_changed())
+
+        path.write_text("def supporter(me, world)\n    return me.stop()\n", encoding="utf-8")
+        self.assertTrue(live.reload_if_changed())
+        self.assertIn("syntax error", live.error)
+        self.assertEqual(replaced_slots(live.team), ["supporter"])  # the last one that loaded
+
+        path.write_text("def attacker(me, world):\n    return me.stop()\n\n"
+                        "def supporter(me, world):\n    return me.stop()\n", encoding="utf-8")
+        self.assertTrue(live.reload_if_changed())
+        self.assertIsNone(live.error)
+        self.assertEqual(replaced_slots(live.team), ["attacker", "supporter"])
+
+    def test_slow_slots_fall_back(self):
+        team = load_team(self.write("slow.py", """\
+            import time
+
+            def supporter(me, world):
+                time.sleep(0.03)
+                return me.stop()
+            """))
+        errors: list[str] = []
+        gs = build_game_state(world())
+        got = decide(gs, sticky_attackers={}, teams={"blue": team}, errors=errors)
+        self.assertEqual(got, decide(gs, sticky_attackers={}))
+        self.assertIn("budget", errors[0])
+
+    def test_match_sides_are_names_or_files(self):
+        self.assertEqual(match.resolve("v1")[2], "v1")
+        fn, team, label = match.resolve(str(EXAMPLES / "get_open.py"))
+        self.assertIs(fn, decide)
+        self.assertEqual((label, replaced_slots(team)), ("get_open.py", ["supporter"]))
+        with self.assertRaises(ValueError):
+            match.resolve("v9")
+
+    def test_brain_picks_up_a_new_team(self):
+        logged: list[str] = []
+        brain = Brain("blue", log=logged.append)
+        brain.set_team("blue", load_team(self.write("a.py", "def supporter(me, w):\n    return 1/0\n")))
+        brain.tick(world(t=1.0))
+        brain.set_team("blue", load_team(self.write("b.py", "def supporter(me, w):\n    return 1/0\n")))
+        brain.tick(world(t=1.1))
+        self.assertEqual(sum("ZeroDivisionError" in m for m in logged), 2)  # reported afresh
+        brain.set_team("blue", None)
+        self.assertEqual(brain.teams, {})
 
 
 class TestMatch(unittest.TestCase):
