@@ -38,7 +38,6 @@ uv run python strategy_node.py                # --color red: route the dribbler 
 
 | Flag | Meaning | Default |
 | --- | --- | --- |
-| `--mode zmq\|tcp` | How to get the world state (ZMQ is what the pipeline uses) | `zmq` |
 | `--color blue\|red` | "Our" team: whose attacker gets the dribbler, and whose robots can be human-driven. Both teams are planned either way | `blue` |
 | `--rl-checkpoint PATH` | Trained PPO kick policy, loaded when RL kick is first turned on | `rl/checkpoints/first_final/final.zip` |
 
@@ -46,7 +45,7 @@ uv run python strategy_node.py                # --color red: route the dribbler 
 
 This is how it plays today. Where it's going is in [Design](#design).
 
-`decide()` in `strategy_node.py`, every tick, for each team:
+`decide()` in `core/team.py`, every tick, for each team:
 
 | Robots left | Roles |
 | --- | --- |
@@ -67,7 +66,6 @@ This is how it plays today. Where it's going is in [Design](#design).
 - **Defender:** plays goalie on the goal-to-ball line.
 - **Human-driven robots** (gamepads in the pygame window) are left out, and the
   rest of the team is planned without them.
-
 - **Kickoff:** after the start, every goal and every new half, supporters hold
   their own half until the ball first moves.
 - **Robots the camera lost** (unseen for 0.5 s) are left out like human-driven
@@ -75,40 +73,59 @@ This is how it plays today. Where it's going is in [Design](#design).
 
 Tuning distances (`APPROACH_OFFSET`, `ATTACKER_HYSTERESIS`,
 `GOALIE_STANDOFF`, ...) are constants at the top of each file in `tactics/`,
-tuned on 9 x 6 and scaled by `FIELD_SCALE` on another field; dribble and kick
-zones are in `skills/dribble.py` and `skills/kick.py`.
+tuned on 9 x 6 and scaled by `FIELD_SCALE` on another field. The kick zone's
+size is in `sim/config.py` (`KICK_ZONE_*`); the kick and dribble physics are
+the sim's, in `sim/ball_contact.py`.
 
 ## Files
 
+At the top: the process, the interface you write against, and folders.
+Students start with `api.py` and the examples in `tactics/`; `core/` and
+`world/` are the machinery and don't need opening.
+
+One frame, in order: `strategy_node.py` receives the world state,
+`core/brain.py` adds what it remembers, `decide()` (`core/team.py`) gives
+each robot a role and runs that role's slot, built-in (`tactics/`) or
+replaced (`core/slots.py`), and each slot returns a `Command`, which goes
+back out.
+
 ```
 strategy/
-├── strategy_node.py      # entry point: decide() runs each team's slots; Brain (memory between frames)
-├── api.py                # what every behaviour is written against: Me (a robot) and World
-├── slots.py              # the replaceable pieces: Team, DEFAULT_TEAM, fall back to built-in on errors
-├── ROADMAP.md            # next steps, and the student platform plan
-├── state.py              # GameState, built from the world-state JSON each frame
-├── command.py            # Command: what a tactic tells one robot (target, heading, kick)
-├── analysis.py           # once per frame, in seconds: time to reach, ball intercepts, who wins the race, threats
-├── tactics/
-│   ├── role_assignments.py  # who attacks, supports, defends (closest to the ball attacks)
-│   ├── attacker.py       # contested kick / RL kick / push toward goal
-│   ├── supporter.py      # wait ahead of the ball
-│   └── defender.py       # goalie on the goal-to-ball line
-├── geometry.py           # distances, goals, interpolation
-├── prediction.py         # ball prediction (slowing down as in the sim) and intercepts
+├── strategy_node.py      # the process: ZMQ in and out, main loop (run by sim/run_pipeline.py)
+├── api.py                # what every behaviour is written against: Me (a robot), World, Command
+├── tactics/              # the built-in slots, written against api.py: examples to read and copy
+│   ├── role_assignments.py  # roles(): closest to the ball attacks, next supports, rest defend
+│   ├── attacker.py       # attacker(): contested kick / RL kick / push toward goal
+│   ├── supporter.py      # supporter(): wait ahead of the ball
+│   └── defender.py       # defender(): goalie on the goal-to-ball line
+├── skills/
+│   ├── navigate.py       # poses: stand behind the ball, face a point, face where you drive
+│   └── rl_kick.py        # wraps the trained PPO kick policy
+├── core/                 # how a frame runs
+│   ├── brain.py          # Brain: memory between frames (kickoff, lost robots, sticky attacker, toggles)
+│   ├── team.py           # decide(): a role for each robot, then its slot; resolve_kick_conflict()
+│   ├── slots.py          # the replaceable pieces: Team, DEFAULT_TEAM, fall back to built-in on errors
+│   └── command.py        # Command: what a slot tells one robot (target, heading, kick)
+├── world/                # what the team knows each frame
+│   ├── state.py          # GameState, built from the world-state JSON
+│   ├── geometry.py       # distances, goals, angles, pass lanes
+│   ├── prediction.py     # ball prediction (slowing down as in the sim)
+│   ├── analysis.py       # in seconds: time to reach, ball intercepts, who wins the race, threats
+│   └── simconfig.py      # sim/config.py's settings; the one place that puts sim/ on sys.path
 ├── eval/
 │   ├── match.py          # headless matches, strategy against strategy
 │   └── baseline_v0.py    # frozen copy of decide(), the bar to beat
 ├── tests/                # unit tests: python -m unittest discover -s strategy/tests -t .
-├── skills/
-│   ├── navigate.py       # poses: stand behind the ball, face a point, face where you drive
-│   ├── kick.py           # kick zone check and impulse (used by the sim's physics)
-│   ├── dribble.py        # dribble capture zone (used by the sim's physics)
-│   └── rl_kick.py        # wraps the trained PPO policy as a skill
 ├── rl/                   # the learned kick: env, reward, train, eval, checkpoints/
-├── plays/, BT/           # placeholders, see "Design" below
-└── stp_architecture_and_execution.svg
+├── docs/                 # the original STP sketch
+├── README.md
+└── ROADMAP.md            # next steps, and the student platform plan
 ```
+
+Settings shared with the sim (field size, robot size, kick zone, ports) come
+from `sim/config.py` through `world/simconfig.py`. Scripts run directly
+(`strategy_node.py`, `rl/*.py`) put the repo root on `sys.path` themselves;
+nothing else touches it.
 
 RL commands (training, evaluation) are in the [main README](../README.md#rl-kick-skill).
 
@@ -135,13 +152,13 @@ the targets while strategy is turned on.
 
 ## Replace a behaviour
 
-Each role, and who plays which role, is a slot (`slots.py`) with a built-in
+Each role, and who plays which role, is a slot (`core/slots.py`) with a built-in
 default. Write a function against `api.py` and swap it in; the rest of the
 team keeps the built-in slots:
 
 ```python
 from strategy.api import Me, World
-from strategy.slots import DEFAULT_TEAM
+from strategy.core.slots import DEFAULT_TEAM
 
 def get_open(me: Me, world: World):
     spot = world.ball.pos + (world.their_goal - world.ball.pos) * 0.4
@@ -161,7 +178,7 @@ my_team = DEFAULT_TEAM.replace(supporter=get_open)
   commands `go_to(target, face=..., kick=...)`, `face(...)`, `stop()`.
 - `world`: `ball`, `teammates`, `opponents`, `our_goal`, `their_goal`,
   `attack_angle`, `phase`, `kicked_off`, `lane_clear(a, b)`, `memory` (your
-  notes, kept between frames), and `analysis` / `us` (`analysis.py`: who
+  notes, kept between frames), and `analysis` / `us` (`world/analysis.py`: who
   reaches the ball first, threats; computed only if asked for).
 - A replaced slot that raises, returns something that isn't a `Command`, or
   gives a role list that misses a robot falls back to the built-in slot for
@@ -193,7 +210,7 @@ kicks, and how often the ball got stuck (it resets a ball that sits still for
 edit it. `current` is `strategy_node.decide`. To compare a new version, add it
 to `STRATEGIES` in `eval/match.py`.
 
-`Brain` (in `strategy_node.py`) is everything the strategy remembers between
+`Brain` (in `core/brain.py`) is everything the strategy remembers between
 frames around `decide()`: the sticky attacker, kickoff, lost camera robots, the
 RL / dribble / human-driver toggles. The node's main loop and the match runner
 both use it, so they behave the same.
@@ -209,7 +226,7 @@ Fixed (2026-11-14):
 | Possession was always "loose": `DRIBBLER_RANGE` (0.05 m) was measured from the robot's centre, closer than the robot and ball radii (~0.19 m) allow | `has_ball` is now "ball in the kick zone" (`state.ball_in_front`); `ball_holder` says who |
 | Kickoff was detected once, never after a goal or half time | `Brain` resets it on every goal and new half; `game_phase` is `"kickoff"` until the ball moves |
 | The sim's score, half, time left and goals weren't read | `GameState` has `score_ours`, `score_theirs`, `half`, `time_remaining`, `goal_seq`; `game_phase` is `"halt"` once the game is over |
-| Ball prediction assumed constant speed | `prediction.py` slows the ball as the sim does: `p(t) = p0 + v0 (1 - e^(-k t)) / k`, k = `BALL_DAMP`. A test checks it against the physics |
+| Ball prediction assumed constant speed | `world/prediction.py` slows the ball as the sim does: `p(t) = p0 + v0 (1 - e^(-k t)) / k`, k = `BALL_DAMP`. A test checks it against the physics |
 | Tuned distances ignored `--field` | They now scale with `FIELD_SCALE`, like the robot and the kick zone. A stopgap: the design moves decisions to time |
 | Robots the camera lost were still planned | `GameState` keeps `from_camera` / `stale`; a camera robot unseen for 0.5 s is left out, and the team is planned without it |
 | The attacker never pushed the ball: it drove to its spot behind the ball, counted as arrived there and stopped, short of the ball (261 mm away on 9 x 6, where touching is 186 mm). The ball only moved through collisions and contested kicks | `tactics/attacker.py`: once lined up it drives through the ball (`lined_up`, `PUSH_THROUGH`), aiming into the goal (`aim_point`). `sim/config.py`: `ARRIVAL_THRESH` shrinks with the robot (36 mm was more than a small-field robot's radius). A lone attacker now scores from anywhere, on both field sizes |
@@ -271,7 +288,7 @@ strongest Small Size League (SSL) teams do now [3, 4, 5, 6].
    Filter out the impossible ones, rate each separately (goal chance,
    interception risk, progress) and pick by priority: a good shot first, then a
    safe pass forward, then keeping the ball [4, 5]. `has_clear_shot` and
-   `can_pass_ball` in `geometry.py` are the first versions of these ratings.
+   `can_pass_ball` in `world/geometry.py` are the first versions of these ratings.
 6. **Supporter and defenders follow CMDragons [3].** The supporter holds
    `ball + d u`, with `u` toward blocking our goal when an opponent is near the
    ball and toward their goal otherwise. Defenders stand on the line from each
@@ -305,16 +322,15 @@ tick(state):
 
 | Layer | Job | Files |
 | --- | --- | --- |
-| Analysis | Everything measured once per frame, shared by the layers below | `analysis.py` (new), `prediction.py`, `geometry.py` |
-| Plays | Pick what the team does; set pieces commit until done | `plays/playbook.py`, `plays/kickoff.py`; open play in `plays/offensive.py` and `plays/defensive.py`, to merge into one |
+| Analysis | Everything measured once per frame, shared by the layers below | `world/analysis.py` (new), `world/prediction.py`, `world/geometry.py` |
+| Plays | Pick what the team does; set pieces commit until done | `plays/` (new): a playbook, kickoff, open play |
 | Roles | Hand out tasks by priority and cost, keep roles stable | `tactics/role_assignments.py` |
 | Tactics | One robot's behaviour; the attacker rates options | `tactics/attacker.py`, `tactics/supporter.py`, `tactics/defender.py` |
-| Skills | Reusable moves with no game knowledge; each says when it applies | `skills/navigate.py`, `skills/kick.py`, `skills/dribble.py`, `skills/rl_kick.py` |
+| Skills | Reusable moves with no game knowledge; each says when it applies | `skills/navigate.py`, `skills/rl_kick.py` |
 | Evaluation | Headless games, new strategy against old | `eval/match.py` (new) |
 
-`BT/tree.py` isn't needed for this: the top level is a switch on game state in
-`playbook.py`. A full behavior-tree engine [12, 13] can come back if the plays
-outgrow the switch.
+There's no behavior-tree engine: the top level is a switch on game state in
+the playbook. One [12, 13] can come in if the plays outgrow a switch.
 
 The strategy's own messages stay as they are, so robot_node, the Pygame window
 and the web app need no change. One addition: the active play and each
@@ -325,15 +341,15 @@ viewers can show them.
 
 Each step has to match or beat the one before it in the match runner.
 
-1. Fix the [known issues](#known-issues) in `state.py` and `prediction.py`;
+1. Fix the [known issues](#known-issues) in `world/state.py` and `world/prediction.py`;
    build the match runner; add tests for `decide()`. **Done 2026-11-14**
    ([Testing and matches](#testing-and-matches)).
 2. Split `decide()` into tactics and skills without changing how it plays.
-   **Done 2026-11-14:** `tactics/`, `skills/navigate.py`, `command.py`. Checked
+   **Done 2026-11-14:** `tactics/`, `skills/navigate.py`, `core/command.py`. Checked
    identical to the step-1 code on 20,000 random positions and whole games, on
    both 9 x 6 and 1.93 x 1.32.
 3. Analysis: time to reach, damped ball prediction, threats. **Done
-   2026-11-14** (`analysis.py`, not used by `decide()` yet): `time_to_reach`,
+   2026-11-14** (`world/analysis.py`, not used by `decide()` yet): `time_to_reach`,
    `ball_intercept`, and `analyze()` giving each team the race to the ball
    (`race_margin`, seconds) and CMDragons' first- and second-level threats [3].
    The motion model is the sim's drive model and matches the physics to within
@@ -355,7 +371,7 @@ games of 120 s (v0 never touches the ball there); on 9 x 6, even, 15-16 over
 The original STP sketch (March 2026). It picks the open-play play from
 possession, which the design above replaces. Set pieces still work this way.
 
-![STP execution trace](./stp_architecture_and_execution.svg)
+![STP execution trace](./docs/stp_architecture_and_execution.svg)
 
 ## References
 

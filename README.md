@@ -237,13 +237,16 @@ robocup_software/
 │   ├── robot_node.py           # PD / time-optimal / MPC controllers -> wheel speeds
 │   ├── viz_node.py             # Pygame field view, mouse/keyboard/gamepad input
 │   ├── vision_bridge.py        # camera tracking -> sim (--vision)
+│   ├── ball_contact.py         # kicker and dribbler physics
 │   ├── config.py               # all shared constants: ports, field, hardware, gains
 │   └── requirements.txt
 ├── strategy/                   # team strategy (Python package `strategy`)
-│   ├── strategy_node.py        # entry point: world state -> robot targets
-│   ├── state.py, geometry.py, prediction.py
-│   ├── tactics/                # role assignment, attacker, supporter, defender
-│   ├── skills/                 # navigate, kick, dribble, rl_kick (plays/, BT/ are stubs; plan in strategy/README.md)
+│   ├── strategy_node.py        # the process: world state in, robot targets out
+│   ├── api.py                  # the behaviour interface: Me, World, Command (students start here)
+│   ├── tactics/                # the built-in roles, written against api.py: role assignment, attacker, supporter, defender
+│   ├── skills/                 # navigate, rl_kick
+│   ├── core/                   # how a frame runs: Brain (memory), decide(), the replaceable slots
+│   ├── world/                  # what the team knows: game state, geometry, ball prediction, analysis, sim settings
 │   ├── eval/                   # headless match runner + frozen baseline strategy (v0)
 │   ├── tests/                  # strategy unit tests
 │   └── rl/                     # PPO kick skill: env, reward, train, eval, checkpoints/
@@ -362,7 +365,7 @@ pip venv, drop the `uv run`.
 | Command | Flags |
 | --- | --- |
 | `simulation_node.py` | `--headless` (run physics as fast as possible), `--seed N` (seed + jitter initial positions), plus the vision flags above |
-| `strategy_node.py` | `--mode zmq\|tcp` (default `zmq`), `--color blue\|red`, `--rl-checkpoint PATH` |
+| `strategy_node.py` | `--color blue\|red`, `--rl-checkpoint PATH` |
 
 To give a standalone node a custom field size, set `ROBOCUP_FIELD="1.93 1.32"`
 in the environment (`run_pipeline.py` does this for you).
@@ -481,9 +484,9 @@ at commit `80eb3ad`; that repo has its history.
 
 ## Status and caveats
 
-- The team AI is `decide()` in `strategy/strategy_node.py`, running the role
-  assignment and tactics in `strategy/tactics/` for both teams.
-  `strategy/plays/` and `BT/tree.py` are empty placeholders. The plan for
+- The team AI is `decide()` in `strategy/core/team.py`: for both teams, a role
+  for each robot, then that role's slot, built-in (`strategy/tactics/`) or
+  replaced (`strategy/core/slots.py`). Plays don't exist yet. The plan for
   plays → roles → tactics → skills, based on CMU's Skills, Tactics and Plays and on what current Small
   Size League teams (CMDragons, TIGERs Mannheim, RoboJackets) do, is in
   [strategy/README.md](strategy/README.md#design), with its references and

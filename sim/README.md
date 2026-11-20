@@ -132,6 +132,7 @@ sim/
 ├── run_pipeline.py      # launcher: starts the four nodes, stops them on Ctrl+C
 ├── simulation_node.py   # physics + game, publishes the world state
 ├── pymunk_world.py      # the Pymunk world: robots, ball, walls, kicks, dribbling
+├── ball_contact.py      # kicker and dribbler physics (kick zone size in config.py)
 ├── robot_node.py        # controllers: targets -> wheel speeds (and body commands for real robots)
 ├── viz_node.py          # Pygame window: field, clicks, keys, gamepads
 ├── vision_bridge.py     # camera tracking -> sim (--vision)
