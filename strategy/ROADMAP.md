@@ -15,7 +15,8 @@ behaviour can be swapped for another without touching the rest.
 
 Status (2026-11-20): design steps 1-3 are done (fixes, match runner and
 tests, tactics split out of `decide()`, the time-based analysis layer), and
-the attacker pushes the ball through. Next is step 1 below.
+the attacker pushes the ball through. Step 1 below (slots) is done; next is
+step 2.
 
 ## 1. Strategy: next steps
 
@@ -29,6 +30,13 @@ runner (`python -m strategy.eval.match`).
    implementation. Behaviours should be able to say when they apply, which
    is what makes a behavior tree work [12]. Checked to play exactly like the
    code before it.
+   **Done 2026-11-20:** `api.py` (`Me`, `World`), `slots.py` (`Team`,
+   `DEFAULT_TEAM`, fallback to the built-in slot on errors), `teams=` in
+   `decide()`, `Brain` and the match runner (`team_a` / `team_b`); see
+   [Replace a behaviour](README.md#replace-a-behaviour). Identical to the
+   code before it on 20,000 random positions and whole games on both field
+   sizes. Not yet: skill-level slots (go to, kick toward) and behaviours
+   saying when they apply; those come with the steps that need them.
 2. **Plug the analysis layer in.** `analyze()` (`analysis.py`) is computed
    once per frame and handed to every behaviour; today nothing uses it.
 3. **Threat-based defense and the CMDragons supporter [3, 4].** Defenders

@@ -82,7 +82,10 @@ zones are in `skills/dribble.py` and `skills/kick.py`.
 
 ```
 strategy/
-├── strategy_node.py      # entry point: decide() runs the tactics for both teams; Brain (memory between frames)
+├── strategy_node.py      # entry point: decide() runs each team's slots; Brain (memory between frames)
+├── api.py                # what every behaviour is written against: Me (a robot) and World
+├── slots.py              # the replaceable pieces: Team, DEFAULT_TEAM, fall back to built-in on errors
+├── ROADMAP.md            # next steps, and the student platform plan
 ├── state.py              # GameState, built from the world-state JSON each frame
 ├── command.py            # Command: what a tactic tells one robot (target, heading, kick)
 ├── analysis.py           # once per frame, in seconds: time to reach, ball intercepts, who wins the race, threats
@@ -129,6 +132,42 @@ Out (port 9091, to `sim/robot_node.py`), after each tick:
 `angle` is the heading to face (radians, counter-clockwise from +x). Kicks and
 dribbler on/off go straight to the simulator (port 9092). robot_node only uses
 the targets while strategy is turned on.
+
+## Replace a behaviour
+
+Each role, and who plays which role, is a slot (`slots.py`) with a built-in
+default. Write a function against `api.py` and swap it in; the rest of the
+team keeps the built-in slots:
+
+```python
+from strategy.api import Me, World
+from strategy.slots import DEFAULT_TEAM
+
+def get_open(me: Me, world: World):
+    spot = world.ball.pos + (world.their_goal - world.ball.pos) * 0.4
+    return me.go_to(spot, face=world.ball.pos)
+
+my_team = DEFAULT_TEAM.replace(supporter=get_open)
+```
+
+| Slot | Signature | Built-in |
+| --- | --- | --- |
+| `roles` | `roles(team: list[Me], world) -> [(Me, role), ...]` | closest to the ball attacks, next supports, rest defend |
+| `attacker` | `attacker(me, world) -> Command` | `tactics/attacker.py` |
+| `supporter` | `supporter(me, world) -> Command` | `tactics/supporter.py` |
+| `defender` | `defender(me, world) -> Command` (also a robot playing alone) | `tactics/defender.py` |
+
+- `me`: `id`, `pos`, `vel`, `angle`, `has_ball`, `distance_to()`, `angle_to()`;
+  commands `go_to(target, face=..., kick=...)`, `face(...)`, `stop()`.
+- `world`: `ball`, `teammates`, `opponents`, `our_goal`, `their_goal`,
+  `attack_angle`, `phase`, `kicked_off`, `lane_clear(a, b)`, `memory` (your
+  notes, kept between frames), and `analysis` / `us` (`analysis.py`: who
+  reaches the ball first, threats; computed only if asked for).
+- A replaced slot that raises, returns something that isn't a `Command`, or
+  gives a role list that misses a robot falls back to the built-in slot for
+  that frame; the error is logged once.
+- Try it: `Brain(color, teams={"blue": my_team})`, or in the match runner,
+  `match.play_game(decide, decide, True, seed=0, duration_s=60, team_a=my_team)`.
 
 ## Testing and matches
 
