@@ -24,7 +24,7 @@ from strategy.command import Command
 from strategy.geometry import attack_angle, is_blocking, opp_goal, our_goal
 from strategy.state import ROBOT_RADIUS, BallState, GameState, RobotState
 
-from config import BALL_RADIUS  # noqa: E402  (sim/config.py, on sys.path via strategy.state)
+from strategy.simconfig import BALL_RADIUS
 
 if TYPE_CHECKING:
     from strategy.analysis import Analysis, TeamView

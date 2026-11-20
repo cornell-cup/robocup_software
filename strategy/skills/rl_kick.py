@@ -9,19 +9,12 @@ this works without retraining.
 from __future__ import annotations
 
 import math
-import os
-import sys
 
 import numpy as np
 from stable_baselines3 import PPO
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_ROOT = os.path.dirname(os.path.dirname(_HERE))
-sys.path.insert(0, os.path.join(_ROOT, "sim"))
-
-from config import FIELD_H, FIELD_IS_DEFAULT, FIELD_W  # noqa: E402
-
 from strategy.rl.env import SUBGOAL_RANGE, make_kick_obs
+from strategy.simconfig import FIELD_H, FIELD_IS_DEFAULT, FIELD_W
 from strategy.state import BallState, RobotState
 
 

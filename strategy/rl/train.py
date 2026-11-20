@@ -13,9 +13,10 @@ from collections.abc import Callable
 from datetime import datetime
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
+# Run as a script: put the repo root on sys.path so `strategy` imports.
 _ROOT = os.path.dirname(os.path.dirname(_HERE))
-sys.path.insert(0, _ROOT)
-sys.path.insert(0, os.path.join(_ROOT, "sim"))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
 import gymnasium as gym  # noqa: E402
 import numpy as np  # noqa: E402

@@ -19,11 +19,20 @@ import gymnasium as gym
 import numpy as np
 from gymnasium import spaces
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_ROOT = os.path.dirname(os.path.dirname(_HERE))
-sys.path.insert(0, os.path.join(_ROOT, "sim"))
+# Run as a script (`python strategy/rl/env.py --check`): put the repo root on
+# sys.path so `strategy` imports.
+_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
-from config import (  # noqa: E402
+from strategy.rl.reward import (  # noqa: E402
+    GOAL_SCORED_BONUS,
+    OUT_OF_FIELD_PENALTY,
+    OWN_GOAL_PENALTY,
+    RewardTerms,
+    compute_step_reward,
+)
+from strategy.simconfig import (  # noqa: E402
     FIELD_H,
     FIELD_IS_DEFAULT,
     FIELD_W,
@@ -35,19 +44,9 @@ from config import (  # noqa: E402
     WHEEL_ANGLES,
     WHEEL_DISTANCE,
 )
-from pymunk_world import PymunkWorld  # noqa: E402
+from strategy.skills.kick import KICK_ZONE_DEPTH, KICK_ZONE_HALF_WIDTH  # noqa: E402
 
-from strategy.rl.reward import (  # noqa: E402
-    GOAL_SCORED_BONUS,
-    OUT_OF_FIELD_PENALTY,
-    OWN_GOAL_PENALTY,
-    RewardTerms,
-    compute_step_reward,
-)
-from strategy.skills.kick import (  # noqa: E402
-    KICK_ZONE_DEPTH,
-    KICK_ZONE_HALF_WIDTH,
-)
+from pymunk_world import PymunkWorld  # noqa: E402  (sim/, on sys.path via strategy.simconfig)
 
 SUBGOAL_RANGE = 1.5  # meters from robot — action a[0], a[1] are scaled by this
 CONTROL_SUBSTEPS = 4  # physics ticks per env step -> 15 Hz policy at DT=1/60

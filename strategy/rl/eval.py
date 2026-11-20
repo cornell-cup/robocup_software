@@ -6,10 +6,10 @@ import argparse
 import os
 import sys
 
-_HERE = os.path.dirname(os.path.abspath(__file__))
-_ROOT = os.path.dirname(os.path.dirname(_HERE))
-sys.path.insert(0, _ROOT)
-sys.path.insert(0, os.path.join(_ROOT, "sim"))
+# Run as a script: put the repo root on sys.path so `strategy` imports.
+_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
 from stable_baselines3 import PPO  # noqa: E402
 

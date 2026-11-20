@@ -20,27 +20,21 @@ from __future__ import annotations
 
 import argparse
 import math
-import os
 import statistics
-import sys
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-for _p in (_ROOT, os.path.join(_ROOT, "sim")):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
+from strategy import strategy_node
+from strategy.eval import baseline_v0
+from strategy.simconfig import DT, FIELD_W, NUM_ROBOTS, TEAM_BLUE_SIZE
+from strategy.slots import Team
+from strategy.strategy_node import Brain, resolve_kick_conflict
 
-from config import DT, FIELD_W, NUM_ROBOTS, TEAM_BLUE_SIZE  # noqa: E402
+# sim/ modules, importable through strategy.simconfig
 from pymunk_world import PymunkWorld, scorer  # noqa: E402
 from robot_node import RobotController  # noqa: E402
 from simulation_node import BALL_STUCK_DURATION, BALL_STUCK_THRESHOLD  # noqa: E402
-
-from strategy import strategy_node  # noqa: E402
-from strategy.eval import baseline_v0  # noqa: E402
-from strategy.slots import Team  # noqa: E402
-from strategy.strategy_node import Brain, resolve_kick_conflict  # noqa: E402
 
 STRATEGIES: dict[str, Callable[..., Any]] = {
     "current": strategy_node.decide,

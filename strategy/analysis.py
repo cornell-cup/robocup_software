@@ -31,10 +31,10 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from strategy.geometry import our_goal
-from strategy.prediction import ball_rest_position, predict_ball_position
+from strategy.prediction import ball_rest_position
 from strategy.state import BallState, GameState, RobotState
 
-from config import (  # noqa: E402  (sim/config.py, on sys.path via strategy.state)
+from strategy.simconfig import (
     BALL_DAMP,
     BALL_RADIUS,
     LINEAR_DAMP,

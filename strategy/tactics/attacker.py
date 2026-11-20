@@ -21,7 +21,7 @@ from strategy.geometry import attack_angle, distance, opp_goal, wrap_angle
 from strategy.skills.navigate import behind_ball, heading_while_driving
 from strategy.state import FIELD_SCALE, GOAL_MOUTH_H, GOAL_Y_MAX, GOAL_Y_MIN, BallState, GameState, RobotState
 
-from config import ARRIVAL_THRESH  # noqa: E402  (sim/config.py, on sys.path via strategy.state)
+from strategy.simconfig import ARRIVAL_THRESH
 
 if TYPE_CHECKING:
     from strategy.skills.rl_kick import RLKickSkill

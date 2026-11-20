@@ -2,9 +2,8 @@ import math
 
 import numpy as np
 
-from strategy.state import BallState, RobotState  # also puts sim/ on sys.path
-
-from config import BALL_DAMP  # noqa: E402  (sim/config.py)
+from strategy.simconfig import BALL_DAMP
+from strategy.state import BallState, RobotState
 
 # The sim slows the ball by BALL_DAMP per second (pymunk_world._apply_damping:
 # v *= 1 - k dt every substep), so v(t) = v0 e^(-k t) and the ball travels

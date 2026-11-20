@@ -1,19 +1,20 @@
 import math
-import os
-import sys
 from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
 
 # Field geometry comes from sim/config.py so a custom --field reaches strategy.
-_PYTHON_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "sim")
-if _PYTHON_DIR not in sys.path:
-    sys.path.insert(0, _PYTHON_DIR)
-
-from config import FIELD_H, FIELD_SCALE, FIELD_W, GOAL_MOUTH_H, GOAL_Y_MAX, GOAL_Y_MIN, ROBOT_RADIUS  # noqa: E402, F401
-
-from strategy.skills.kick import KICK_ZONE_DEPTH, KICK_ZONE_HALF_WIDTH  # noqa: E402
+from strategy.simconfig import (  # noqa: F401  (re-exported for the rest of strategy/)
+    FIELD_H,
+    FIELD_SCALE,
+    FIELD_W,
+    GOAL_MOUTH_H,
+    GOAL_Y_MAX,
+    GOAL_Y_MIN,
+    ROBOT_RADIUS,
+)
+from strategy.skills.kick import KICK_ZONE_DEPTH, KICK_ZONE_HALF_WIDTH
 
 FIELD_LENGTH = FIELD_W  # meters, along x (9 by default)
 FIELD_WIDTH = FIELD_H  # meters, along y (6 by default)
