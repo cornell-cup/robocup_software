@@ -564,6 +564,17 @@ class TestSlots(unittest.TestCase):
 
 
 class TestMatch(unittest.TestCase):
+    def test_v1_plays_like_the_built_in_team(self):
+        """baseline_v1 is a frozen copy of today's built-in team. When the
+        built-in team changes on purpose, drop this test: v1 stays the bar."""
+        from strategy.eval import baseline_v1
+
+        gs = build_game_state(world(ball=(4.2, 2.6, 0.4, -0.2)))
+        self.assertEqual(decide(gs, sticky_attackers={}), baseline_v1.decide(gs, sticky_attackers={}))
+        a = match.play_game(decide, decide, True, seed=4, duration_s=15)
+        b = match.play_game(baseline_v1.decide, baseline_v1.decide, True, seed=4, duration_s=15)
+        self.assertEqual(a, b)
+
     def test_goal_goes_to_the_team_that_scored(self):
         """Blue attacks +x: a ball into the x = FIELD_W goal (red's) is blue's goal."""
         from pymunk_world import PymunkWorld, scorer
