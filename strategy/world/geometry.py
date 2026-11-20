@@ -1,6 +1,7 @@
 import math
 
 import numpy as np
+
 from strategy.world.state import BLUE_GOAL, RED_GOAL, RobotState
 
 

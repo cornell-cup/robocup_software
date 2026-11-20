@@ -22,13 +22,12 @@ import numpy as np
 
 from strategy.core.command import Command
 from strategy.world.geometry import attack_angle, is_blocking, opp_goal, our_goal
+from strategy.world.simconfig import BALL_RADIUS
 from strategy.world.state import ROBOT_RADIUS, BallState, GameState, RobotState
 
-from strategy.world.simconfig import BALL_RADIUS
-
 if TYPE_CHECKING:
-    from strategy.world.analysis import Analysis, TeamView
     from strategy.skills.rl_kick import RLKickSkill
+    from strategy.world.analysis import Analysis, TeamView
 
 Point = Any  # anything with two numbers: (x, y), a list, a numpy array
 

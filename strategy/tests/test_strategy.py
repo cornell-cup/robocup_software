@@ -13,15 +13,32 @@ from typing import Any
 
 import numpy as np
 
-from strategy.world.analysis import analyze, ball_intercept, drive_accel, time_to_reach
 from strategy.api import Me, World
+from strategy.core.brain import Brain
 from strategy.core.command import Command
+from strategy.core.slots import DEFAULT_TEAM, Team
+from strategy.core.team import decide, resolve_kick_conflict
 from strategy.eval import match
+from strategy.tactics.attacker import (
+    APPROACH_OFFSET,
+    CONTESTED_SKEW,
+    aim_point,
+    attacker,
+)
+from strategy.tactics.defender import defend_goal
+from strategy.tactics.role_assignments import (
+    ATTACKER,
+    DEFENDER,
+    SUPPORTER,
+    assign_roles,
+)
+from strategy.world.analysis import analyze, ball_intercept, drive_accel, time_to_reach
 from strategy.world.prediction import (
     ball_rest_position,
     predict_ball_position,
     predict_ball_velocity,
 )
+from strategy.world.simconfig import BALL_DAMP, DT
 from strategy.world.state import (
     GOAL_Y_MAX,
     GOAL_Y_MIN,
@@ -30,14 +47,7 @@ from strategy.world.state import (
     RobotState,
     build_game_state,
 )
-from strategy.core.slots import DEFAULT_TEAM, Team
-from strategy.core.brain import Brain
-from strategy.core.team import decide, resolve_kick_conflict
-from strategy.tactics.attacker import APPROACH_OFFSET, CONTESTED_SKEW, aim_point, attacker
-from strategy.tactics.defender import defend_goal
-from strategy.tactics.role_assignments import ATTACKER, DEFENDER, SUPPORTER, assign_roles
 
-from strategy.world.simconfig import BALL_DAMP, DT
 
 def attack_as(robot, gs, color):
     """The built-in attacker slot for one robot, as decide() runs it."""
@@ -238,9 +248,11 @@ def corner_squeeze(seconds: float = 5.0) -> float:
     """Pin the ball in each corner and drive a robot flat out into it, as in a
     scrum. Returns the farthest the ball's centre ever got past the field edge
     (m); 0 if it stayed inside."""
-    from strategy.world.simconfig import BALL_RADIUS, FIELD_H, FIELD_W, ROBOT_RADIUS as R
     from pymunk_world import PymunkWorld
     from robot_node import RobotController
+
+    from strategy.world.simconfig import BALL_RADIUS, FIELD_H, FIELD_W
+    from strategy.world.simconfig import ROBOT_RADIUS as R
 
     worst = 0.0
     for cx, cy in ((0.0, 0.0), (FIELD_W, 0.0), (0.0, FIELD_H), (FIELD_W, FIELD_H)):
@@ -391,9 +403,10 @@ class TestBrain(unittest.TestCase):
 def lone_attacker_scores(ball_frac: tuple[float, float], limit_s: float = 30.0) -> float | None:
     """Blue robot 1 alone against a still ball (everyone else off the field):
     seconds until it scores in red's goal, None if not within `limit_s`."""
-    from strategy.world.simconfig import FIELD_H, FIELD_W
     from pymunk_world import PymunkWorld
     from robot_node import RobotController
+
+    from strategy.world.simconfig import FIELD_H, FIELD_W
 
     brain = Brain("blue")
     brain.handle_control({"human_blue_ids": [0]})  # robot 2 stays off the field: 1 attacks
@@ -553,8 +566,9 @@ class TestSlots(unittest.TestCase):
 class TestMatch(unittest.TestCase):
     def test_goal_goes_to_the_team_that_scored(self):
         """Blue attacks +x: a ball into the x = FIELD_W goal (red's) is blue's goal."""
-        from strategy.world.simconfig import FIELD_H, FIELD_W
         from pymunk_world import PymunkWorld, scorer
+
+        from strategy.world.simconfig import FIELD_H, FIELD_W
 
         w = PymunkWorld()
         w.reset_ball((FIELD_W - 0.3, FIELD_H / 2))

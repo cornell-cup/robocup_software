@@ -22,7 +22,12 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from strategy.core.brain import DEFAULT_RL_CHECKPOINT, Brain  # noqa: E402
-from strategy.world.simconfig import COMMAND_PORT, MANUAL_PORT, STRATEGY_PORT, VISION_PORT  # noqa: E402
+from strategy.world.simconfig import (  # noqa: E402
+    COMMAND_PORT,
+    MANUAL_PORT,
+    STRATEGY_PORT,
+    VISION_PORT,
+)
 
 
 @final

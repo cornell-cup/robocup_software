@@ -13,8 +13,8 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from strategy.core.slots import Team
-from strategy.world.state import GameState, build_game_state
 from strategy.core.team import decide, resolve_kick_conflict
+from strategy.world.state import GameState, build_game_state
 
 if TYPE_CHECKING:
     from strategy.skills.rl_kick import RLKickSkill

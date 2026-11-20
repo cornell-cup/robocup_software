@@ -6,8 +6,8 @@ import numpy as np
 
 from strategy.api import Me, World
 from strategy.core.command import Command
-from strategy.world.geometry import attack_angle, opp_goal
 from strategy.skills.navigate import face_point
+from strategy.world.geometry import attack_angle, opp_goal
 from strategy.world.state import FIELD_SCALE
 
 # Distances are tuned on 9 x 6 and scaled by FIELD_SCALE (see attacker.py).

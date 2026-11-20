@@ -9,10 +9,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from strategy.api import World
-from strategy.world.geometry import distance
 from strategy.core.slots import DEFAULT_TEAM, Team, run_behavior, run_roles
-from strategy.world.state import GameState
 from strategy.tactics.role_assignments import ATTACKER
+from strategy.world.geometry import distance
+from strategy.world.state import GameState
 
 if TYPE_CHECKING:
     from strategy.skills.rl_kick import RLKickSkill

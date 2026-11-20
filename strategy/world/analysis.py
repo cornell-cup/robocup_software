@@ -32,8 +32,6 @@ import numpy as np
 
 from strategy.world.geometry import our_goal
 from strategy.world.prediction import ball_rest_position
-from strategy.world.state import BallState, GameState, RobotState
-
 from strategy.world.simconfig import (
     BALL_DAMP,
     BALL_RADIUS,
@@ -43,6 +41,7 @@ from strategy.world.simconfig import (
     ROBOT_RADIUS,
     WHEEL_ANGLES,
 )
+from strategy.world.state import BallState, GameState, RobotState
 
 _WHEELS = np.asarray(WHEEL_ANGLES, dtype=float)
 # Centre-to-centre distance at which a robot touches the ball.

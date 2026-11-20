@@ -26,12 +26,13 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from strategy.core.brain import Brain
-from strategy.eval import baseline_v0
-from strategy.world.simconfig import DT, FIELD_W, NUM_ROBOTS, TEAM_BLUE_SIZE
 from strategy.core.slots import Team
 from strategy.core.team import decide, resolve_kick_conflict
+from strategy.eval import baseline_v0
+from strategy.world.simconfig import DT, FIELD_W, NUM_ROBOTS, TEAM_BLUE_SIZE
 
-# sim/ modules, importable through strategy.world.simconfig
+# isort: split
+# sim/ modules: importable once strategy.world.simconfig (above) puts sim/ on sys.path
 from pymunk_world import PymunkWorld, scorer
 from robot_node import RobotController
 from simulation_node import BALL_STUCK_DURATION, BALL_STUCK_THRESHOLD

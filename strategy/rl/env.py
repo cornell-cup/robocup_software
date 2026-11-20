@@ -10,6 +10,7 @@ import math
 import os
 import sys
 from typing import Any
+
 try:
     from typing import override
 except ImportError:
@@ -47,6 +48,7 @@ from strategy.world.simconfig import (  # noqa: E402
     WHEEL_DISTANCE,
 )
 
+# isort: split
 from pymunk_world import PymunkWorld  # noqa: E402  (sim/, on sys.path via strategy.world.simconfig)
 
 SUBGOAL_RANGE = 1.5  # meters from robot — action a[0], a[1] are scaled by this

@@ -18,7 +18,6 @@ strategy.)
 import math
 
 import pymunk
-
 from config import FIELD_SCALE, KICK_ZONE_DEPTH, KICK_ZONE_HALF_WIDTH, ROBOT_RADIUS
 
 KICK_IMPULSE = 0.22  # N s along the robot's heading

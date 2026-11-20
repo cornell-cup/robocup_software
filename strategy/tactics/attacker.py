@@ -17,10 +17,17 @@ import numpy as np
 
 from strategy.api import Me, World
 from strategy.core.command import Command
+from strategy.skills.navigate import behind_ball, heading_while_driving
 from strategy.world.geometry import attack_angle, distance, opp_goal, wrap_angle
 from strategy.world.simconfig import ARRIVAL_THRESH
-from strategy.skills.navigate import behind_ball, heading_while_driving
-from strategy.world.state import FIELD_SCALE, GOAL_MOUTH_H, GOAL_Y_MAX, GOAL_Y_MIN, BallState, RobotState
+from strategy.world.state import (
+    FIELD_SCALE,
+    GOAL_MOUTH_H,
+    GOAL_Y_MAX,
+    GOAL_Y_MIN,
+    BallState,
+    RobotState,
+)
 
 # Distances below are tuned on the 9 x 6 field and scaled by FIELD_SCALE, like
 # the robot, ball and kick zone (sim/config.py), so on a custom --field they
