@@ -15,12 +15,14 @@ which role, and which function each role runs, is set by a Team (core/slots.py).
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable
 from functools import cached_property
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 from strategy.core.command import Command
+from strategy.core.drawing import Drawing, Shown
 from strategy.world.geometry import attack_angle, is_blocking, opp_goal, our_goal
 from strategy.world.simconfig import BALL_RADIUS
 from strategy.world.state import (
@@ -78,10 +80,17 @@ class Me:
         d = _xy(point) - self.pos
         return math.atan2(float(d[1]), float(d[0]))
 
-    def go_to(self, target: Point, face: Point | float | None = None, kick: bool = False) -> Command:
+    def go_to(self, target: Point, face: Point | float | None = None, kick: bool = False,
+              dribble: bool = False, max_speed: float | None = None) -> Command:
         """Drive to `target`. `face`: a point to look at, or a heading in
         radians; by default the robot faces where it's going. `kick`: fire
-        the kicker (it only does anything with the ball in front)."""
+        the kicker (it only does anything with the ball in front).
+        `dribble`: dribbler on, to hold the ball while driving (a kick
+        doesn't fire while it's on). `max_speed`: no faster than this, m/s."""
+        if max_speed is not None:
+            max_speed = float(max_speed)
+            if not max_speed > 0:
+                raise ValueError(f"max_speed must be more than 0 m/s, got {max_speed!r}")
         t = _xy(target)
         if face is None:
             # Facing where it goes; already there, it keeps its heading.
@@ -90,15 +99,16 @@ class Me:
             heading = float(face)
         else:
             heading = self.angle_to(face)
-        return Command(float(t[0]), float(t[1]), heading, kick=kick)
+        return Command(float(t[0]), float(t[1]), heading, kick=bool(kick),
+                       dribble=bool(dribble), max_speed=max_speed)
 
-    def face(self, point: Point | float) -> Command:
+    def face(self, point: Point | float, dribble: bool = False) -> Command:
         """Stay here and turn toward a point (or to a heading, in radians)."""
-        return self.go_to(self.pos, face=point)
+        return self.go_to(self.pos, face=point, dribble=dribble)
 
-    def stop(self) -> Command:
+    def stop(self, dribble: bool = False) -> Command:
         """Stay where it is, facing the way it faces."""
-        return Command(float(self.pos[0]), float(self.pos[1]), self.angle)
+        return Command(float(self.pos[0]), float(self.pos[1]), self.angle, dribble=bool(dribble))
 
     def __repr__(self) -> str:
         return f"Me(id={self.id}, pos=({self.pos[0]:.2f}, {self.pos[1]:.2f}))"
@@ -119,6 +129,7 @@ class World:
         rl_skill: "RLKickSkill | None" = None,
         rl_enabled: bool = False,
         sticky: dict[str, int] | None = None,
+        events: Iterable[str] = (),
     ):
         self.gamestate = gamestate
         self.color = color
@@ -134,6 +145,17 @@ class World:
         self.rl_enabled = rl_enabled
         # Each team's attacker last frame, kept by the built-in roles slot.
         self.sticky: dict[str, int] = sticky if sticky is not None else {}
+        # What happened since last frame: "new_game", "goal_for",
+        # "goal_against", "half_time", "kickoff". Usually empty.
+        self.events: list[str] = list(events)
+        # Shapes on the field and values beside it, this frame only.
+        self.draw = Drawing(color)
+        self.show = Shown()
+
+    def _running_for(self, robot: int | None) -> None:
+        """Whose slot runs now: its drawings and shown values are tagged with it."""
+        self.draw.robot = robot
+        self.show.robot = robot
 
     @property
     def ball(self) -> BallState:
