@@ -13,6 +13,10 @@ class Command:
     # Fire the kicker this frame. Safe to send every frame: the sim only kicks
     # when the ball is in the kick zone (sim/ball_contact.py).
     kick: bool = False
+    # Dribbler on this frame (it holds a ball that's in front of the robot).
+    dribble: bool = False
+    # Drive no faster than this, m/s (None: full speed).
+    max_speed: float | None = None
 
     @property
     def target(self) -> tuple[float, float, float]:
