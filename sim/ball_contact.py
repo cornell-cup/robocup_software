@@ -72,7 +72,6 @@ def try_dribble_ball(robot: pymunk.Body, ball: pymunk.Body, dt: float) -> bool:
     dy = ball.position.y - robot.position.y
     lx, ly = _to_local(robot, dx, dy)
 
-    zone_min_x = ROBOT_RADIUS
     zone_max_x = ROBOT_RADIUS + DRIBBLE_ZONE_DEPTH
 
     # Widen capture slightly so ball can be scooped from just outside
