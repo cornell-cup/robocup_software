@@ -10,7 +10,8 @@ full game, from your first line of code on.
 60 times a second, for your team:
 
 1. **`prepare(world)`** runs once, if you wrote one (for work the whole team shares).
-2. **`roles(team, world)`** decides which robot plays which role: attacker, supporter or defender.
+2. **`roles(team, world)`** decides which robot plays which role: attacker, supporter or
+   defender (or a play, or your own roles: see [Plans for the whole team](#plans-for-the-whole-team)).
 3. For **each robot**, the function named after its role runs: `attacker(me, world)`,
    `supporter(me, world)` or `defender(me, world)`. It returns a **command**: where that
    robot should go this frame.
@@ -27,9 +28,10 @@ Delete it and the built-in one is back.
 | --- | --- | --- | --- |
 | `supporter(me, world)` | Where the second robot waits | 1.5 m ahead of the ball and 1 m to the side | Stand where a pass can reach you (start from **Example**) |
 | `defender(me, world)` | The goalie | On the line from our goal to the ball, stepping out as the ball comes close | Stay closer to the goal; rush out when the ball is near |
-| `attacker(me, world)` | The robot going for the ball | Gets behind the ball and pushes it toward their goal | Kick instead of pushing; aim at the open side of the goal |
+| `attacker(me, world)` | The robot going for the ball | Gets behind the ball and pushes it toward their goal; a rolling ball it meets where it can first reach it | Kick instead of pushing; aim at the open side of the goal |
 | `roles(team, world)` | Who plays which role | Closest to the ball attacks, next supports, the last defends | Two defenders when we're ahead |
 | `prepare(world)` | Nothing by itself: a place for shared work | Does nothing | Count goals, pick a plan for the whole team |
+| Your own roles, `PLAYS` and `pick_play`, `team()`, `kickoff()` | Plans for the whole team | None | See [Plans for the whole team](#plans-for-the-whole-team) |
 
 The easiest start: **New… → Template**. It has all of these, each calling the built-in
 one, so it plays exactly like the built-in team. Change one line, save, and watch.
@@ -199,9 +201,85 @@ def roles(team, world):
     return [(robot, names[i]) for i, robot in enumerate(by_distance)]
 ```
 
-`roles` has to give every robot in `team` exactly one role, each `"attacker"`,
-`"supporter"` or `"defender"`. `team` can have fewer than three robots (a robot the
-camera lost, or one someone is driving by hand).
+`roles` has to give every robot in `team` exactly one role: `"attacker"`, `"supporter"`,
+`"defender"`, `"goalie"`, or one of your own (next section). `team` can have fewer than
+three robots (a robot the camera lost, or one someone is driving by hand).
+
+## Plans for the whole team
+
+Once single robots do what you want, plan for the team. There are three ways, from
+simple to full control; use whichever fits.
+
+### Your own roles
+
+Any function in `team.py` can be a role. Write it like `supporter`, and give it to a
+robot in `roles`:
+
+```python
+def runner(me, world):
+    # Run ahead down the side, ready for a long pass.
+    length, width = world.field_size
+    ahead = world.ball.pos[0] + (1.5 if world.attack_angle == 0 else -1.5)
+    return me.go_to((min(max(ahead, 0.5), length - 0.5), width * 0.85), face=world.ball.pos)
+
+
+def roles(team, world):
+    by_distance = sorted(team, key=lambda robot: robot.distance_to(world.ball.pos))
+    names = ["attacker", "runner", "goalie"]
+    return [(robot, names[min(i, 2)]) for i, robot in enumerate(by_distance)]
+```
+
+`goalie` is a built-in role too: it plays like the built-in defender. A role with no
+function (a typo, say) is an error, and the built-in roles play that frame.
+
+### Plays
+
+A **play** is a plan for a situation: which roles the team needs, most important first.
+List your plays in `PLAYS`, and pick one in `pick_play`:
+
+```python
+PLAYS = {
+    "attack": ["attacker", "supporter", "goalie"],
+    "defend": ["attacker", "goalie", "goalie"],
+}
+
+
+def pick_play(world):
+    if world.us.race_margin < -0.3:  # they reach the ball well before us
+        return "defend"
+    return "attack"
+```
+
+The closest robot to the ball gets the play's first role, the next one the second, and so
+on. `world.play` says which play runs, and a new pick takes over only after `pick_play`
+has kept choosing it for a quarter of a second, so the team doesn't flicker between two.
+
+### The whole team at once
+
+`team(robots, world)` gives commands to any robots you like, all at once: the way to
+time a pass with a run, or to wall off the goal with two robots side by side. Return a
+dictionary `{robot: command}`; robots you leave out play their roles as usual.
+
+```python
+def team(robots, world):
+    if world.ball.pos[0] > world.field_size[0] / 2:
+        return {}  # ball in their half: everyone plays their role
+    goal = world.our_goal
+    # Ball in our half: the two robots nearest our goal make a wall in front of it.
+    wall = sorted(robots, key=lambda robot: robot.distance_to(goal))[:2]
+    inward = 0.5 if goal[0] < world.their_goal[0] else -0.5
+    return {
+        robot: robot.go_to((goal[0] + inward, goal[1] + side), face=world.ball.pos)
+        for robot, side in zip(wall, (-0.25, 0.25))
+    }
+```
+
+And `kickoff(robots, world)` says where robots stand before a kickoff: return
+`{robot: (x, y)}`, each spot on our half of the field. Leave out the robot that should
+take the kickoff: it plays its role (the attacker goes for the ball).
+
+When you write several of these, `team()` decides first, then `kickoff()`'s spots, then
+the play's roles (or `roles()`), then each robot's role function.
 
 ## More examples
 
@@ -283,8 +361,7 @@ same rule holds for everyone: you see the other team only on the field.
 
 How a robot drives to its target (speed, turning), the physics, the referee (goals,
 kickoffs), and the rule that only one robot's kick fires at a time. Coming later: smaller
-pieces to replace, like "kick toward a point" and "intercept a moving ball", your own role
-names, and plans for the whole team.
+pieces to replace, like "kick toward a point" and "intercept a moving ball".
 
 ## Read the built-in code
 

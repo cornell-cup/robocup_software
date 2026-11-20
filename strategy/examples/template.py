@@ -64,3 +64,7 @@ def defender(me: Me, world: World) -> Command:
 # def prepare(world: World) -> None:
 #     if "goal_against" in world.events:
 #         world.memory["conceded"] = world.memory.get("conceded", 0) + 1
+#
+# Plans for the whole team (your own roles, PLAYS and pick_play, team() for
+# every robot at once, kickoff() spots): the Guide tab, "Plans for the whole
+# team".
