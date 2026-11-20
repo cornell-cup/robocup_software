@@ -397,6 +397,7 @@ def main(argv: list[str]) -> None:
     events: list[str] = []
     memory: dict[str, dict[str, Any]] = {}
     sticky: dict[str, int] = {}
+    play_state: dict[str, dict[str, Any]] = {}
     events_seen = 0  # the newest request whose game events were played
     for frames, line in enumerate(sys.stdin, start=1):
         request = json.loads(line)
@@ -404,6 +405,7 @@ def main(argv: list[str]) -> None:
             color = request["color"]
             memory.clear()
             sticky.clear()
+            play_state.clear()
             events.append(describe())
         ours = set(range(TEAM_BLUE_SIZE)) if color == "blue" else \
             set(range(TEAM_BLUE_SIZE, TEAM_BLUE_SIZE + TEAM_RED_SIZE))
@@ -417,13 +419,14 @@ def main(argv: list[str]) -> None:
         if "new_game" in game_events:
             memory.clear()  # as Brain does on a sim restart
             sticky.clear()
+            play_state.clear()
         extras = Extras()
         teams = {color: team_file.team} if team_file.team is not None else {}
         targets, kicks, attackers = decide(
             gamestate, None, False, sticky, bool(request["kicked_off"]),
             set(request["human"]), set(request["lost"]),
             teams=teams, memory=memory, errors=errors, events=game_events, extras=extras,
-            colors=(color,),
+            colors=(color,), play_state=play_state,
         )
         answer = {
             "seq": request["seq"],

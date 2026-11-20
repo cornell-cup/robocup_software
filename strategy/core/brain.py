@@ -103,6 +103,7 @@ class Brain:
         self._last_t: float | None = None
         self._stale_since: dict[int, float] = {}
         self.memory: dict[str, dict[str, Any]] = {}  # each team's World.memory
+        self.play_state: dict[str, dict[str, Any]] = {}  # each team's running play
         self._score: tuple[int, int] | None = None  # (blue, red) last frame
         self._events: list[str] = ["new_game"]  # this frame's, colour-neutral
 
@@ -154,7 +155,7 @@ class Brain:
         extras = Extras()
         slots: dict[str, Any] = (
             {"teams": self.teams, "memory": self.memory, "errors": errors,
-             "events": self._events, "extras": extras}
+             "events": self._events, "extras": extras, "play_state": self.play_state}
             if getattr(self.decide_fn, "takes_teams", False) else {})
         if slots and self.workers:  # a colour its own process plays isn't planned here
             slots["colors"] = tuple(c for c in ("blue", "red") if c not in self.workers)
@@ -197,7 +198,8 @@ class Brain:
                               + "playing the built-in team until it does")
             t, k, a = self.decide_fn(
                 gamestate, self.rl_skill, self.rl_enabled, self.sticky, self.kicked_off,
-                self.human_blue_ids, lost, memory=self.memory, extras=extras, colors=(color,))
+                self.human_blue_ids, lost, memory=self.memory, extras=extras, colors=(color,),
+                play_state=self.play_state)
             targets.update(t)
             return targets, kicks + k, attackers | a
         ids = set(range(TEAM_BLUE_SIZE)) if color == "blue" else             set(range(TEAM_BLUE_SIZE, TEAM_BLUE_SIZE + TEAM_RED_SIZE))
