@@ -14,8 +14,8 @@ import numpy as np
 from stable_baselines3 import PPO
 
 from strategy.rl.env import SUBGOAL_RANGE, make_kick_obs
-from strategy.simconfig import FIELD_H, FIELD_IS_DEFAULT, FIELD_W
-from strategy.state import BallState, RobotState
+from strategy.world.simconfig import FIELD_H, FIELD_IS_DEFAULT, FIELD_W
+from strategy.world.state import BallState, RobotState
 
 
 class RLKickSkill:

@@ -25,13 +25,13 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from strategy.brain import Brain
+from strategy.core.brain import Brain
 from strategy.eval import baseline_v0
-from strategy.simconfig import DT, FIELD_W, NUM_ROBOTS, TEAM_BLUE_SIZE
-from strategy.slots import Team
-from strategy.team import decide, resolve_kick_conflict
+from strategy.world.simconfig import DT, FIELD_W, NUM_ROBOTS, TEAM_BLUE_SIZE
+from strategy.core.slots import Team
+from strategy.core.team import decide, resolve_kick_conflict
 
-# sim/ modules, importable through strategy.simconfig
+# sim/ modules, importable through strategy.world.simconfig
 from pymunk_world import PymunkWorld, scorer  # noqa: E402
 from robot_node import RobotController  # noqa: E402
 from simulation_node import BALL_STUCK_DURATION, BALL_STUCK_THRESHOLD  # noqa: E402
@@ -78,7 +78,7 @@ def play_game(
     team_b: Team | None = None,
 ) -> GameResult:
     """Play one game of `duration_s` sim seconds. `team_a` / `team_b` give a
-    side its own slots (slots.py) instead of the built-in ones."""
+    side its own slots (core/slots.py) instead of the built-in ones."""
     a_color, b_color = ("blue", "red") if a_is_blue else ("red", "blue")
     brains = {
         a_color: Brain(a_color, decide_fn=decide_a, resolve_kicks=False,

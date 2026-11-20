@@ -1,7 +1,7 @@
 """The strategy node: the team AI as a process in the sim pipeline.
 
 Every frame it reads the world state from the sim (VISION_PORT), runs a Brain
-(brain.py) on it, publishes each robot's target for robot_node
+(core/brain.py) on it, publishes each robot's target for robot_node
 (STRATEGY_PORT), and sends kicks and dribbler on/off straight to the sim
 (COMMAND_PORT). Toggles (RL kick, dribble, human drivers) arrive on
 MANUAL_PORT from viz_node or the web app. sim/run_pipeline.py starts it.
@@ -21,8 +21,8 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
-from strategy.brain import DEFAULT_RL_CHECKPOINT, Brain  # noqa: E402
-from strategy.simconfig import COMMAND_PORT, MANUAL_PORT, STRATEGY_PORT, VISION_PORT  # noqa: E402
+from strategy.core.brain import DEFAULT_RL_CHECKPOINT, Brain  # noqa: E402
+from strategy.world.simconfig import COMMAND_PORT, MANUAL_PORT, STRATEGY_PORT, VISION_PORT  # noqa: E402
 
 
 @final

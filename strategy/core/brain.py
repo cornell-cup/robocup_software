@@ -12,16 +12,16 @@ import os
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from strategy.slots import Team
-from strategy.state import GameState, build_game_state
-from strategy.team import decide, resolve_kick_conflict
+from strategy.core.slots import Team
+from strategy.world.state import GameState, build_game_state
+from strategy.core.team import decide, resolve_kick_conflict
 
 if TYPE_CHECKING:
     from strategy.skills.rl_kick import RLKickSkill
 
 # The one checkpoint committed to git (.gitignore keeps only first_final/final.zip).
 DEFAULT_RL_CHECKPOINT = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),  # strategy/
     "rl", "checkpoints", "first_final", "final.zip",
 )
 

@@ -13,16 +13,16 @@ from typing import Any
 
 import numpy as np
 
-from strategy.analysis import analyze, ball_intercept, drive_accel, time_to_reach
+from strategy.world.analysis import analyze, ball_intercept, drive_accel, time_to_reach
 from strategy.api import Me, World
-from strategy.command import Command
+from strategy.core.command import Command
 from strategy.eval import match
-from strategy.prediction import (
+from strategy.world.prediction import (
     ball_rest_position,
     predict_ball_position,
     predict_ball_velocity,
 )
-from strategy.state import (
+from strategy.world.state import (
     GOAL_Y_MAX,
     GOAL_Y_MIN,
     ROBOT_RADIUS,
@@ -30,14 +30,14 @@ from strategy.state import (
     RobotState,
     build_game_state,
 )
-from strategy.slots import DEFAULT_TEAM, Team
-from strategy.brain import Brain
-from strategy.team import decide, resolve_kick_conflict
+from strategy.core.slots import DEFAULT_TEAM, Team
+from strategy.core.brain import Brain
+from strategy.core.team import decide, resolve_kick_conflict
 from strategy.tactics.attacker import APPROACH_OFFSET, CONTESTED_SKEW, aim_point, attacker
 from strategy.tactics.defender import defend_goal
 from strategy.tactics.role_assignments import ATTACKER, DEFENDER, SUPPORTER, assign_roles
 
-from config import BALL_DAMP, DT  # sim/config.py, on sys.path via strategy
+from strategy.world.simconfig import BALL_DAMP, DT
 
 def attack_as(robot, gs, color):
     """The built-in attacker slot for one robot, as decide() runs it."""
@@ -180,7 +180,7 @@ def _measured_drive_time(heading: float, distance_m: float) -> float:
 
 class TestAnalysis(unittest.TestCase):
     def test_drive_accel_depends_on_direction(self):
-        from config import MOTOR_MAX_FORCE, ROBOT_MASS
+        from strategy.world.simconfig import MOTOR_MAX_FORCE, ROBOT_MASS
 
         unit = MOTOR_MAX_FORCE / ROBOT_MASS
         self.assertAlmostEqual(float(drive_accel(0.0)), math.sqrt(3) * unit)  # straight ahead
@@ -238,7 +238,7 @@ def corner_squeeze(seconds: float = 5.0) -> float:
     """Pin the ball in each corner and drive a robot flat out into it, as in a
     scrum. Returns the farthest the ball's centre ever got past the field edge
     (m); 0 if it stayed inside."""
-    from config import BALL_RADIUS, FIELD_H, FIELD_W, ROBOT_RADIUS as R
+    from strategy.world.simconfig import BALL_RADIUS, FIELD_H, FIELD_W, ROBOT_RADIUS as R
     from pymunk_world import PymunkWorld
     from robot_node import RobotController
 
@@ -263,7 +263,7 @@ def corner_squeeze(seconds: float = 5.0) -> float:
 
 class TestWalls(unittest.TestCase):
     def test_ball_cannot_be_squeezed_out_of_a_corner(self):
-        from config import BALL_RADIUS
+        from strategy.world.simconfig import BALL_RADIUS
 
         # Pressed into the wall a little is contact; out of the field is a bug.
         self.assertLess(corner_squeeze(), BALL_RADIUS)
@@ -391,7 +391,7 @@ class TestBrain(unittest.TestCase):
 def lone_attacker_scores(ball_frac: tuple[float, float], limit_s: float = 30.0) -> float | None:
     """Blue robot 1 alone against a still ball (everyone else off the field):
     seconds until it scores in red's goal, None if not within `limit_s`."""
-    from config import FIELD_H, FIELD_W
+    from strategy.world.simconfig import FIELD_H, FIELD_W
     from pymunk_world import PymunkWorld
     from robot_node import RobotController
 
@@ -431,7 +431,7 @@ class TestPush(unittest.TestCase):
             self.assertLess(attack_as(gs.blue[1], gs, "blue").x, ball[0], msg=str(robot))
 
     def test_aim_is_inside_the_goal(self):
-        from config import FIELD_W
+        from strategy.world.simconfig import FIELD_W
 
         for y in (0.0, 3.0, 6.0):
             for color, beyond in (("blue", lambda x: x > FIELD_W), ("red", lambda x: x < 0)):
@@ -553,7 +553,7 @@ class TestSlots(unittest.TestCase):
 class TestMatch(unittest.TestCase):
     def test_goal_goes_to_the_team_that_scored(self):
         """Blue attacks +x: a ball into the x = FIELD_W goal (red's) is blue's goal."""
-        from config import FIELD_H, FIELD_W
+        from strategy.world.simconfig import FIELD_H, FIELD_W
         from pymunk_world import PymunkWorld, scorer
 
         w = PymunkWorld()

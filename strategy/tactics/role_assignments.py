@@ -11,8 +11,8 @@ from __future__ import annotations
 import numpy as np
 
 from strategy.api import Me, World
-from strategy.geometry import distance
-from strategy.state import FIELD_SCALE, RobotState
+from strategy.world.geometry import distance
+from strategy.world.state import FIELD_SCALE, RobotState
 
 ATTACKER = "attacker"
 SUPPORTER = "supporter"

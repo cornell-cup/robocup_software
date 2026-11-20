@@ -8,7 +8,7 @@ A Team names one function per slot:
     defender   the third robot, or a robot playing alone: defender(me, world) -> Command
 
 DEFAULT_TEAM holds the built-in ones, from tactics/, written against the same
-interface (api.py). Replace any of them:
+interface (strategy/api.py). Replace any of them:
 
     my_team = DEFAULT_TEAM.replace(supporter=get_open)
 
@@ -28,7 +28,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from strategy.api import Me, World
-from strategy.command import Command
+from strategy.core.command import Command
 from strategy.tactics.attacker import attacker as builtin_attacker
 from strategy.tactics.defender import defender as builtin_defender
 from strategy.tactics.role_assignments import ATTACKER, DEFENDER, SUPPORTER

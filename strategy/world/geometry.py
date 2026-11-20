@@ -1,7 +1,7 @@
 import math
 
 import numpy as np
-from strategy.state import BLUE_GOAL, RED_GOAL, RobotState
+from strategy.world.state import BLUE_GOAL, RED_GOAL, RobotState
 
 
 def wrap_angle(a: float) -> float:

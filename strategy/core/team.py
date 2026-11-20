@@ -9,9 +9,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from strategy.api import World
-from strategy.geometry import distance
-from strategy.slots import DEFAULT_TEAM, Team, run_behavior, run_roles
-from strategy.state import GameState
+from strategy.world.geometry import distance
+from strategy.core.slots import DEFAULT_TEAM, Team, run_behavior, run_roles
+from strategy.world.state import GameState
 from strategy.tactics.role_assignments import ATTACKER
 
 if TYPE_CHECKING:

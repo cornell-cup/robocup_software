@@ -1,4 +1,4 @@
-"""Frozen copy of decide() (then in strategy_node.py, now team.py) as of 2026-11-14 (v0).
+"""Frozen copy of decide() (then in strategy_node.py, now core/team.py) as of 2026-11-14 (v0).
 
 The reference opponent for the match runner (strategy/eval/match.py): each step
 of the redesign has to match or beat it. Do not edit or "fix" this file; a
@@ -15,8 +15,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
-from strategy.geometry import distance, opp_goal, our_goal
-from strategy.state import FIELD_LENGTH, GOAL_Y_MAX, GOAL_Y_MIN, GameState
+from strategy.world.geometry import distance, opp_goal, our_goal
+from strategy.world.state import FIELD_LENGTH, GOAL_Y_MAX, GOAL_Y_MIN, GameState
 
 if TYPE_CHECKING:
     from strategy.skills.rl_kick import RLKickSkill

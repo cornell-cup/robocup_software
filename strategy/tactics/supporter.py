@@ -5,10 +5,10 @@ from __future__ import annotations
 import numpy as np
 
 from strategy.api import Me, World
-from strategy.command import Command
-from strategy.geometry import attack_angle, opp_goal
+from strategy.core.command import Command
+from strategy.world.geometry import attack_angle, opp_goal
 from strategy.skills.navigate import face_point
-from strategy.state import FIELD_SCALE
+from strategy.world.state import FIELD_SCALE
 
 # Distances are tuned on 9 x 6 and scaled by FIELD_SCALE (see attacker.py).
 # This far past the ball toward the opponent's goal (behind it before

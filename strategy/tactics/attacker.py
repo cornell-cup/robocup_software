@@ -16,11 +16,11 @@ import math
 import numpy as np
 
 from strategy.api import Me, World
-from strategy.command import Command
-from strategy.geometry import attack_angle, distance, opp_goal, wrap_angle
-from strategy.simconfig import ARRIVAL_THRESH
+from strategy.core.command import Command
+from strategy.world.geometry import attack_angle, distance, opp_goal, wrap_angle
+from strategy.world.simconfig import ARRIVAL_THRESH
 from strategy.skills.navigate import behind_ball, heading_while_driving
-from strategy.state import FIELD_SCALE, GOAL_MOUTH_H, GOAL_Y_MAX, GOAL_Y_MIN, BallState, RobotState
+from strategy.world.state import FIELD_SCALE, GOAL_MOUTH_H, GOAL_Y_MAX, GOAL_Y_MIN, BallState, RobotState
 
 # Distances below are tuned on the 9 x 6 field and scaled by FIELD_SCALE, like
 # the robot, ball and kick zone (sim/config.py), so on a custom --field they
@@ -112,7 +112,7 @@ def is_contested(ball: BallState, opponents: list[RobotState]) -> bool:
 def _break_standoff(ball: BallState, team_dir: float) -> Command:
     # Skew the kick off the goal axis so the two attackers no longer pin the
     # ball head-on. Whichever fires first sends the ball off its own diagonal
-    # and out of the standoff. Fire the kicker every tick: kick.py's zone
+    # and out of the standoff. Fire the kicker every tick: sim/ball_contact.py's zone
     # check gates it so it only takes effect once the attacker is positioned.
     kick_angle = team_dir + CONTESTED_SKEW
     kick_dir = np.array([math.cos(kick_angle), math.sin(kick_angle)])

@@ -5,7 +5,7 @@ from typing import Any
 import numpy as np
 
 # Field geometry comes from sim/config.py so a custom --field reaches strategy.
-from strategy.simconfig import (  # noqa: F401  (re-exported for the rest of strategy/)
+from strategy.world.simconfig import (  # noqa: F401  (re-exported for the rest of strategy/)
     FIELD_H,
     FIELD_SCALE,
     FIELD_W,

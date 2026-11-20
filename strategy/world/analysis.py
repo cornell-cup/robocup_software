@@ -30,11 +30,11 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from strategy.geometry import our_goal
-from strategy.prediction import ball_rest_position
-from strategy.state import BallState, GameState, RobotState
+from strategy.world.geometry import our_goal
+from strategy.world.prediction import ball_rest_position
+from strategy.world.state import BallState, GameState, RobotState
 
-from strategy.simconfig import (
+from strategy.world.simconfig import (
     BALL_DAMP,
     BALL_RADIUS,
     LINEAR_DAMP,

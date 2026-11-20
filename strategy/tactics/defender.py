@@ -10,9 +10,9 @@ import math
 import numpy as np
 
 from strategy.api import Me, World
-from strategy.command import Command
-from strategy.geometry import our_goal
-from strategy.state import FIELD_SCALE, GOAL_Y_MAX, GOAL_Y_MIN
+from strategy.core.command import Command
+from strategy.world.geometry import our_goal
+from strategy.world.state import FIELD_SCALE, GOAL_Y_MAX, GOAL_Y_MIN
 
 # Distances are tuned on 9 x 6 and scaled by FIELD_SCALE (see attacker.py).
 

@@ -32,7 +32,7 @@ from strategy.rl.reward import (  # noqa: E402
     RewardTerms,
     compute_step_reward,
 )
-from strategy.simconfig import (  # noqa: E402
+from strategy.world.simconfig import (  # noqa: E402
     FIELD_H,
     FIELD_IS_DEFAULT,
     FIELD_W,
@@ -47,7 +47,7 @@ from strategy.simconfig import (  # noqa: E402
     WHEEL_DISTANCE,
 )
 
-from pymunk_world import PymunkWorld  # noqa: E402  (sim/, on sys.path via strategy.simconfig)
+from pymunk_world import PymunkWorld  # noqa: E402  (sim/, on sys.path via strategy.world.simconfig)
 
 SUBGOAL_RANGE = 1.5  # meters from robot — action a[0], a[1] are scaled by this
 CONTROL_SUBSTEPS = 4  # physics ticks per env step -> 15 Hz policy at DT=1/60

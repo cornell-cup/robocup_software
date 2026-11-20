@@ -9,7 +9,7 @@ that robot should do this frame:
 
 It runs 60 times a second for every robot playing that role. Positions are
 in metres, angles in radians counter-clockwise from +x. Which robot plays
-which role, and which function each role runs, is set by a Team (slots.py).
+which role, and which function each role runs, is set by a Team (core/slots.py).
 """
 
 from __future__ import annotations
@@ -20,14 +20,14 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from strategy.command import Command
-from strategy.geometry import attack_angle, is_blocking, opp_goal, our_goal
-from strategy.state import ROBOT_RADIUS, BallState, GameState, RobotState
+from strategy.core.command import Command
+from strategy.world.geometry import attack_angle, is_blocking, opp_goal, our_goal
+from strategy.world.state import ROBOT_RADIUS, BallState, GameState, RobotState
 
-from strategy.simconfig import BALL_RADIUS
+from strategy.world.simconfig import BALL_RADIUS
 
 if TYPE_CHECKING:
-    from strategy.analysis import Analysis, TeamView
+    from strategy.world.analysis import Analysis, TeamView
     from strategy.skills.rl_kick import RLKickSkill
 
 Point = Any  # anything with two numbers: (x, y), a list, a numpy array
@@ -159,9 +159,9 @@ class World:
 
     @cached_property
     def analysis(self) -> "Analysis":
-        """Both teams' race to the ball and threats (analysis.py), computed
+        """Both teams' race to the ball and threats (world/analysis.py), computed
         the first time it's asked for in a frame."""
-        from strategy.analysis import analyze
+        from strategy.world.analysis import analyze
 
         return analyze(self.gamestate, self._unavailable)
 

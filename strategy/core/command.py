@@ -11,7 +11,7 @@ class Command:
     y: float
     angle: float  # heading to face, radians counter-clockwise from +x
     # Fire the kicker this frame. Safe to send every frame: the sim only kicks
-    # when the ball is in the kick zone (skills/kick.py).
+    # when the ball is in the kick zone (sim/ball_contact.py).
     kick: bool = False
 
     @property
