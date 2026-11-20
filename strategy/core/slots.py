@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import dataclasses
 import os
+import time
 import traceback
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -36,6 +37,18 @@ from strategy.tactics.role_assignments import roles as builtin_roles
 from strategy.tactics.supporter import supporter as builtin_supporter
 
 ROLES = (ATTACKER, SUPPORTER, DEFENDER)
+
+# A replaced slot gets this long per call (a whole frame is 1/60 s). Slower,
+# and the robot falls back to the built-in slot for that frame, as on an error.
+SLOT_TIME_BUDGET_S = 0.010
+
+_STRATEGY_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_OWN_CODE_DIRS = tuple(os.path.join(_STRATEGY_DIR, d) for d in ("core", "world", "tactics", "skills"))
+_OWN_CODE_FILES = (os.path.join(_STRATEGY_DIR, "api.py"),)
+
+
+class SlotTooSlow(Exception):
+    """A replaced slot took longer than SLOT_TIME_BUDGET_S."""
 
 Behavior = Callable[[Me, World], Command]
 RoleAssigner = Callable[[list[Me], World], list[tuple[Me, str]]]
@@ -71,7 +84,9 @@ def run_roles(team: Team, members: list[Me], world: World, errors: list[str] | N
     if team.roles is DEFAULT_TEAM.roles:
         return team.roles(members, world)
     try:
+        t0 = time.perf_counter()
         pairs = list(team.roles(members, world))
+        _check_time(t0)
         ids = sorted(m.id for m, _ in pairs)
         bad_role = next((r for _, r in pairs if r not in ROLES), None)
         if ids != sorted(m.id for m in members) or bad_role is not None:
@@ -93,7 +108,9 @@ def run_behavior(team: Team, role: str, me: Me, world: World, errors: list[str] 
     if fn is default:
         return fn(me, world)
     try:
+        t0 = time.perf_counter()
         command = fn(me, world)
+        _check_time(t0)
         if not isinstance(command, Command):
             raise TypeError(f"must return a Command (e.g. me.go_to(...)), returned {command!r}")
         return command
@@ -102,11 +119,30 @@ def run_behavior(team: Team, role: str, me: Me, world: World, errors: list[str] 
         return default(me, world)
 
 
+def _check_time(t0: float) -> None:
+    took = time.perf_counter() - t0
+    if took > SLOT_TIME_BUDGET_S:
+        raise SlotTooSlow(f"took {took * 1000:.0f} ms, over the "
+                          + f"{SLOT_TIME_BUDGET_S * 1000:.0f} ms budget per frame")
+
+
 def _report(errors: list[str] | None, color: str, slot: str, robot: int | None,
             e: BaseException) -> None:
     if errors is None:
         return
-    where = traceback.extract_tb(e.__traceback__)[-1] if e.__traceback__ else None
+    where = None if isinstance(e, SlotTooSlow) else _your_line(e)
     at = f" ({os.path.basename(where.filename)}:{where.lineno})" if where else ""
     who = "" if robot is None else f", robot {robot}"
     errors.append(f"{color} {slot}{who}: {type(e).__name__}: {e}{at}; using the built-in {slot}")
+
+
+def _your_line(e: BaseException) -> traceback.FrameSummary | None:
+    """Where an error happened in the slot's own code: the deepest frame
+    outside the strategy's machinery (api.py, core/, world/, tactics/,
+    skills/), so a bad argument to me.go_to() points at the line that called
+    it. The deepest frame of all if none is."""
+    frames = traceback.extract_tb(e.__traceback__) if e.__traceback__ else []
+    yours = [f for f in frames
+             if not os.path.abspath(f.filename).startswith(_OWN_CODE_DIRS)
+             and os.path.abspath(f.filename) not in _OWN_CODE_FILES]
+    return (yours or frames or [None])[-1]
