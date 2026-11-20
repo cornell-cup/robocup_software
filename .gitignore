@@ -33,3 +33,6 @@ strategy/rl/runs/
 
 # Web app: npm installs, never committed
 app/web/node_modules/
+
+# Team files from the web app's Code page: students' own code
+/teams/
