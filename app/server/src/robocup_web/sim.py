@@ -25,6 +25,7 @@ from typing import Any
 import zmq
 
 from .procs import CommandError, ManagedProcess
+from .teams import team_path
 
 REPO = Path(__file__).resolve().parents[4]
 SIM_DIR = REPO / "sim"
@@ -67,6 +68,10 @@ class SimBridge:
         self._world_seq = 0
         self._world_t = 0.0
         self._attackers: list[str] = []
+        # What the teams' code drew (world.draw) and showed (world.show), by
+        # colour, from strategy_node's message.
+        self._drawings: dict[str, Any] = {}
+        self._shown: dict[str, Any] = {}
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._manual: zmq.Socket | None = None
@@ -78,6 +83,10 @@ class SimBridge:
         self._driving: dict[int, float] = {}  # robot -> last drive command time
         self._hellos: list[float] = []
         self._was_up = False
+        # Turn the AI on as soon as the next sim comes up (the Code page's
+        # Play). Done here, not by the page: a message sent the moment the sim
+        # is up is lost while robot_node's subscription is still joining.
+        self.ai_on_start = False
         self.clients: set[asyncio.Queue[str]] = set()
 
     # -- lifecycle ----------------------------------------------------------
@@ -123,7 +132,7 @@ class SimBridge:
         try:
             while not self._stop.is_set():
                 events = dict(poller.poll(200))
-                world = attackers = None
+                world = plan = None
                 # Drain both: only the newest message of each matters.
                 while vision in events:
                     try:
@@ -132,7 +141,7 @@ class SimBridge:
                         break
                 while strategy in events:
                     try:
-                        attackers = json.loads(strategy.recv_string(zmq.NOBLOCK)).get("attackers")
+                        plan = json.loads(strategy.recv_string(zmq.NOBLOCK))
                     except zmq.Again:
                         break
                 with self._lock:
@@ -140,8 +149,10 @@ class SimBridge:
                         self._world = json.loads(world)
                         self._world_seq += 1
                         self._world_t = time.monotonic()
-                    if attackers is not None:
-                        self._attackers = [str(a) for a in attackers]
+                    if plan is not None:
+                        self._attackers = [str(a) for a in plan.get("attackers") or []]
+                        self._drawings = plan.get("draw") or {}
+                        self._shown = plan.get("show") or {}
         finally:
             vision.close(linger=0)
             strategy.close(linger=0)
@@ -156,11 +167,14 @@ class SimBridge:
         with self._lock:
             world = self._world
             attackers = list(self._attackers)
+            drawings, shown = self._drawings, self._shown
         return {
             "type": "world",
             "up": self.sim_up,
             "world": world,
             "attackers": attackers,
+            "drawings": drawings,
+            "shown": shown,
             "controls": dict(self.controls),
             "manual_error": self.manual_error,
         }
@@ -190,10 +204,12 @@ class SimBridge:
         # A (re)started sim has the defaults again; so does this app's view of
         # it. strategy_node needs to hear which robots are human-driven (none,
         # from a browser) -- several times, since its subscription to this
-        # port may not be up yet (ZMQ's slow-joiner window).
-        self.controls = {"strategy": False, "dribble": False, "rl_kick": False}
+        # port may not be up yet (ZMQ's slow-joiner window). The same hellos
+        # turn the AI on if the sim was started with it on (ai_on_start).
+        self.controls = {"strategy": self.ai_on_start, "dribble": False, "rl_kick": False}
+        self.ai_on_start = False
         now = time.monotonic()
-        self._hellos = [now + 0.5, now + 1.5, now + 3.0]
+        self._hellos = [now + d for d in (0.5, 1.5, 3.0, 5.0, 8.0)]
 
     def _housekeeping(self) -> None:
         now = time.monotonic()
@@ -203,7 +219,10 @@ class SimBridge:
             return
         if self._hellos and now >= self._hellos[0]:
             self._hellos.pop(0)
-            self._publish_humans()
+            if self.controls["strategy"]:
+                self._publish({"strategy_enabled": True, "human_blue_ids": sorted(self._driving)})
+            else:
+                self._publish_humans()
         stopped = False
         for robot, t in list(self._driving.items()):
             if now - t > DRIVE_TIMEOUT_S:
@@ -335,11 +354,21 @@ class SimProcess(ManagedProcess):
         """`opts`: strategy (bool), color, field [w, h] or field_from_calibration,
         and the camera mirror: vision ("tracker" for the Tracking page's live
         output, a recording's path, or any --vision source), ignore_tags,
-        tag_map, flip_x, flip_y, replay_speed."""
+        tag_map, flip_x, flip_y, replay_speed; blue_team / red_team: a team
+        file in teams/ (the Code page) that side plays."""
         color = "red" if opts.get("color") == "red" else "blue"
         cmd = [sys.executable, str(SIM_DIR / "run_pipeline.py"), "--no-viz", "--color", color]
         if not opts.get("strategy", True):
             cmd.append("--no-strategy")
+        teams: dict[str, str] = {}
+        for side in ("blue", "red"):
+            name = str(opts.get(f"{side}_team") or "").strip()
+            if name:
+                path = team_path(name)
+                if not path.exists():
+                    raise CommandError(f"no team file {name} for {side}")
+                cmd += [f"--{side}", str(path)]
+                teams[side] = name
         field: list[float] | str | None = None
         if opts.get("field_from_calibration"):
             pose = field_pose_file()
@@ -381,7 +410,7 @@ class SimProcess(ManagedProcess):
                 cmd += ["--replay-speed", f"{speed:g}"]
         self.launch(cmd, SIM_DIR)
         self.options = {"strategy": bool(opts.get("strategy", True)), "color": color,
-                        "field": field, "vision": vision or None}
+                        "field": field, "vision": vision or None, "teams": teams}
 
     def status(self) -> dict[str, Any]:
         return {**self.process_status(), "options": self.options}
