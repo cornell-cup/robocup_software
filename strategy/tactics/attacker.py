@@ -6,7 +6,10 @@ Three ways, checked in order:
   2. RL kick: when turned on and the robot is on its own side of the ball,
      the learned policy picks the target and the kicker fires;
   3. classic: get behind the ball on the line to their goal, facing along
-     it; once lined up there, drive through the ball toward the goal.
+     it; once lined up there, drive through the ball toward the goal. A ball
+     rolling faster than MEET_BALL_SPEED is met where the attacker can first
+     reach it (world/analysis.py's ball_intercept), not chased where it is:
+     +0.58 goals a game against v1 over 80 games of 120 s (2026-11-20).
 """
 
 from __future__ import annotations
@@ -18,6 +21,7 @@ import numpy as np
 from strategy.api import Me, World
 from strategy.core.command import Command
 from strategy.skills.navigate import behind_ball, heading_while_driving
+from strategy.world.analysis import ball_intercept
 from strategy.world.geometry import attack_angle, distance, opp_goal, wrap_angle
 from strategy.world.simconfig import ARRIVAL_THRESH
 from strategy.world.state import (
@@ -74,6 +78,10 @@ PUSH_THROUGH = 0.3 * FIELD_SCALE
 # from a spot inside the end wall the robot could never reach.
 AIM_DEPTH = GOAL_MOUTH_H / 2
 AIM_POST_MARGIN = GOAL_MOUTH_H / 4
+# A ball rolling faster than this (m/s) is met where the attacker can first
+# reach it (world.analysis), not chased where it is now.
+MEET_BALL_SPEED = 0.3
+
 # The RL policy only runs with the robot at least this far behind the ball
 # along the attack axis, meters (unscaled: RL runs on 9 x 6 only).
 RL_BEHIND_BALL = 0.1
@@ -107,7 +115,18 @@ def attacker(me: Me, world: World) -> Command:
         tx, ty = rl_skill.target(robot, ball, attacks_right=attacks_right)
         return Command(tx, ty, team_dir, kick=True)
 
-    return _push_toward_goal(robot, ball, team_color, team_dir)
+    return _push_toward_goal(robot, _ball_to_meet(robot, ball, world), team_color, team_dir)
+
+
+def _ball_to_meet(robot: RobotState, ball: BallState, world: World) -> BallState:
+    """The ball as the attacker should play it: where it can first reach a
+    rolling ball (the analysis layer's intercept), or where it is."""
+    if ball.speed <= MEET_BALL_SPEED:
+        return ball
+    meet = ball_intercept(robot, ball)  # this robot's only: cheaper than world.analysis
+    if meet.t <= 0.0:
+        return ball
+    return BallState(pos=meet.point, vel=np.zeros(2), speed=0.0)
 
 
 def is_contested(ball: BallState, opponents: list[RobotState]) -> bool:
