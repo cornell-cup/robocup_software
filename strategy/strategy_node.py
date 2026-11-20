@@ -22,7 +22,7 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from strategy.core.brain import DEFAULT_RL_CHECKPOINT, Brain  # noqa: E402
-from strategy.core.loader import TeamFile, replaced_slots  # noqa: E402
+from strategy.core.worker import TeamWorker  # noqa: E402
 from strategy.world.simconfig import (  # noqa: E402
     COMMAND_PORT,
     MANUAL_PORT,
@@ -117,9 +117,10 @@ def main() -> None:
     for color in ("blue", "red"):
         _ = parser.add_argument(
             f"--{color}",
-            metavar="FILE",
-            help=f"Team file for {color} (see strategy/core/loader.py): its slots replace "
-            + "the built-in ones. Reloaded when you save it.",
+            metavar="TEAM",
+            help=f"A team for {color}, a workspace folder or a .py file (see "
+            + "strategy/core/loader.py): its slots replace the built-in ones. Runs in its own "
+            + "process (safe mode if it's from someone else); reloaded when a file is saved.",
         )
     args = parser.parse_args()
 
@@ -129,9 +130,10 @@ def main() -> None:
     print("[Strategy node] controlling BOTH teams (blue attacks right, red attacks left)")
 
     brain = Brain(args.color, rl_checkpoint=args.rl_checkpoint, log=print)
-    team_files = {c: TeamFile(p) for c, p in (("blue", args.blue), ("red", args.red)) if p}
-    for color, team_file in team_files.items():
-        _use_team_file(brain, color, team_file)
+    for color in ("blue", "red"):
+        team_file = getattr(args, color)
+        if team_file:  # its own process: an endless loop in it can't stop the strategy
+            brain.set_worker(color, TeamWorker(team_file, color, log=print))
 
     frame = 0
     while True:
@@ -145,12 +147,18 @@ def main() -> None:
 
         try:
             plan = brain.tick(raw)
+            targets: dict[str, dict[str, float]] = {}
+            for rid, (tx, ty, ta) in plan.targets.items():
+                targets[str(rid)] = {"x": tx, "y": ty, "angle": ta}
+                if rid in plan.max_speed:  # robot_node drives it no faster
+                    targets[str(rid)]["max_speed"] = plan.max_speed[rid]
             backend.send_targets({
-                "targets": {
-                    str(rid): {"x": tx, "y": ty, "angle": ta}
-                    for rid, (tx, ty, ta) in plan.targets.items()
-                },
+                "targets": targets,
                 "attackers": sorted(plan.attackers),
+                # What the teams' code drew (world.draw) and showed
+                # (world.show), for the web app's field.
+                "draw": plan.drawings,
+                "show": plan.shown,
             })
             for rid in plan.kicks:
                 backend.send_kick(rid)
@@ -162,10 +170,6 @@ def main() -> None:
             continue
 
         frame += 1
-        if frame % 30 == 0:  # twice a second: pick up saved team files
-            for color, team_file in team_files.items():
-                if team_file.reload_if_changed():
-                    _use_team_file(brain, color, team_file)
         if frame % 300 == 0:
             gamestate = plan.gamestate
             print(
@@ -174,18 +178,6 @@ def main() -> None:
                 + f"rl_kick={'ON' if brain.rl_enabled else 'OFF'}  "
                 + f"ball=({gamestate.ball.pos[0]:.1f}, {gamestate.ball.pos[1]:.1f})"
             )
-
-
-def _use_team_file(brain: Brain, color: str, team_file: TeamFile) -> None:
-    """Play a team file's latest version that loaded, and say what happened."""
-    name = team_file.path.name
-    if team_file.error:
-        keeps = "keeping the last version that loaded" if team_file.team else "playing the built-in team"
-        print(f"[Strategy node] {color} team file {team_file.error} ({keeps})")
-    if team_file.team is not None and not team_file.error:
-        brain.set_team(color, team_file.team)
-        print(f"[Strategy node] {color} plays {name}: "
-              + f"{', '.join(replaced_slots(team_file.team))} replaced, the rest built-in")
 
 
 if __name__ == "__main__":
