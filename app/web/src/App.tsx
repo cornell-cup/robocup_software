@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { Logo } from "./components/Logo";
 import { Toasts } from "./components/Toasts";
 import { photonvision, usePhotonVision } from "./lib/photonvision";
@@ -10,8 +10,12 @@ import { Robots } from "./pages/Robots";
 import { Simulator } from "./pages/Simulator";
 import { Tracking } from "./pages/Tracking";
 
+// The Code page brings the editor (CodeMirror): loaded only when opened.
+const Code = lazy(() => import("./pages/Code").then((m) => ({ default: m.Code })));
+
 const PAGES = [
   { path: "/sim", label: "Simulator" },
+  { path: "/code", label: "Code" },
   { path: "/robots", label: "Robots" },
   { path: "/robot-test", label: "Robot test" },
   { path: "/tracking", label: "Tracking" },
@@ -39,6 +43,7 @@ export default function App() {
         {route === "/calibration" ? <Calibration />
           : route === "/ball" ? <Ball />
           : route === "/tracking" ? <Tracking />
+          : route === "/code" ? <Suspense fallback={null}><Code /></Suspense>
           : route === "/robots" ? <Robots />
           : route === "/robot-test" ? <RobotTest />
           : <Simulator />}
