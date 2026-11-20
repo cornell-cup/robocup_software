@@ -6,13 +6,16 @@ import { useEffect } from "react";
 import { wsUrl } from "./api";
 import { createStore, refCounted, useStore } from "./store";
 import { toasts } from "./toast";
-import type { Controls, SimCommand, World, WorldMessage } from "./types";
+import type { Controls, Drawings, Shown, SimCommand, World, WorldMessage } from "./types";
 
 export interface SimState {
   connected: boolean;
   up: boolean;
   world: World | null;
   attackers: string[];
+  /** What the teams' code drew on the field and showed (world.draw / world.show). */
+  drawings: Drawings;
+  shown: Shown;
   controls: Controls;
   manualError: string | null;
 }
@@ -22,6 +25,8 @@ const store = createStore<SimState>({
   up: false,
   world: null,
   attackers: [],
+  drawings: {},
+  shown: {},
   controls: { strategy: false, dribble: false, rl_kick: false },
   manualError: null,
 });
@@ -48,6 +53,8 @@ const acquire = refCounted(() => {
         up: m.up,
         world: m.world ?? s.world,
         attackers: m.attackers,
+        drawings: m.drawings ?? {},
+        shown: m.shown ?? {},
         controls: m.controls,
         manualError: m.manual_error,
       }));

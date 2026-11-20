@@ -69,11 +69,25 @@ export interface Controls {
   rl_kick: boolean;
 }
 
+/** A shape a team's code drew this frame (world.draw, strategy/core/drawing.py). Field metres. */
+export type Shape = { color: string; robot?: number } & (
+  | { kind: "point"; at: [number, number] }
+  | { kind: "line" | "arrow"; from: [number, number]; to: [number, number] }
+  | { kind: "circle"; at: [number, number]; radius: number }
+  | { kind: "text"; at: [number, number]; text: string }
+);
+/** Colour ("blue" / "red") -> the shapes that team's code drew. */
+export type Drawings = Record<string, Shape[]>;
+/** Colour -> "robot 2" / "team" -> name -> value, from world.show(name, value). */
+export type Shown = Record<string, Record<string, Record<string, string>>>;
+
 export interface WorldMessage {
   type: "world";
   up: boolean;
   world: World | null;
   attackers: string[];
+  drawings?: Drawings;
+  shown?: Shown;
   controls: Controls;
   manual_error: string | null;
 }
@@ -105,7 +119,14 @@ export interface SimProcessStatus {
   running: boolean;
   pid: number | null;
   exit_code: number | null;
-  options: { strategy?: boolean; color?: string; field?: number[] | null; vision?: string | null };
+  options: {
+    strategy?: boolean;
+    color?: string;
+    field?: number[] | null;
+    vision?: string | null;
+    /** Team files (the Code page) playing a side: { blue: "my_team.py" }. */
+    teams?: Record<string, string>;
+  };
 }
 
 export interface Detection {
