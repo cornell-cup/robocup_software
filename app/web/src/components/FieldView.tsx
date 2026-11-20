@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { FieldInfo, FieldScene, Pin } from "../lib/types";
+import type { Drawings, FieldInfo, FieldScene, Pin, Shape } from "../lib/types";
 
 const WHEELS = [0, (2 * Math.PI) / 3, (4 * Math.PI) / 3];
 const FALLBACK: FieldInfo = {
@@ -27,6 +27,7 @@ function viewFor(field: FieldInfo, cw: number, ch: number): View {
 export function FieldView({
   world,
   attackers = [],
+  drawings,
   selected = 0,
   pin = null,
   clickable = true,
@@ -35,6 +36,8 @@ export function FieldView({
 }: {
   world: FieldScene | null;
   attackers?: string[];
+  /** Shapes the teams' code drew (world.draw), drawn over the field. */
+  drawings?: Drawings;
   selected?: number;
   pin?: Pin | null;
   clickable?: boolean;
@@ -65,7 +68,7 @@ export function FieldView({
     const g = c.getContext("2d")!;
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, size.w, size.h);
-    draw(g, view, world, attackers, selected, pin, trail.current);
+    draw(g, view, world, attackers, selected, pin, trail.current, drawings);
   });
 
   const toField = (e: React.MouseEvent): { x: number; y: number } | null => {
@@ -96,7 +99,7 @@ export function FieldView({
 
 function draw(
   g: CanvasRenderingContext2D, v: View, w: FieldScene | null, attackers: string[],
-  selected: number, pin: Pin | null, trail: { x: number; y: number }[],
+  selected: number, pin: Pin | null, trail: { x: number; y: number }[], drawings?: Drawings,
 ) {
   const sx = (x: number) => v.ox + x * v.s;
   const sy = (y: number) => v.oy + (v.field.height - y) * v.s;
@@ -128,6 +131,11 @@ function draw(
       Number(rid) === selected, r.tag);
   }
 
+  // The teams' own drawings: over the robots, under the ball.
+  for (const shapes of Object.values(drawings ?? {})) {
+    for (const s of shapes) drawShape(g, v, s, sx, sy);
+  }
+
   if (b) {
     const stale = b.stale && b.source === "vision";
     g.fillStyle = stale ? STALE : BALL;
@@ -135,6 +143,51 @@ function draw(
     g.arc(sx(b.x), sy(b.y), Math.max(v.field.ball_radius * v.s, 5), 0, Math.PI * 2);
     g.fill();
   }
+}
+
+/** One shape from a team's code (world.draw). */
+function drawShape(
+  g: CanvasRenderingContext2D, v: View, s: Shape, sx: (x: number) => number, sy: (y: number) => number,
+) {
+  const lw = Math.max(1.5, px(v, 2.5));
+  g.save();
+  g.strokeStyle = s.color;
+  g.fillStyle = s.color;
+  g.lineWidth = lw;
+  g.lineCap = "round";
+  if (s.kind === "point") {
+    g.beginPath();
+    g.arc(sx(s.at[0]), sy(s.at[1]), Math.max(3, px(v, 6)), 0, Math.PI * 2);
+    g.fill();
+  } else if (s.kind === "line" || s.kind === "arrow") {
+    const x0 = sx(s.from[0]), y0 = sy(s.from[1]), x1 = sx(s.to[0]), y1 = sy(s.to[1]);
+    g.beginPath();
+    g.moveTo(x0, y0);
+    g.lineTo(x1, y1);
+    g.stroke();
+    if (s.kind === "arrow" && Math.hypot(x1 - x0, y1 - y0) > 1) {
+      const a = Math.atan2(y1 - y0, x1 - x0), head = Math.max(6, px(v, 14));
+      g.beginPath();
+      g.moveTo(x1, y1);
+      g.lineTo(x1 - head * Math.cos(a - 0.45), y1 - head * Math.sin(a - 0.45));
+      g.lineTo(x1 - head * Math.cos(a + 0.45), y1 - head * Math.sin(a + 0.45));
+      g.closePath();
+      g.fill();
+    }
+  } else if (s.kind === "circle") {
+    g.beginPath();
+    g.arc(sx(s.at[0]), sy(s.at[1]), Math.max(1, s.radius * v.s), 0, Math.PI * 2);
+    g.stroke();
+  } else if (s.kind === "text") {
+    g.font = `600 ${Math.max(11, px(v, 16))}px ui-sans-serif, system-ui, sans-serif`;
+    g.textAlign = "center";
+    g.textBaseline = "bottom";
+    g.lineWidth = 3;
+    g.strokeStyle = "rgba(0,0,0,0.75)"; // a dark edge: readable on grass and on lines
+    g.strokeText(s.text, sx(s.at[0]), sy(s.at[1]) - 4);
+    g.fillText(s.text, sx(s.at[0]), sy(s.at[1]) - 4);
+  }
+  g.restore();
 }
 
 // Drawn as the pygame window (sim/viz_node.py) drew it, scaled from its

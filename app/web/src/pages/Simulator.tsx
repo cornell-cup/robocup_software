@@ -294,6 +294,7 @@ export function Simulator() {
           <FieldView
             world={world}
             attackers={sim.attackers}
+            drawings={sim.drawings}
             selected={robot}
             pin={pin}
             clickable={mode !== "keys" && sim.up}
