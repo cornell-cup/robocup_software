@@ -16,7 +16,9 @@ or live in the sim (save the file while it runs and it reloads):
 
 If a function raises an error, returns something that isn't a Command, or
 takes longer than 10 ms, that robot uses the built-in slot for that frame and
-the error is printed. What `me` and `world` offer: strategy/api.py. The
+the error is printed. To see what your code is thinking, draw on the field
+(world.draw.line(a, b), .point(p), .circle(p, r), .arrow(a, b), .text(p, "hi"))
+and show values beside it (world.show("name", value)). What `me` and `world` offer: strategy/api.py. The
 built-in slots, to read and copy from: strategy/tactics/.
 """
 
@@ -52,3 +54,13 @@ def defender(me: Me, world: World) -> Command:
     """The third robot, or a robot playing alone. Built-in: goalie on the line
     from our goal to the ball (tactics/defender.py)."""
     return built_in_defender(me, world)
+
+
+# One more slot, empty in the built-in team: it runs once a frame before the
+# robots' slots, for work the whole team shares. Keep the results in
+# world.memory. world.events says what just happened ("goal_for", "kickoff",
+# ...). Remove the # to use it.
+#
+# def prepare(world: World) -> None:
+#     if "goal_against" in world.events:
+#         world.memory["conceded"] = world.memory.get("conceded", 0) + 1

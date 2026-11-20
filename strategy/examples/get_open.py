@@ -26,7 +26,13 @@ def supporter(me: Me, world: World) -> Command:
 
     # If an opponent stands in the way of a pass from the ball to that spot,
     # try the same spot on the other side.
-    if not world.lane_clear(ball, spot):
+    clear = world.lane_clear(ball, spot)
+    # Draw the pass lane we checked, green if it's open, red if not: run it
+    # and watch the field on the Code page.
+    world.draw.line(ball, spot, color="green" if clear else "red")
+    if not clear:
         spot = spot - (0.0, 2 * side * width / 6)
 
+    world.draw.point(spot)
+    world.show("lane clear", clear)
     return me.go_to(spot, face=ball)
