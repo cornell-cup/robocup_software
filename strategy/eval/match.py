@@ -10,7 +10,7 @@ From the repo root:
     uv run python -m strategy.eval.match --a current --b current --games 4   # sanity: about even
     uv run python -m strategy.eval.match --games 40 --duration 300
 
-Strategies are named in STRATEGIES: "current" is strategy_node.decide, "v0"
+Strategies are named in STRATEGIES: "current" is team.decide, "v0"
 the frozen baseline (baseline_v0.py). Each game is seeded, so a rerun with
 the same flags plays the same games. Set ROBOCUP_FIELD to play on another
 field size, as for the sim.
@@ -25,11 +25,11 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from strategy import strategy_node
+from strategy.brain import Brain
 from strategy.eval import baseline_v0
 from strategy.simconfig import DT, FIELD_W, NUM_ROBOTS, TEAM_BLUE_SIZE
 from strategy.slots import Team
-from strategy.strategy_node import Brain, resolve_kick_conflict
+from strategy.team import decide, resolve_kick_conflict
 
 # sim/ modules, importable through strategy.simconfig
 from pymunk_world import PymunkWorld, scorer  # noqa: E402
@@ -37,7 +37,7 @@ from robot_node import RobotController  # noqa: E402
 from simulation_node import BALL_STUCK_DURATION, BALL_STUCK_THRESHOLD  # noqa: E402
 
 STRATEGIES: dict[str, Callable[..., Any]] = {
-    "current": strategy_node.decide,
+    "current": decide,
     "v0": baseline_v0.decide,
 }
 

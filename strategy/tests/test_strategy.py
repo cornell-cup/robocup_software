@@ -31,7 +31,8 @@ from strategy.state import (
     build_game_state,
 )
 from strategy.slots import DEFAULT_TEAM, Team
-from strategy.strategy_node import Brain, decide, resolve_kick_conflict
+from strategy.brain import Brain
+from strategy.team import decide, resolve_kick_conflict
 from strategy.tactics.attacker import APPROACH_OFFSET, CONTESTED_SKEW, aim_point, attack
 from strategy.tactics.defender import defend_goal
 from strategy.tactics.role_assignments import ATTACKER, DEFENDER, SUPPORTER, assign_roles

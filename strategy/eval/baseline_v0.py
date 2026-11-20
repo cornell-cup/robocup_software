@@ -1,11 +1,11 @@
-"""Frozen copy of strategy_node.decide() as of 2026-11-14 (v0).
+"""Frozen copy of decide() (then in strategy_node.py, now team.py) as of 2026-11-14 (v0).
 
 The reference opponent for the match runner (strategy/eval/match.py): each step
 of the redesign has to match or beat it. Do not edit or "fix" this file; a
 change here moves the bar every later version is measured against. Copied
 verbatim, except: this header; `lost_ids` added to decide()'s signature
 (ignored: v0 planned lost robots too); and the closer-kick-wins rule at the end
-of decide() moved out to strategy_node.resolve_kick_conflict, which Brain and
+of decide() moved out to team.resolve_kick_conflict, which Brain and
 the match runner apply, so v0 plays exactly as before.
 """
 from __future__ import annotations
@@ -155,7 +155,7 @@ def decide(
                 targets[robot.id] = (tx, ty, ta)
 
     # (v0 kept only the closer of two opposing kicks here. That rule now lives
-    # in strategy_node.resolve_kick_conflict, applied by Brain or the match
+    # in team.resolve_kick_conflict, applied by Brain or the match
     # runner, so it can settle kicks between two different strategies.)
     return targets, kicks, attacker_rids
 
