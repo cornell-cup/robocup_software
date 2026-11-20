@@ -7,7 +7,15 @@ functions named after the slots it replaces, any of:
     def attacker(me, world): ...     # -> Command, e.g. me.go_to(...)
     def supporter(me, world): ...
     def defender(me, world): ...     # also a robot playing alone
+    def goalie(me, world): ...       # a role for plays and roles()
     def prepare(world): ...          # once a frame, before the robots
+    def team(robots, world): ...     # -> {robot: Command}, any robots at once
+    def kickoff(robots, world): ...  # -> {robot: (x, y)} before a kickoff
+    PLAYS = {"attack": ["attacker", "supporter", "goalie"], ...}
+    def pick_play(world): ...        # -> the name of the play to run
+
+Any other function in team.py is a role of the team's own (`runner`,
+`marker`) that roles() or a play can give a robot.
 
 The other files are its own modules: `from passing import best_spot` in
 team.py loads passing.py from the same folder. A single .py file works too,
@@ -27,10 +35,10 @@ Live and in matches, a team runs in its own process (core/worker.py).
 
 from __future__ import annotations
 
-import dataclasses
 import importlib.abc
 import importlib.machinery
 import importlib.util
+import inspect
 import itertools
 import json
 import keyword
@@ -41,9 +49,9 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-from strategy.core.slots import DEFAULT_TEAM, Team
+from strategy.core.slots import DEFAULT_TEAM, ROLES, SLOT_NAMES, Team
 
-SLOTS: tuple[str, ...] = tuple(f.name for f in dataclasses.fields(Team))
+SLOTS: tuple[str, ...] = SLOT_NAMES
 ENTRY = "team.py"  # a workspace's first file
 META = "workspace.json"  # where it came from (the web app writes it)
 _loads = itertools.count()
@@ -180,14 +188,46 @@ def load_team(path: str | os.PathLike[str], safe: bool | None = None) -> Team:
         raise TeamFileError(f"{_where(e, files, entry)}: {type(e).__name__}: {e}") from None
 
     slots = {n: getattr(module, n) for n in SLOTS if callable(getattr(module, n, None))}
-    if not slots:
+    plays = _plays(module, entry)
+    if not slots and not plays:
         raise TeamFileError(f"{entry.name} defines none of the slots ({', '.join(SLOTS)})")
-    return DEFAULT_TEAM.replace(**slots)
+    if plays and "pick_play" not in slots:
+        raise TeamFileError(f"{entry.name}: PLAYS needs a def pick_play(world) that picks one")
+    # The team's own roles: its other functions (a helper that's never named
+    # as a role is never called as one).
+    custom = {n: f for n, f in vars(module).items()
+              if inspect.isfunction(f) and not n.startswith("_") and n not in SLOTS}
+    for play, roles in plays.items():
+        for role in roles:
+            if role not in ROLES and role not in custom:
+                raise TeamFileError(f"{entry.name}: the play {play!r} has the role {role!r}, "
+                                    + f"but there's no def {role}(me, world) for it")
+    return DEFAULT_TEAM.replace(**slots).with_roles(plays, custom)
+
+
+def _plays(module: ModuleType, entry: Path) -> dict[str, tuple[str, ...]]:
+    """The team's PLAYS, checked: a play's name -> its roles, most important first."""
+    plays = getattr(module, "PLAYS", None)
+    if plays is None:
+        return {}
+    if not isinstance(plays, dict) or not plays:
+        raise TeamFileError(f"{entry.name}: PLAYS must be a dict like "
+                            + '{"attack": ["attacker", "supporter", "goalie"]}')
+    out = {}
+    for name, roles in plays.items():
+        if not isinstance(name, str) or not isinstance(roles, (list, tuple)) or not roles                 or not all(isinstance(r, str) for r in roles):
+            raise TeamFileError(f"{entry.name}: PLAYS[{name!r}] must be a list of role names, "
+                                + 'most important first, like ["attacker", "supporter", "goalie"]')
+        out[name] = tuple(roles)
+    return out
 
 
 def replaced_slots(team: Team) -> list[str]:
-    """The slots a team doesn't take from the built-in team."""
-    return [name for name in SLOTS if getattr(team, name) is not getattr(DEFAULT_TEAM, name)]
+    """The slots a team doesn't take from the built-in team (and its plays)."""
+    out = [name for name in SLOTS if getattr(team, name) is not getattr(DEFAULT_TEAM, name)]
+    if team.plays:
+        out.append(f"PLAYS ({', '.join(team.plays)})")
+    return out
 
 
 class TeamFile:
