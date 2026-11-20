@@ -148,6 +148,8 @@ class World:
         # What happened since last frame: "new_game", "goal_for",
         # "goal_against", "half_time", "kickoff". Usually empty.
         self.events: list[str] = list(events)
+        # The play running now (one of the team's PLAYS), None without plays.
+        self.play: str | None = None
         # Shapes on the field and values beside it, this frame only.
         self.draw = Drawing(color)
         self.show = Shown()
