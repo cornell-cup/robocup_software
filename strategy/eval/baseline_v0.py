@@ -5,8 +5,8 @@ of the redesign has to match or beat it. Do not edit or "fix" this file; a
 change here moves the bar every later version is measured against. Copied
 verbatim, except: this header; `lost_ids` added to decide()'s signature
 (ignored: v0 planned lost robots too); and the closer-kick-wins rule at the end
-of decide() moved out to team.resolve_kick_conflict, which Brain and
-the match runner apply, so v0 plays exactly as before.
+of decide() moved out (now the physics fires only the kick closest to the
+ball, sim/pymunk_world.py), so v0 plays exactly as before.
 """
 from __future__ import annotations
 
@@ -155,8 +155,8 @@ def decide(
                 targets[robot.id] = (tx, ty, ta)
 
     # (v0 kept only the closer of two opposing kicks here. That rule now lives
-    # in team.resolve_kick_conflict, applied by Brain or the match
-    # runner, so it can settle kicks between two different strategies.)
+    # in the physics, sim/pymunk_world.py, so it settles kicks between any two
+    # strategies.)
     return targets, kicks, attacker_rids
 
 
