@@ -40,7 +40,7 @@ uv run python strategy_node.py                # --color red: route the dribbler 
 | --- | --- | --- |
 | `--color blue\|red` | "Our" team: whose attacker gets the dribbler, and whose robots can be human-driven. Both teams are planned either way | `blue` |
 | `--rl-checkpoint PATH` | Trained PPO kick policy, loaded when RL kick is first turned on | `rl/checkpoints/first_final/final.zip` |
-| `--blue FILE`, `--red FILE` | A team file for that side, reloaded when saved ([Write your own team](#write-your-own-team)) | built-in |
+| `--blue TEAM`, `--red TEAM` | A team for that side, a workspace folder or a .py file, run in its own process and reloaded when saved ([Write your own team](#write-your-own-team)) | built-in |
 
 ## How it plays
 
@@ -94,7 +94,7 @@ back out.
 strategy/
 ├── strategy_node.py      # the process: ZMQ in and out, main loop (run by sim/run_pipeline.py)
 ├── api.py                # what every behaviour is written against: Me (a robot), World, Command
-├── examples/             # team files to copy: template.py (every slot), get_open.py (a supporter)
+├── examples/             # teams to start from: template.py (every slot), get_open.py (a supporter)
 ├── tactics/              # the built-in slots, written against api.py: examples to read and copy
 │   ├── role_assignments.py  # roles(): closest to the ball attacks, next supports, rest defend
 │   ├── attacker.py       # attacker(): contested kick / RL kick / push toward goal
@@ -105,10 +105,13 @@ strategy/
 │   └── rl_kick.py        # wraps the trained PPO kick policy
 ├── core/                 # how a frame runs
 │   ├── brain.py          # Brain: memory between frames (kickoff, lost robots, sticky attacker, toggles)
-│   ├── team.py           # decide(): a role for each robot, then its slot; resolve_kick_conflict()
+│   ├── team.py           # decide(): a role for each robot, then its slot
 │   ├── slots.py          # the replaceable pieces: Team, DEFAULT_TEAM, fall back to built-in on errors
-│   ├── loader.py         # team files: load one into a Team, reload it when saved
-│   └── command.py        # Command: what a slot tells one robot (target, heading, kick)
+│   ├── loader.py         # teams (workspace folders or files): load one into a Team, reload on save
+│   ├── worker.py         # TeamWorker: a team in its own process, restarted if it hangs
+│   ├── safety.py         # safe mode for someone else's team: no files, programs, network
+│   ├── drawing.py        # world.draw and world.show: what code draws on the field and shows
+│   └── command.py        # Command: what a slot tells one robot (target, heading, kick, dribble, speed)
 ├── world/                # what the team knows each frame
 │   ├── state.py          # GameState, built from the world-state JSON
 │   ├── geometry.py       # distances, goals, angles, pass lanes
@@ -157,11 +160,18 @@ the targets while strategy is turned on.
 ## Write your own team
 
 Each role, and who plays which role, is a slot (`core/slots.py`) with a
-built-in default. A **team file** is a Python file that defines functions
-named after the slots it replaces; every slot it doesn't define stays
-built-in. Start from a copy of `examples/template.py` (all four slots, each
-calling the built-in one) or `examples/get_open.py` (a supporter that gets
-open for a pass):
+built-in default. A team is a **workspace**: a folder whose `team.py`
+defines functions named after the slots it replaces (every slot it doesn't
+define stays built-in), and whose other `.py` files are its own modules
+(`from passing import open_spot` in `team.py`). A single `.py` file works as
+a team too. Start from `examples/template.py` (every slot, each calling the
+built-in one) or `examples/get_open.py` (a supporter that gets open for a
+pass). The easiest place to write one is the web app's **Code** page
+(`uv run robocup-web`):
+workspaces with a tab per file, **Play** in the simulator against the
+built-in team or a classmate's workspace, **Test match**, download and
+upload, and each problem on its file and line. Workspaces made there live
+in `teams/` at the repo root (not committed). By hand:
 
 ```python
 from strategy.api import Command, Me, World
@@ -185,27 +195,52 @@ cd sim; uv run python run_pipeline.py --blue ..\my_team.py        # live; --red 
 | `attacker` | `attacker(me, world) -> Command` | `tactics/attacker.py` |
 | `supporter` | `supporter(me, world) -> Command` | `tactics/supporter.py` |
 | `defender` | `defender(me, world) -> Command` (also a robot playing alone) | `tactics/defender.py` |
+| `prepare` | `prepare(world)`: once a frame, before the robots' slots; keep results in `world.memory` | nothing |
 
 - `me`: `id`, `pos`, `vel`, `angle`, `has_ball`, `distance_to()`, `angle_to()`;
-  commands `go_to(target, face=..., kick=...)`, `face(...)`, `stop()`.
+  commands `go_to(target, face=..., kick=..., dribble=..., max_speed=...)`,
+  `face(...)`, `stop()`. `dribble=True` turns the dribbler on (a kick
+  doesn't fire while it's on); `max_speed` is in m/s (full speed is about
+  1.2).
 - `world`: `ball`, `teammates`, `opponents`, `our_goal`, `their_goal`,
   `field_size`, `attack_angle`, `phase`, `kicked_off`, `lane_clear(a, b)`,
-  `memory` (your notes, kept between frames), and `analysis` / `us`
-  (`world/analysis.py`: who reaches the ball first, threats; computed only if
-  asked for).
+  `memory` (your notes, kept between frames), `events` (what happened since
+  last frame: `"new_game"`, `"goal_for"`, `"goal_against"`, `"half_time"`,
+  `"kickoff"`), and `analysis` / `us` (`world/analysis.py`: who reaches the
+  ball first, threats; computed only if asked for).
+- See what your code is thinking: `world.draw.point(p)`, `.line(a, b)`,
+  `.arrow(a, b)`, `.circle(p, r)`, `.text(p, "label")`, each with an optional
+  `color=` (a name or `"#rrggbb"`), are drawn on the field in the web app
+  (Code page with **Field** on, and the Simulator page); `world.show("name",
+  value)` lists values per robot in the Code page's Values card. Both start
+  empty every frame (`core/drawing.py`; up to 100 shapes a frame).
 - A slot that raises, returns something that isn't a `Command`, takes longer
   than 10 ms, or gives a role list that misses a robot falls back to the
   built-in slot for that frame. The error is reported once, with the line in
   your file: in the strategy node's log (the web app's Log card), and after
   the score in the match runner.
-- A file that doesn't load (a syntax error, say) is reported the same way;
-  live, the last version that loaded keeps playing until you fix it.
-- A team file runs as trusted code on your own computer: an endless loop in
-  it stops the strategy, and a file can do anything a Python program can, so
-  never load files from people you don't trust.
-- From Python: `load_team("my_team.py")` (`core/loader.py`) gives a `Team`,
-  as does `DEFAULT_TEAM.replace(supporter=get_open)`; pass it to
-  `Brain(color, teams={"blue": team})` or `match.play_game(..., team_a=team)`.
+- A team that doesn't load (a syntax error, say) is reported the same way,
+  with its file and line; live, the last version that loaded keeps playing
+  until you fix it. Saving any of a workspace's files reloads it.
+- A team always runs in its own process (`core/worker.py`), live and in the
+  match runner, so it can't stop the strategy or the match. Live, a frame it
+  doesn't answer in time is played by the built-in team, and an endless loop
+  or crash gets the process restarted after 0.5 s. In a match each frame
+  waits for its answer (so a match plays the same every time); a team that
+  hangs is restarted, and after 3 hangs the built-in team plays for it.
+- Your own workspace is trusted code on your own computer. One uploaded from
+  someone else (its `workspace.json` says `"safe": true`) plays in **safe
+  mode** (`core/safety.py`): an audit hook refuses writing files, reading
+  outside the workspace and the libraries, programs, the network and
+  `ctypes`, and its imports are limited to a list (maths, `numpy`, its own
+  files, the strategy's `api` / `tactics` / `skills` / `world`); the process
+  also has a 1 GB memory cap. A strong fence for classmates' code on our own
+  laptops, not a proven sandbox: never run `robocup-web --host 0.0.0.0`
+  while students use the Code page, and don't run code from strangers.
+- From Python: `load_team("teams/my_team")` (`core/loader.py`) gives a
+  `Team`, as does `DEFAULT_TEAM.replace(supporter=get_open)`; pass it to
+  `Brain(color, teams={"blue": team})` or `match.play_game(..., team_a=team)`
+  (in this process: trusted code only).
 
 ## Testing and matches
 
@@ -228,7 +263,8 @@ kicks, how often the ball got stuck (it resets a ball that sits still for
 10 s, as the sim's `9` key does; `--no-stuck-reset` turns that off), and the
 errors in each side's replaced slots.
 
-A side (`--a`, `--b`) is a team file or one of:
+A side (`--a`, `--b`) is a team (a workspace folder such as `teams/anna`,
+or a `.py` file), each in its own process, or one of:
 
 - `current`: the built-in team as the code is now (`core/team.py`);
 - `v1`, the default opponent: a frozen copy of the built-in team as of
