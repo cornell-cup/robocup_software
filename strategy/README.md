@@ -186,7 +186,8 @@ Open:
 
 ## Design
 
-Where the strategy is going. Today `decide()` does everything in one function.
+Where the strategy is going. The concrete next steps, and the student
+platform built on the same pieces, are in [ROADMAP.md](ROADMAP.md). Today `decide()` does everything in one function.
 The plan keeps CMU's **Skills, Tactics and Plays** (STP) layering [1, 2]:
 **plays** say what the team does, **tactics** what each robot does, **skills**
 how it does it. It then changes how open play works, following what the
