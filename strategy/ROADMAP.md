@@ -26,8 +26,10 @@ edits, plays and tests them (build order steps 2 and 3 below). Step 1 of
 draws on the field and shows values, gets game events and a `prepare` slot,
 and can dribble and limit its speed; and steps 2-5: workspaces of several
 files, every team in its own process with safe mode for someone else's,
-upload and download, and students playing each other's code. Next on the
-platform: `team()` and plays (step 6 there); and strategy step 2.
+upload and download, and students playing each other's code; and step 6:
+your own roles, plays, `team()` and `kickoff()`. Strategy step 2 has its
+first use: the attacker meets rolling balls, clearly better than v1. Next:
+skills on the platform (step 7 there), and strategy step 3.
 
 ## 1. Strategy: next steps
 
@@ -50,6 +52,12 @@ runner (`python -m strategy.eval.match`).
    saying when they apply; those come with the steps that need them.
 2. **Plug the analysis layer in.** `analyze()` (`world/analysis.py`) is computed
    once per frame and handed to every behaviour; today nothing uses it.
+   **First use, done 2026-11-20:** the attacker meets a ball rolling faster
+   than 0.3 m/s where it can first reach it (`ball_intercept`) instead of
+   chasing where it is. Against v1, 40 games of 120 s each on two sets of
+   seeds: +0.40 ± 0.30 and +0.75 ± 0.34 goals a game, 83-37 in goals over the
+   80 games (36 wins, 35 draws, 9 losses). The rest of the analysis (who wins
+   the race, the threats) comes in with steps 3 and 4.
 3. **Threat-based defense and the CMDragons supporter [3, 4].** Defenders
    block the first-level threat's line to our goal and the passing lanes of
    the second-level threats (both come out of `analyze()`). The supporter
@@ -203,5 +211,8 @@ classmate's code. Done so far:
 5. Workspaces, every team in its own process with safe mode, upload and
    download, and playing each other. **Done 2026-11-20.**
 
-Next, in order: `team()` and plays; skills; drills; tournaments; settings
-and Blocks; the driving slot.
+6. Your own roles, `goalie`, plays and `pick_play`, `team()` and
+   `kickoff()`. **Done 2026-11-20.**
+
+Next, in order: skills; drills; tournaments; settings and Blocks; the
+driving slot.

@@ -403,7 +403,11 @@ it's a new built-in that has beaten v1.
    Every example in the guide is played by a unit test.
 6. **More control:** `team()` for the whole team, your own roles, `goalie`
    split out, `kickoff()`, plays and `pick_play`. Built-in plays only if they
-   beat v1.
+   beat v1. **Done 2026-11-20** for students (`core/slots.py`: `goalie`, the
+   team's own roles, `PLAYS` with the 0.25 s switch, `team()`, `kickoff()`
+   checked to our half; `world.play`; the guide's "Plans for the whole
+   team", every example played by a test), with the built-in team unchanged
+   (same fingerprint). Built-in plays come with strategy step 6.
 7. **Skills:** the built-in attacker rewritten on `go_to_ball`,
    `kick_toward`, ...; skill slots; `time_to`, `ball.at`, `score`,
    `time_left`.
