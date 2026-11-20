@@ -127,6 +127,38 @@ rest.
 Run the pygame viewer **or** this page, not both: both send on the manual-command port
 (9093), and only one can own it. The page says so if it can't.
 
+**Code** is where students write their own team: Python for the strategy's slots
+(`attacker`, `supporter`, `defender`, `roles`, `prepare`; see
+[strategy/README.md](../strategy/README.md#write-your-own-team)), with a **Guide** tab
+written for them (`strategy/docs/guide.md`).
+
+- A team is a **workspace**: a folder in `teams/` at the repo root (not committed), one tab
+  per file. `team.py` is where the team starts; **+** adds a file it can import. **New…**
+  starts a workspace from the template, the get-open example or blank.
+  **Save** (`Ctrl+S` saves the open file) checks the team loads and says which slots it
+  replaces. **Workspace ▾** downloads it as a `.zip`, duplicates it (keep a version),
+  renames or deletes it.
+- **Upload…** (or drop files on the page) takes a classmate's `.zip`, or `.py` files as a new
+  workspace or into the open one, checked (size, names, nothing outside the folder; a taken
+  name asks first). Uploaded code plays in **safe mode** (`strategy/core/safety.py`), and the
+  page says whose it is.
+- **Play in the simulator** picks a team per side (this workspace, another, or the built-in
+  team), starts the sim with the AI on, and shows the field and this workspace's log;
+  saving while it plays reloads it. Each team runs in its own process: if one crashes,
+  loops or is too slow, its robots play the built-in team until it answers again.
+- **Test match** plays this workspace headless (`strategy.eval.match`, each team in its own
+  process) against the frozen `v1`, `v0`, the built-in team as it is now, or another
+  workspace, and shows goals, wins, goal difference with its 95% interval, and possession.
+  **Head to head** adds up every match per opponent (`teams/.results.json`).
+- **Field** (while the sim runs) puts the field beside the editor with what the code draws
+  (`world.draw`); the **Values** card lists what it shows (`world.show`), per robot.
+- Problems from loading, playing and matches are listed under the editor with their file
+  and line; click one to open the file there. A save clears the old ones.
+
+Workspaces are Python that runs on this computer: students' own as trusted code, uploaded
+ones in safe mode, which is a strong fence for a classroom but not a proven sandbox. Keep
+the server on `localhost` (the default) while students use this page.
+
 **Robots** drives the real XRP robots over Bluetooth (PestoLink), several at once, with
 the same code as `python -m laptop` ([robot/README.md](../robot/README.md)):
 
@@ -248,11 +280,29 @@ HTTP 400 with `{"error": "..."}`.
 | GET | `/info` | name, version |
 | GET | `/sim/status` | process status, `up`, toggles |
 | GET | `/sim/world` | the latest world state (simulation_node's message, plus `attackers`) |
-| POST | `/sim/start` | `{"strategy": true, "color": "blue", "field": [w, h] \| null, "field_from_calibration": bool, "vision": "tracker" \| "tcp://..." \| ".jsonl path" \| null, "ignore_tags": "0,1,2,3", "tag_map": "9:0", "flip_x": bool, "flip_y": bool, "replay_speed": 1}` |
+| POST | `/sim/start` | `{"strategy": true, "ai_on": false, "color": "blue", "blue_team": workspace \| null, "red_team": null, "field": [w, h] \| null, "field_from_calibration": bool, "vision": "tracker" \| "tcp://..." \| ".jsonl path" \| null, "ignore_tags": "0,1,2,3", "tag_map": "9:0", "flip_x": bool, "flip_y": bool, "replay_speed": 1}` |
 | POST | `/sim/stop` | |
 | GET | `/sim/log?after=N` | sim output lines after line N |
 | POST | `/sim/command` | one command, see below |
 | WS | `/sim/ws` | world state pushed ~30×/s; send commands as JSON text |
+| GET | `/teams` | `{"workspaces": [{"name", "files": [{"name", "size", "modified"}], "author", "safe", "origin", "from"}]}` |
+| GET | `/teams/guide` | `{"text"}`, the students' guide (Markdown) |
+| POST | `/teams/new` | `{"name": "anna", "start": "template" \| "get_open" \| "blank"}`; a taken name is a 409 with `{"taken", "suggest"}` |
+| POST | `/teams/upload` | `{"files": [{"name", "data": base64}], "into": workspace \| null, "as": name \| null, "replace": bool}`: a `.zip` or `.py` files, marked safe |
+| GET | `/teams/{ws}` | the workspace, as in the list |
+| POST | `/teams/{ws}/duplicate`, `/rename` | `{"name"}` |
+| POST | `/teams/{ws}/delete` | the workspaces left |
+| POST | `/teams/{ws}/author` | `{"author"}`, kept in downloads |
+| POST | `/teams/{ws}/check` | loads it in a child process (safe mode if it's someone else's): `{"ok", "slots" \| "error", "file", "line", "printed", "safe"}` |
+| GET | `/teams/{ws}/download` | the workspace as a `.zip` |
+| GET | `/teams/{ws}/results` | `{"results": [...]}`, its past matches from its side |
+| POST | `/teams/{ws}/files/new` | `{"name": "passing.py"}` |
+| GET | `/teams/{ws}/files/{file}` | `{"name", "text", "modified"}`; `.../download` as a file |
+| POST | `/teams/{ws}/files/{file}/save` | `{"text"}` |
+| POST | `/teams/{ws}/files/{file}/rename`, `/delete` | `{"name"}` / nothing (`team.py` stays) |
+| POST | `/teams/match/start` | `{"a": workspace, "b": "v1" \| "v0" \| "current" \| workspace, "games": 1-40, "duration": 5-600}` |
+| GET | `/teams/match?after=N` | `running`, `request`, `result` (goals, wins, `diff_per_game`, `diff_ci95`, possession, errors), output lines after N |
+| POST | `/teams/match/stop` | |
 | GET | `/robots/status` | `{"robots": [{"name", "state", "connected", "error", "moving", "command_age_s", "follow", "tracked"}], "sim_up"}` |
 | POST | `/robots/add`, `/robots/remove` | `{"name": "XRP-01"}` |
 | POST | `/robots/follow` | `{"name", "sim_robot": 0}` to follow a sim robot, `null` to drive it by hand |
@@ -328,8 +378,8 @@ the pages, a React 19 + TypeScript app built with Vite into
 `server/src/robocup_web/static/`, which the server serves. The built files are
 committed, so running the app needs no Node; changing the pages does (Node 20+).
 
-`web/src/`: `App.tsx` (header and routing), `pages/` (Simulator, Tracking,
-Calibration, Ball), `components/` (FieldView canvas, Card, Toggle, ...), `lib/` (API client,
+`web/src/`: `App.tsx` (header and routing), `pages/` (Simulator, Code, Tracking,
+Calibration, Ball, ...), `components/` (FieldView canvas, CodeEditor, Card, Toggle, ...), `lib/` (API client,
 the live sim and tracking sockets, small stores), `styles/` (one global theme file plus one
 per page).
 
