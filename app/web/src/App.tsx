@@ -5,6 +5,7 @@ import { photonvision, usePhotonVision } from "./lib/photonvision";
 import { useSim } from "./lib/sim";
 import { Ball } from "./pages/Ball";
 import { Calibration } from "./pages/Calibration";
+import { RobotTest } from "./pages/RobotTest";
 import { Robots } from "./pages/Robots";
 import { Simulator } from "./pages/Simulator";
 import { Tracking } from "./pages/Tracking";
@@ -12,6 +13,7 @@ import { Tracking } from "./pages/Tracking";
 const PAGES = [
   { path: "/sim", label: "Simulator" },
   { path: "/robots", label: "Robots" },
+  { path: "/robot-test", label: "Robot test" },
   { path: "/tracking", label: "Tracking" },
   { path: "/calibration", label: "Field calibration" },
   { path: "/ball", label: "Ball profile" },
@@ -38,6 +40,7 @@ export default function App() {
           : route === "/ball" ? <Ball />
           : route === "/tracking" ? <Tracking />
           : route === "/robots" ? <Robots />
+          : route === "/robot-test" ? <RobotTest />
           : <Simulator />}
       </main>
       <Toasts />

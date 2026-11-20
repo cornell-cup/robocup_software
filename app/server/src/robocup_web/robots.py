@@ -9,7 +9,8 @@ code as `python -m laptop`). A robot is driven one of two ways:
   WASD controls on the Simulator page drive the real robot, closed-loop
   through the camera. It only moves while the camera sees it.
 
-Either way the Fleet stops a robot whose commands stop coming. Only one
+Either way the Fleet stops a robot whose commands stop coming. A robot under
+a motion test (motion_test.py) is reserved: nothing else drives it meanwhile. Only one
 program can hold a robot's Bluetooth link: close `python -m laptop` for a
 robot before adding it here.
 """
@@ -49,6 +50,7 @@ class RealRobots:
         self._describe = laptop.robot_link.describe_error
         self.fleet = laptop.fleet.Fleet(log=lambda line: print(f"robots: {line}"))
         self._follow: dict[str, int | None] = {}  # name -> sim robot id, None = by hand
+        self._reserved: set[str] = set()  # robots under a motion test
         self._lock = threading.Lock()  # for _follow: the follower thread reads it
         self._feed: Any = None  # SimFeed, made and polled on the follower thread
         self._stop = threading.Event()
@@ -73,13 +75,33 @@ class RealRobots:
 
     def remove(self, name: str) -> None:
         self._check(name)
+        self._not_reserved(name)
         with self._lock:
             self._follow.pop(name, None)
         self.fleet.remove(name)
 
+    def reserve(self, name: str) -> None:
+        """Keep everything else off `name` (a motion test is driving it). It
+        must be connected and driven by hand, not following the sim."""
+        self._check(name)
+        with self._lock:
+            if name in self._reserved:
+                raise CommandError(f"{name} is already being tested")
+            if self._follow.get(name) is not None:
+                raise CommandError(f"{name} follows sim robot {self._follow[name]}; "
+                                   f"switch it to driving by hand first")
+            self._reserved.add(name)
+        self.fleet.stop(name)
+
+    def release(self, name: str) -> None:
+        with self._lock:
+            self._reserved.discard(name)
+        self.fleet.stop(name)
+
     def follow(self, name: str, sim_robot: int | None) -> None:
         """Have a robot follow sim robot `sim_robot`, or None to drive it by hand."""
         self._check(name)
+        self._not_reserved(name)
         if sim_robot is not None and not 0 <= sim_robot < 64:
             raise CommandError("sim robot must be a robot number from the Simulator page")
         with self._lock:
@@ -103,7 +125,7 @@ class RealRobots:
         for r in self.fleet.status():
             rid = self._follow.get(r["name"])
             command = feed.command(rid) if feed is not None and rid is not None else None
-            robots.append({**r, "follow": rid,
+            robots.append({**r, "follow": rid, "testing": r["name"] in self._reserved,
                            "tracked": None if rid is None else bool(command and command.get("tracked"))})
         return {"robots": robots, "sim_up": sim_up}
 
@@ -115,6 +137,7 @@ class RealRobots:
         Returns the robot's name."""
         name = str(cmd.get("name", ""))
         self._check(name)
+        self._not_reserved(name)
         if self._follow.get(name) is not None:
             raise CommandError(f"{name} follows sim robot {self._follow[name]}; "
                                f"switch it to driving by hand first")
@@ -132,12 +155,16 @@ class RealRobots:
 
     def stop(self, names: set[str]) -> None:
         for name in names:
-            if self._follow.get(name) is None:
+            if self._follow.get(name) is None and name not in self._reserved:
                 self.fleet.stop(name)
 
     def _check(self, name: str) -> None:
         if name not in self._follow:
             raise CommandError(f"no robot {name!r} -- add it first")
+
+    def _not_reserved(self, name: str) -> None:
+        if name in self._reserved:
+            raise CommandError(f"{name} is in a motion test; abort it on the Robot test page first")
 
     # -- following the sim (its own thread: the ZMQ socket lives here) --------
 

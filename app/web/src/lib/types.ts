@@ -408,6 +408,133 @@ export interface RealRobot {
   follow: number | null;
   /** following: whether the camera sees it right now (it only moves then) */
   tracked: boolean | null;
+  /** under a motion test: nothing else may drive it */
+  testing?: boolean;
+}
+
+// ── motion tests (the Robot test page) ─────────────────────────────────────
+
+export interface MotionTestInfo {
+  name: string;
+  label: string;
+  spin: boolean;
+  /** the way it drives in the robot's own frame: 0 forward, 90 left; null for a spin */
+  direction_deg: number | null;
+  /** +1 counter-clockwise, -1 clockwise, 0 straight */
+  turn: number;
+  distance_m: number;
+  angle_deg: number;
+}
+
+export interface MotionCatalog {
+  tests: MotionTestInfo[];
+  speeds: number[];
+  max_repeats: number;
+}
+
+/** [x, y, heading in degrees], field metres */
+export type Pose = [number, number, number];
+
+/** What one run measured (robot/laptop/motion_profile.py RunResult). */
+export interface MotionResult {
+  test: string;
+  speed: number;
+  moved: boolean;
+  reaction_s: number | null;
+  rise_s: number | null;
+  rate: number | null;
+  accel: number | null;
+  along_m: number | null;
+  drift_m: number | null;
+  drift_per_m: number | null;
+  direction_error_deg: number | null;
+  heading_change_deg: number | null;
+  max_deviation_m: number | null;
+  coast_m: number | null;
+  coast_s: number | null;
+  longest_gap_s: number | null;
+  notes: string[];
+}
+
+export type RunEnd = "reached" | "timeout" | "tag_lost" | "edge" | "no_room" | "aborted";
+
+export interface MotionRecord {
+  test: string;
+  speed: number;
+  repeat: number;
+  ended: RunEnd | null;
+  start: Pose | null;
+  /** how old the camera's messages were when they came, on average */
+  camera_latency_s: number | null;
+  result: MotionResult | null;
+  /** [seconds from the command, x, y, heading in degrees] */
+  path: [number, number, number, number][];
+}
+
+export type RunnerState = "idle" | "starting" | "returning" | "reposition" | "running" | "done" | "aborted" | "error";
+
+export interface RunnerStatus {
+  state: RunnerState;
+  message: string;
+  robot: string;
+  tag_id: number | null;
+  done: number;
+  total: number;
+  field: { width: number; height: number; x0?: number; y0?: number } | null;
+  /** the robot's shape the runner measures with */
+  body: Body;
+  /** how far inside the field the body's corners are kept, metres */
+  margin_m: number;
+  /** the start spot of the run in progress: where it drives back to */
+  home: Pose | null;
+  /** where the robot is now (its centre), whatever it's doing */
+  pose: Pose | null;
+  current: {
+    test: string;
+    label: string;
+    speed: number;
+    repeat: number;
+    start: Pose | null;
+    path: [number, number][];
+  } | null;
+}
+
+/** A robot's footprint and where its tag sits (robot/laptop/motion_runner.py Body). */
+export interface Body {
+  length_m: number;
+  width_m: number;
+  /** whether the tag's position was measured, not just taken as centred */
+  tag_known: boolean;
+  tag_forward_m: number;
+  tag_left_m: number;
+}
+
+/** Where the spins put the tag (motion_report.tag_offset()). */
+export interface TagOffset {
+  /** the whole offset: what to enter as the tag's position */
+  forward_m: number;
+  left_m: number;
+  /** beyond the position the runs used */
+  off_forward_m: number;
+  off_left_m: number;
+  off_by_m: number;
+  /** that position was measured: what's left is the robot turning off-centre */
+  known: boolean;
+  runs: number;
+}
+
+export interface MotionStatus {
+  running: boolean;
+  fake: boolean;
+  started: number | null;
+  error: string | null;
+  /** the session's profile is built (fetch it from /motion-test/report) */
+  report_ready: boolean;
+  /** where it was saved, robot/profiles/<robot>/<file>; null for the fake robot */
+  report_file: string | null;
+  runner: RunnerStatus | null;
+  records: MotionRecord[];
+  records_from: number;
 }
 
 export interface RealRobotsStatus {
@@ -423,4 +550,92 @@ export interface RobotDrive {
   left: number;
   turn: number;
   dribble: boolean;
+}
+
+export type Grade = "good" | "fair" | "poor" | null;
+
+/** One graded ability in a profile (robot/laptop/motion_report.py). */
+export interface Ability {
+  key: string;
+  label: string;
+  grade: Grade;
+  value: string;
+  detail: string;
+}
+
+/** One test at one speed, averaged over its repeats. */
+export interface ByTest {
+  test: string;
+  label: string;
+  speed: number;
+  runs: number;
+  reached: number;
+  moved: number;
+  drift_m: number | null;
+  drift_sd_m: number | null;
+  drift_per_m: number | null;
+  heading_change_deg: number | null;
+  rate: number | null;
+  rate_sd: number | null;
+  reaction_s: number | null;
+  rise_s: number | null;
+  max_deviation_m: number | null;
+  coast_m: number | null;
+}
+
+export interface MotionReport {
+  version: number;
+  robot: string;
+  tag_id: number | null;
+  fake: boolean;
+  started: number | null;
+  finished: number | null;
+  state: string | null;
+  speeds: number[];
+  tests: string[];
+  repeats: number;
+  body: Body | null;
+  tag_offset: TagOffset | null;
+  abilities: Ability[];
+  findings: string[];
+  by_test: ByTest[];
+  /** what it does at full command (robot/laptop/motion_report.py hardware()) */
+  hardware: Hardware;
+  /** real against the simulated robot, measured the same way; null without the sim */
+  vs_sim: VsSimRow[] | null;
+  records: MotionRecord[];
+}
+
+export interface Hardware {
+  top_speed: number | null;
+  accel: number | null;
+  stop_m: number | null;
+  damping: number | null;
+  strafe_speed: number | null;
+  turn_rate: number | null;
+  turn_accel: number | null;
+  camera_latency_ms: number | null;
+}
+
+export interface VsSimRow {
+  key: string;
+  label: string;
+  unit: string;
+  digits: number;
+  real: number | null;
+  sim: number | null;
+  ratio: number | null;
+  /** what to set in sim/config.py */
+  suggest: string | null;
+}
+
+/** A saved profile in the list: enough to pick one. */
+export interface SavedReport {
+  robot: string;
+  file: string;
+  started: number | null;
+  speeds: number[];
+  tests: string[];
+  runs: number;
+  grades: Record<string, Grade>;
 }

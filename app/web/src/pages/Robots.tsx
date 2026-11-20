@@ -223,9 +223,12 @@ function RobotRow({
         <span className={`dot${r.connected ? " ok" : r.error ? " red" : " warn pulse"}`} />
         <h2 className="mono">{r.name}</h2>
         <span className="muted">{link}</span>
-        <button className="btn sm ghost" disabled={busy} onClick={onRemove} title="Stop it and disconnect">Remove</button>
+        <button className="btn sm ghost" disabled={busy || r.testing} onClick={onRemove} title="Stop it and disconnect">Remove</button>
       </header>
       {r.error && !r.connected && <p className="note error">{r.error}</p>}
+      {r.testing && (
+        <p className="note">In a motion test: the <a href="#/robot-test">Robot test</a> page is driving it. Abort the test there to drive it here.</p>
+      )}
 
       <Segmented
         options={[
