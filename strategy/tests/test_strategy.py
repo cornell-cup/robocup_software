@@ -335,6 +335,22 @@ class TestDecide(unittest.TestCase):
 
 
 class TestTactics(unittest.TestCase):
+    def test_attacker_meets_a_rolling_ball_where_it_can_reach_it(self):
+        from strategy.tactics.attacker import MEET_BALL_SPEED, _push_toward_goal
+        from strategy.world.analysis import ball_intercept
+
+        robots = {0: (3.0, 3.0, 0.0)}
+        gs = build_game_state(world(robots, ball=(5.0, 1.0, 0.0, 1.5)))  # rolling up the field
+        robot, ball = gs.blue[0], gs.ball
+        self.assertGreater(ball.speed, MEET_BALL_SPEED)
+        meet = ball_intercept(robot, ball)
+        command = attack_as(robot, gs, "blue")
+        at_meet = _push_toward_goal(robot, BallState(pos=meet.point, vel=np.zeros(2), speed=0.0),
+                                    "blue", 0.0)
+        chasing = _push_toward_goal(robot, ball, "blue", 0.0)
+        self.assertEqual(command.target, at_meet.target)
+        self.assertGreater(command.y, chasing.y + 0.3)  # ahead of the ball, where it will be
+
     def test_lone_robot_defends(self):
         gs = build_game_state(world())
         sticky = {"blue": 0}
@@ -933,6 +949,127 @@ class TestGuide(unittest.TestCase):
                     self.assertEqual(r.errors_a, [])
 
 
+class TestPlaysAndTeam(unittest.TestCase):
+    """Your own roles, goalie, PLAYS and pick_play, team() and kickoff()."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+
+    def tearDown(self):
+        self._tmp.cleanup()
+
+    def load(self, code: str) -> Team:
+        path = self.dir / f"team_{len(list(self.dir.iterdir()))}.py"
+        path.write_text(textwrap.dedent(code), encoding="utf-8")
+        return load_team(path)
+
+    def plan(self, team: Team, raw: dict[str, Any] | None = None, kicked_off: bool = True,
+             play_state: dict[str, Any] | None = None):
+        errors: list[str] = []
+        targets, _, attackers = decide(build_game_state(raw or world()), sticky_attackers={},
+                                       kicked_off=kicked_off, teams={"blue": team}, errors=errors,
+                                       play_state=play_state)
+        return targets, attackers, errors
+
+    def test_your_own_role(self):
+        team = self.load("""\
+            def runner(me, world):
+                return me.go_to((7.0, 5.0))
+
+            def roles(team, world):
+                return [(m, "runner") for m in team]
+            """)
+        targets, attackers, errors = self.plan(team)
+        self.assertEqual(errors, [])
+        self.assertEqual({targets[r][:2] for r in (0, 1, 2)}, {(7.0, 5.0)})
+        self.assertFalse(attackers & {0, 1, 2})  # no blue attacker
+
+    def test_a_role_without_a_function_is_an_error(self):
+        team = self.load("""\
+            def roles(team, world):
+                return [(m, "wingback") for m in team]
+            """)
+        targets, _, errors = self.plan(team)
+        self.assertTrue(any("'wingback' isn't a role" in e for e in errors), errors)
+        self.assertEqual(set(targets), {0, 1, 2, 3, 4, 5})  # built-in roles instead
+
+    def test_goalie_plays_like_the_built_in_defender(self):
+        gs = build_game_state(world(ball=(2.0, 2.0, 0, 0)))
+        me = Me(gs.blue[0])
+        w = World(gs, "blue", gs.blue)
+        self.assertEqual(DEFAULT_TEAM.goalie(me, w).target, DEFAULT_TEAM.defender(me, w).target)
+
+    def test_plays_give_roles_and_switch_without_flicker(self):
+        team = self.load("""\
+            PLAYS = {
+                "attack": ["attacker", "supporter", "goalie"],
+                "park": ["parked"],
+            }
+
+            def parked(me, world):
+                return me.go_to((1.0, 1.0))
+
+            def pick_play(world):
+                world.show("play", world.play)
+                return "park" if world.ball.pos[0] < 3 else "attack"
+            """)
+        state: dict[str, Any] = {}
+        attack = world(ball=(5.0, 3.0, 0, 0), t=1.0)
+        targets, attackers, errors = self.plan(team, attack, play_state=state)
+        self.assertEqual(errors, [])
+        self.assertEqual(state["blue"]["play"], "attack")
+        self.assertEqual(len(attackers & {0, 1, 2}), 1)
+        # The ball goes left: "park" takes over only after 0.25 s of asking.
+        for t, expect in ((1.1, "attack"), (1.2, "attack"), (1.4, "park")):
+            targets, _, _ = self.plan(team, world(ball=(2.0, 3.0, 0, 0), t=t), play_state=state)
+            self.assertEqual(state["blue"]["play"], expect, t)
+        self.assertEqual({targets[r][:2] for r in (0, 1, 2)}, {(1.0, 1.0)})  # every robot parked
+
+    def test_plays_are_checked_when_loading(self):
+        with self.assertRaisesRegex(TeamFileError, "needs a def pick_play"):
+            self.load('PLAYS = {"attack": ["attacker"]}\n')
+        with self.assertRaisesRegex(TeamFileError, "has the role 'striker'"):
+            self.load('PLAYS = {"attack": ["striker"]}\n\ndef pick_play(world):\n    return "attack"\n')
+        team = self.load('PLAYS = {"attack": ["attacker", "goalie"]}\n\ndef pick_play(world):\n    return "attack"\n')
+        self.assertIn("PLAYS (attack)", replaced_slots(team))
+
+    def test_team_commands_some_robots_and_roles_do_the_rest(self):
+        team = self.load("""\
+            def team(robots, world):
+                return {robots[0]: robots[0].go_to((8.0, 1.0)), 2: world.teammates[2].stop()}
+            """)
+        targets, _, errors = self.plan(team)
+        self.assertEqual(errors, [])
+        self.assertEqual(targets[0][:2], (8.0, 1.0))
+        reference, _, _ = decide(build_game_state(world()), sticky_attackers={})
+        self.assertIn(1, targets)  # robot 1 still went through its role
+        self.assertEqual(set(targets), set(reference))
+
+    def test_a_broken_team_plan_falls_back_to_roles(self):
+        team = self.load("""\
+            def team(robots, world):
+                return {7: robots[0].stop()}
+            """)
+        targets, _, errors = self.plan(team)
+        self.assertTrue(any("team must use our robots" in e for e in errors), errors)
+        self.assertEqual(targets, decide(build_game_state(world()), sticky_attackers={})[0])
+
+    def test_kickoff_spots_only_before_the_kickoff_and_on_our_half(self):
+        team = self.load("""\
+            def kickoff(robots, world):
+                return {r: (2.0, 1.0 + r.id) for r in robots if r.id != 1}
+            """)
+        before, _, errors = self.plan(team, kicked_off=False)
+        self.assertEqual(errors, [])
+        self.assertEqual((before[0][:2], before[2][:2]), ((2.0, 1.0), (2.0, 3.0)))
+        after, _, _ = self.plan(team, kicked_off=True)
+        self.assertNotEqual(after[0][:2], (2.0, 1.0))
+        wrong = self.load("def kickoff(robots, world):\n    return {robots[0]: (8.0, 3.0)}\n")
+        _, _, errors = self.plan(wrong, kicked_off=False)
+        self.assertTrue(any("isn't on our half" in e for e in errors), errors)
+
+
 class TestWorkspaces(unittest.TestCase):
     """A team as a folder of files (core/loader.py), safe mode for someone
     else's (core/safety.py), and matches with each team in its own process."""
@@ -1061,16 +1198,11 @@ class TestWorkspaces(unittest.TestCase):
 
 
 class TestMatch(unittest.TestCase):
-    def test_v1_plays_like_the_built_in_team(self):
-        """baseline_v1 is a frozen copy of today's built-in team. When the
-        built-in team changes on purpose, drop this test: v1 stays the bar."""
-        from strategy.eval import baseline_v1
-
-        gs = build_game_state(world(ball=(4.2, 2.6, 0.4, -0.2)))
-        self.assertEqual(decide(gs, sticky_attackers={}), baseline_v1.decide(gs, sticky_attackers={}))
-        a = match.play_game(decide, decide, True, seed=4, duration_s=15)
-        b = match.play_game(baseline_v1.decide, baseline_v1.decide, True, seed=4, duration_s=15)
-        self.assertEqual(a, b)
+    def test_v1_still_plays(self):
+        """baseline_v1, the frozen built-in team of 2026-11-20 (before the
+        attacker met rolling balls), stays the bar to beat: it still plays."""
+        r = match.play_game(baseline_v1.decide, baseline_v1.decide, True, seed=4, duration_s=10)
+        self.assertGreater(r.ticks, 0)
 
     def test_goal_goes_to_the_team_that_scored(self):
         """Blue attacks +x: a ball into the x = FIELD_W goal (red's) is blue's goal."""
