@@ -1,8 +1,9 @@
 """Brain: what the strategy remembers between frames, around decide().
 
 The sticky attacker, the kickoff (waiting for the first touch after a
-restart), camera robots that are lost, each team's notes, and the RL kick /
-dribbler / human-driver toggles. The strategy node and the match runner both
+restart), the game's events (goals, half time, kickoff) for World.events,
+camera robots that are lost, each team's notes, and the RL kick / dribbler /
+human-driver toggles. The strategy node and the match runner both
 run the strategy through a Brain, so they behave the same.
 """
 
@@ -13,10 +14,16 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from strategy.core.slots import Team
-from strategy.core.team import decide, resolve_kick_conflict
-from strategy.world.state import GameState, build_game_state
+from strategy.core.team import Extras, decide
+from strategy.world.state import (
+    TEAM_BLUE_SIZE,
+    TEAM_RED_SIZE,
+    GameState,
+    build_game_state,
+)
 
 if TYPE_CHECKING:
+    from strategy.core.worker import TeamWorker
     from strategy.skills.rl_kick import RLKickSkill
 
 # The one checkpoint committed to git (.gitignore keeps only first_final/final.zip).
@@ -40,10 +47,14 @@ class Plan:
 
     targets: dict[int, tuple[float, float, float]]  # robot id -> (x, y, heading)
     kicks: list[int]
-    dribble: dict[int, bool]  # dribbler on/off for each of our AI-driven robots
+    dribble: dict[int, bool]  # dribbler on/off for each AI-driven robot
     attackers: set[int]  # both teams' attackers (viewers ring them)
     gamestate: GameState
     errors: list[str] = field(default_factory=list)  # replaced slots that failed this frame
+    max_speed: dict[int, float] = field(default_factory=dict)  # robot id -> m/s, where code set one
+    drawings: dict[str, list[dict[str, Any]]] = field(default_factory=dict)  # colour -> world.draw shapes
+    shown: dict[str, dict[str, dict[str, str]]] = field(default_factory=dict)  # colour -> world.show values
+    events: list[str] = field(default_factory=list)  # what happened this frame ("goal_blue", ...)
 
 
 class Brain:
@@ -61,7 +72,6 @@ class Brain:
         decide_fn: Any = None,
         rl_checkpoint: str = DEFAULT_RL_CHECKPOINT,
         log: Any = None,
-        resolve_kicks: bool = True,
         teams: dict[str, Team] | None = None,
     ):
         self.color = color
@@ -70,12 +80,11 @@ class Brain:
         if self.teams and not getattr(self.decide_fn, "takes_teams", False):
             raise ValueError("this decide function has no slots to replace (teams)")
         self._reported: set[str] = set()  # slot errors already logged
-        # False when something else settles kicks between two brains (the
-        # match runner runs one brain per team).
-        self.resolve_kicks = resolve_kicks
+        # Team files running in their own process (core/worker.py), by colour.
+        self.workers: dict[str, TeamWorker] = {}
         self.rl_checkpoint = rl_checkpoint
         self.log = log or (lambda _msg: None)
-        self.rl_skill: "RLKickSkill | None" = None
+        self.rl_skill: RLKickSkill | None = None
         self.rl_enabled = False
         self.dribble_attacker = False
         # Blue robot ids driven by human controllers; AI skips planning for them.
@@ -94,6 +103,8 @@ class Brain:
         self._last_t: float | None = None
         self._stale_since: dict[int, float] = {}
         self.memory: dict[str, dict[str, Any]] = {}  # each team's World.memory
+        self._score: tuple[int, int] | None = None  # (blue, red) last frame
+        self._events: list[str] = ["new_game"]  # this frame's, colour-neutral
 
     def set_team(self, color: str, team: Team | None) -> None:
         """Give a colour its own Team, or None for the built-in one; e.g.
@@ -105,6 +116,17 @@ class Brain:
             if not getattr(self.decide_fn, "takes_teams", False):
                 raise ValueError("this decide function has no slots to replace (teams)")
             self.teams[color] = team
+        self._reported.clear()
+
+    def set_worker(self, color: str, worker: TeamWorker | None) -> None:
+        """Play a colour from a team file running in its own process (None:
+        back to the built-in team). Errors are reported afresh."""
+        old = self.workers.pop(color, None)
+        if old is not None and old is not worker:
+            old.close()
+        if worker is not None:
+            self.teams.pop(color, None)
+            self.workers[color] = worker
         self._reported.clear()
 
     def handle_control(self, msg: dict[str, Any]) -> None:
@@ -129,42 +151,92 @@ class Brain:
         lost = self._update_lost(gamestate)
 
         errors: list[str] = []
-        slots = ({"teams": self.teams, "memory": self.memory, "errors": errors}
-                 if getattr(self.decide_fn, "takes_teams", False) else {})
+        extras = Extras()
+        slots: dict[str, Any] = (
+            {"teams": self.teams, "memory": self.memory, "errors": errors,
+             "events": self._events, "extras": extras}
+            if getattr(self.decide_fn, "takes_teams", False) else {})
+        if slots and self.workers:  # a colour its own process plays isn't planned here
+            slots["colors"] = tuple(c for c in ("blue", "red") if c not in self.workers)
         targets, kicks, attackers = self.decide_fn(
             gamestate, self.rl_skill, self.rl_enabled, self.sticky, self.kicked_off,
             self.human_blue_ids, lost, **slots,
         )
+        for color, worker in self.workers.items():
+            targets, kicks, attackers = self._merge_worker(
+                color, worker, raw, gamestate, lost, targets, kicks, attackers, errors, extras)
         for e in errors:
             if e not in self._reported:  # once each, not 60 times a second
                 self._reported.add(e)
                 self.log(f"[Strategy node] {e}")
-        if self.resolve_kicks:
-            kicks = resolve_kick_conflict(kicks, gamestate)
 
-        # Our dribblers: on for our attacker (when the toggle is on), off for
-        # every other robot we drive, so stale state never leaks between
-        # attacker changes. Human-driven robots keep their own dribble state
-        # (their controller's button, routed through robot_node).
-        ours = [
-            r for r in gamestate.our_team
-            if r.id not in lost and not (self.color == "blue" and r.id in self.human_blue_ids)
-        ]
-        our_ids = {r.id for r in ours}
+        # Dribblers: on where a slot asked for it (Command.dribble), and for
+        # our attacker when the dribble toggle is on; off for every other
+        # robot the AI drives (targets has exactly those), so stale state
+        # never leaks between attacker changes. Human-driven robots keep their
+        # own dribble state (their controller's button, through robot_node).
+        our_ids = {r.id for r in gamestate.our_team}
         our_attacker = next((rid for rid in attackers if rid in our_ids), None)
-        dribble = {rid: self.dribble_attacker and rid == our_attacker for rid in sorted(our_ids)}
+        dribble = {rid: rid in extras.dribble or (self.dribble_attacker and rid == our_attacker)
+                   for rid in sorted(targets)}
 
-        return Plan(targets, kicks, dribble, attackers, gamestate, errors)
+        events, self._events = self._events, []
+        return Plan(targets, kicks, dribble, attackers, gamestate, errors,
+                    max_speed=extras.max_speed, drawings=extras.drawings, shown=extras.shown,
+                    events=events)
+
+    def _merge_worker(self, color, worker, raw, gamestate, lost, targets, kicks, attackers,
+                      errors, extras):
+        """A colour's plan from its worker; the built-in plan for the colour
+        if there's no answer this frame."""
+        human = self.human_blue_ids if color == "blue" else set()
+        answer = worker.plan(raw, self.kicked_off, gamestate.game_phase, human, lost, self._events)
+        if answer is None:
+            if worker.stalled:  # not while it starts up, nor for a missed frame or two
+                errors.append(f"{color} team {worker.path.name} isn't answering in time; "
+                              + "playing the built-in team until it does")
+            t, k, a = self.decide_fn(
+                gamestate, self.rl_skill, self.rl_enabled, self.sticky, self.kicked_off,
+                self.human_blue_ids, lost, memory=self.memory, extras=extras, colors=(color,))
+            targets.update(t)
+            return targets, kicks + k, attackers | a
+        ids = set(range(TEAM_BLUE_SIZE)) if color == "blue" else             set(range(TEAM_BLUE_SIZE, TEAM_BLUE_SIZE + TEAM_RED_SIZE))
+        targets = {rid: t for rid, t in targets.items() if rid not in ids}
+        targets.update({int(rid): (float(t[0]), float(t[1]), float(t[2]))
+                        for rid, t in answer["targets"].items()})
+        kicks = [rid for rid in kicks if rid not in ids] + [int(r) for r in answer["kicks"]]
+        attackers = {a for a in attackers if a not in ids} | {int(a) for a in answer["attackers"]}
+        errors.extend(answer["errors"])
+        extras.dribble = ({r for r in extras.dribble if r not in ids}
+                          | {int(r) for r in answer.get("dribble", [])})
+        extras.max_speed = {r: s for r, s in extras.max_speed.items() if r not in ids}
+        extras.max_speed.update({int(r): float(s) for r, s in answer.get("max_speed", {}).items()})
+        extras.drawings.pop(color, None)
+        extras.shown.pop(color, None)
+        if answer.get("draw"):
+            extras.drawings[color] = answer["draw"]
+        if answer.get("show"):
+            extras.shown[color] = answer["show"]
+        return targets, kicks, attackers
 
     def _update_kickoff(self, gamestate: GameState) -> None:
         if self._last_t is not None and gamestate.timestamp < self._last_t:
             self._reset_memory()  # sim time went back: the sim was restarted
         self._last_t = gamestate.timestamp
 
+        # Goals, by colour (the score is from this brain's side).
+        ours, theirs = gamestate.score_ours, gamestate.score_theirs
+        score = (ours, theirs) if self.color == "blue" else (theirs, ours)
+        if self._score is not None:
+            self._events += ["goal_blue"] * max(0, score[0] - self._score[0])
+            self._events += ["goal_red"] * max(0, score[1] - self._score[1])
+        self._score = score
+
         # A goal or a new half puts the ball back on the centre spot.
-        if (self._goal_seq is not None and gamestate.goal_seq != self._goal_seq) or (
-            self._half is not None and gamestate.half != self._half
-        ):
+        new_half = self._half is not None and gamestate.half != self._half
+        if new_half:
+            self._events.append("half_time")
+        if (self._goal_seq is not None and gamestate.goal_seq != self._goal_seq) or new_half:
             self.kicked_off = False
             self.log("[Strategy node] restart: waiting for kickoff")
         self._goal_seq = gamestate.goal_seq
@@ -172,6 +244,7 @@ class Brain:
 
         if not self.kicked_off and gamestate.ball.speed > KICKOFF_BALL_SPEED:
             self.kicked_off = True
+            self._events.append("kickoff")
             self.log("[Strategy node] kickoff")
         if not self.kicked_off and gamestate.game_phase == "play":
             gamestate.game_phase = "kickoff"
