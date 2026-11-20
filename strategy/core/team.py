@@ -10,7 +10,16 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from strategy.api import World
-from strategy.core.slots import DEFAULT_TEAM, Team, run_behavior, run_prepare, run_roles
+from strategy.core.command import Command
+from strategy.core.slots import (
+    DEFAULT_TEAM,
+    Team,
+    run_behavior,
+    run_kickoff,
+    run_prepare,
+    run_roles,
+    run_team_plan,
+)
 from strategy.tactics.role_assignments import ATTACKER
 from strategy.world.state import GameState
 
@@ -57,6 +66,7 @@ def decide(
     events: list[str] | None = None,
     extras: Extras | None = None,
     colors: tuple[str, ...] = ("blue", "red"),
+    play_state: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[dict[int, tuple[float, float, float]], list[int], set[int]]:
     """One frame of the team AI, for both teams: who plays which role, and
     where each robot goes. Returns (targets, kicks, attackers): robot id ->
@@ -70,6 +80,11 @@ def decide(
     since last frame ("goal_blue", "kickoff", ...; World.events); `extras`
     collects dribblers, speed limits, drawings and shown values. `colors`:
     the teams to plan (a team played by its own process is planned there).
+    `play_state` keeps each team's running play between frames.
+
+    Per team: prepare(); kickoff() spots (before a kickoff) and team()'s
+    commands for the robots they name (team() wins); the other robots get
+    roles (the running play's, or roles()) and their role's function.
     """
     extras = extras if extras is not None else Extras()
     targets: dict[int, tuple[float, float, float]] = {}
@@ -80,6 +95,7 @@ def decide(
     lost = lost_ids or set()
     teams = teams or {}
     memory = memory if memory is not None else {}
+    play_state = play_state if play_state is not None else {}
 
     for team_color, team in (("blue", gamestate.blue), ("red", gamestate.red)):
         if team_color not in colors:
@@ -103,19 +119,25 @@ def decide(
             events=team_events(events or [], team_color),
         )
         run_prepare(spec, world, errors)
-        for me, role in run_roles(spec, world.teammates, world, errors):
+        planned: dict[int, Command] = {}
+        if not kicked_off:
+            planned.update(run_kickoff(spec, world, errors))
+        planned.update(run_team_plan(spec, world, errors))
+        rest = [m for m in world.teammates if m.id not in planned] if planned else world.teammates
+        for me, role in run_roles(spec, rest, world, errors, play_state.setdefault(team_color, {})):
             if role == ATTACKER:
                 attacker_rids.add(me.id)
             world._running_for(me.id)
-            command = run_behavior(spec, role, me, world, errors)
+            planned[me.id] = run_behavior(spec, role, me, world, errors)
             world._running_for(None)
-            targets[me.id] = command.target
+        for rid, command in planned.items():
+            targets[rid] = command.target
             if command.kick:
-                kicks.append(me.id)
+                kicks.append(rid)
             if command.dribble:
-                extras.dribble.add(me.id)
+                extras.dribble.add(rid)
             if command.max_speed is not None:
-                extras.max_speed[me.id] = command.max_speed
+                extras.max_speed[rid] = command.max_speed
         if world.draw.shapes:
             extras.drawings[team_color] = world.draw.shapes
         if world.show.values:
