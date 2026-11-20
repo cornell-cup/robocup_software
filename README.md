@@ -252,6 +252,7 @@ robocup_software/
 ├── strategy/                   # team strategy (Python package `strategy`)
 │   ├── strategy_node.py        # the process: world state in, robot targets out
 │   ├── api.py                  # the behaviour interface: Me, World, Command (students start here)
+│   ├── examples/               # team files to copy: your code in a slot, played in matches or live
 │   ├── tactics/                # the built-in roles, written against api.py: role assignment, attacker, supporter, defender
 │   ├── skills/                 # navigate, rl_kick
 │   ├── core/                   # how a frame runs: Brain (memory), decide(), the replaceable slots
@@ -362,6 +363,7 @@ pip venv, drop the `uv run`.
 | `--no-viz` | Don't start the Pygame viewer | off |
 | `--no-strategy` | Don't start the strategy node | off |
 | `--color blue\|red` | Team the strategy node controls | `blue` |
+| `--blue FILE`, `--red FILE` | A team file for that side: its slots replace the built-in ones, reloaded when saved ([how](strategy/README.md#write-your-own-team)) | built-in |
 | `--vision SRC` | Mirror camera tracking: `tcp://host:port` (ZMQ), `http://host:port/state`, or a `.jsonl` log to replay (loops) | off (pure sim) |
 | `--tag-map T:R,...` | Pin AprilTag ids to robot ids, e.g. `9:0,12:1` | auto: each new tag takes the lowest free robot |
 | `--ignore-tags IDS` | Tags never mirrored, e.g. `0,1,2,3` for the field corner tags | none |
@@ -374,7 +376,7 @@ pip venv, drop the `uv run`.
 | Command | Flags |
 | --- | --- |
 | `simulation_node.py` | `--headless` (run physics as fast as possible), `--seed N` (seed + jitter initial positions), plus the vision flags above |
-| `strategy_node.py` | `--color blue\|red`, `--rl-checkpoint PATH` |
+| `strategy_node.py` | `--color blue\|red`, `--rl-checkpoint PATH`, `--blue FILE` / `--red FILE` (team files) |
 
 To give a standalone node a custom field size, set `ROBOCUP_FIELD="1.93 1.32"`
 in the environment (`run_pipeline.py` does this for you).
@@ -413,7 +415,8 @@ Run from the repo root; no sim running ([details](strategy/README.md#testing-and
 | Command | What it does |
 | --- | --- |
 | `uv run python -m unittest discover -s strategy/tests -t .` | Strategy unit tests: world state, ball prediction, roles, kickoff, lost robots |
-| `uv run python -m strategy.eval.match` | Headless matches, current strategy vs the frozen baseline v0 (`--games N`, `--duration S`, `--a` / `--b`) |
+| `uv run python -m strategy.eval.match` | Headless matches, current strategy vs the frozen baseline v1 (`--games N`, `--duration S`, `--a` / `--b`) |
+| `uv run python -m strategy.eval.match --a my_team.py` | Your own team file (start from `strategy/examples/template.py`) vs v1 ([how](strategy/README.md#write-your-own-team)) |
 
 | Flag | Command | Meaning | Default |
 | --- | --- | --- | --- |

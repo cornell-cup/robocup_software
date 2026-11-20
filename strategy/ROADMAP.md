@@ -18,7 +18,10 @@ tests, tactics split out of `decide()`, the time-based analysis layer), and
 the attacker pushes the ball through. Step 1 below (slots) is done, and the
 folder was reorganised around it: the process and `api.py` at the top, the
 built-in `tactics/` written against `api.py`, the machinery in `core/` and
-`world/` (see the [Files](README.md#files) list). Next is step 2.
+`world/` (see the [Files](README.md#files) list). The built-in team is
+frozen as `v1`, the match runner's default opponent, and student team files
+load, play and reload (build order step 2 below). Next: strategy step 2,
+and the web Code page.
 
 ## 1. Strategy: next steps
 
@@ -35,7 +38,7 @@ runner (`python -m strategy.eval.match`).
    **Done 2026-11-20:** `api.py` (`Me`, `World`), `core/slots.py` (`Team`,
    `DEFAULT_TEAM`, fallback to the built-in slot on errors), `teams=` in
    `decide()`, `Brain` and the match runner (`team_a` / `team_b`); see
-   [Replace a behaviour](README.md#replace-a-behaviour). Identical to the
+   [Write your own team](README.md#write-your-own-team). Identical to the
    code before it on 20,000 random positions and whole games on both field
    sizes. Not yet: skill-level slots (go to, kick toward) and behaviours
    saying when they apply; those come with the steps that need them.
@@ -69,7 +72,9 @@ runner (`python -m strategy.eval.match`).
 9. **Measure as we go.** Freeze the current strategy as baseline `v1` (the
    pushing attacker changed play since `v0`), add statistics such as pass
    success (TIGERs track it [5]), and tune constants offline in the match
-   runner.
+   runner. **`v1` frozen 2026-11-20** (`eval/baseline_v1.py`, the match
+   runner's default opponent; identical to the built-in team on 20,000 random
+   positions and whole games, both field sizes).
 10. **Hardware, in parallel.** Measure the XRP's real drive (the
     `TODO(hardware)` values in `sim/config.py`) so the time model fits the
     real robot; kicker firmware; optionally retrain the RL kick at the real
@@ -155,9 +160,16 @@ for a pass; write a goalie; decide who plays which role.
 
 ### Build order
 
-1. The slot interface (strategy step 1).
+1. The slot interface (strategy step 1). **Done.**
 2. Student Python files: loaded, isolated, reloaded on save; a match-runner
-   option such as `--blue mycode.py`.
+   option such as `--blue mycode.py`. **Done 2026-11-20, except isolation:**
+   `core/loader.py`, `examples/`, `--a my_team.py` in the match runner and
+   `--blue` / `--red` on the strategy node and `run_pipeline.py`; a slot that
+   raises, returns junk or takes over 10 ms falls back to the built-in one,
+   with the error on the file's line. The file still runs inside the
+   strategy process, so an endless loop stops the strategy: running it in a
+   separate process with a hard timeout is still to do, before students use
+   the platform unsupervised.
 3. The Code page with a Python editor.
 4. Blockly blocks that generate that Python.
 5. Lessons and examples.

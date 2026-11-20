@@ -77,6 +77,7 @@ dribbler and whose robots can be human-driven
 |------|---------|---------|
 | `--no-viz`, `--no-strategy` | Skip the Pygame window / the strategy node | both run |
 | `--color blue\|red` | The strategy's own team | `blue` |
+| `--blue FILE`, `--red FILE` | A team file for that side: its slots replace the built-in ones, reloaded when saved ([how](../strategy/README.md#write-your-own-team)) | built-in |
 | `--vision SRC` | Mirror camera tracking: `tcp://host:5556` (ZMQ), `http://host:8000/state`, or a `.jsonl` log to replay | off |
 | `--tag-map T:R,...` | Pin AprilTag ids to robot ids, e.g. `9:0,12:1` | auto: each new tag takes the lowest free robot |
 | `--ignore-tags IDS` | Tags never mirrored, e.g. `0,1,2,3` for the field corner tags | none |

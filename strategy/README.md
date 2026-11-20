@@ -40,6 +40,7 @@ uv run python strategy_node.py                # --color red: route the dribbler 
 | --- | --- | --- |
 | `--color blue\|red` | "Our" team: whose attacker gets the dribbler, and whose robots can be human-driven. Both teams are planned either way | `blue` |
 | `--rl-checkpoint PATH` | Trained PPO kick policy, loaded when RL kick is first turned on | `rl/checkpoints/first_final/final.zip` |
+| `--blue FILE`, `--red FILE` | A team file for that side, reloaded when saved ([Write your own team](#write-your-own-team)) | built-in |
 
 ## How it plays
 
@@ -80,8 +81,8 @@ the sim's, in `sim/ball_contact.py`.
 ## Files
 
 At the top: the process, the interface you write against, and folders.
-Students start with `api.py` and the examples in `tactics/`; `core/` and
-`world/` are the machinery and don't need opening.
+Students start with `api.py`, `examples/` and the built-in slots in
+`tactics/`; `core/` and `world/` are the machinery and don't need opening.
 
 One frame, in order: `strategy_node.py` receives the world state,
 `core/brain.py` adds what it remembers, `decide()` (`core/team.py`) gives
@@ -93,6 +94,7 @@ back out.
 strategy/
 ├── strategy_node.py      # the process: ZMQ in and out, main loop (run by sim/run_pipeline.py)
 ├── api.py                # what every behaviour is written against: Me (a robot), World, Command
+├── examples/             # team files to copy: template.py (every slot), get_open.py (a supporter)
 ├── tactics/              # the built-in slots, written against api.py: examples to read and copy
 │   ├── role_assignments.py  # roles(): closest to the ball attacks, next supports, rest defend
 │   ├── attacker.py       # attacker(): contested kick / RL kick / push toward goal
@@ -105,6 +107,7 @@ strategy/
 │   ├── brain.py          # Brain: memory between frames (kickoff, lost robots, sticky attacker, toggles)
 │   ├── team.py           # decide(): a role for each robot, then its slot; resolve_kick_conflict()
 │   ├── slots.py          # the replaceable pieces: Team, DEFAULT_TEAM, fall back to built-in on errors
+│   ├── loader.py         # team files: load one into a Team, reload it when saved
 │   └── command.py        # Command: what a slot tells one robot (target, heading, kick)
 ├── world/                # what the team knows each frame
 │   ├── state.py          # GameState, built from the world-state JSON
@@ -114,7 +117,8 @@ strategy/
 │   └── simconfig.py      # sim/config.py's settings; the one place that puts sim/ on sys.path
 ├── eval/
 │   ├── match.py          # headless matches, strategy against strategy
-│   └── baseline_v0.py    # frozen copy of decide(), the bar to beat
+│   ├── baseline_v1.py    # frozen copy of the built-in team, 2026-11-20: the bar to beat
+│   └── baseline_v0.py    # frozen copy from 2026-11-14, before the pushing attacker
 ├── tests/                # unit tests: python -m unittest discover -s strategy/tests -t .
 ├── rl/                   # the learned kick: env, reward, train, eval, checkpoints/
 ├── docs/                 # the original STP sketch
@@ -150,21 +154,29 @@ Out (port 9091, to `sim/robot_node.py`), after each tick:
 dribbler on/off go straight to the simulator (port 9092). robot_node only uses
 the targets while strategy is turned on.
 
-## Replace a behaviour
+## Write your own team
 
-Each role, and who plays which role, is a slot (`core/slots.py`) with a built-in
-default. Write a function against `api.py` and swap it in; the rest of the
-team keeps the built-in slots:
+Each role, and who plays which role, is a slot (`core/slots.py`) with a
+built-in default. A **team file** is a Python file that defines functions
+named after the slots it replaces; every slot it doesn't define stays
+built-in. Start from a copy of `examples/template.py` (all four slots, each
+calling the built-in one) or `examples/get_open.py` (a supporter that gets
+open for a pass):
 
 ```python
-from strategy.api import Me, World
-from strategy.core.slots import DEFAULT_TEAM
+from strategy.api import Command, Me, World
 
-def get_open(me: Me, world: World):
+def supporter(me: Me, world: World) -> Command:
     spot = world.ball.pos + (world.their_goal - world.ball.pos) * 0.4
     return me.go_to(spot, face=world.ball.pos)
+```
 
-my_team = DEFAULT_TEAM.replace(supporter=get_open)
+Play it against the frozen team `v1`, or live in the sim, where saving the
+file reloads it while it plays:
+
+```powershell
+uv run python -m strategy.eval.match --a my_team.py              # from the repo root
+cd sim; uv run python run_pipeline.py --blue ..\my_team.py        # live; --red for the other side
 ```
 
 | Slot | Signature | Built-in |
@@ -177,23 +189,33 @@ my_team = DEFAULT_TEAM.replace(supporter=get_open)
 - `me`: `id`, `pos`, `vel`, `angle`, `has_ball`, `distance_to()`, `angle_to()`;
   commands `go_to(target, face=..., kick=...)`, `face(...)`, `stop()`.
 - `world`: `ball`, `teammates`, `opponents`, `our_goal`, `their_goal`,
-  `attack_angle`, `phase`, `kicked_off`, `lane_clear(a, b)`, `memory` (your
-  notes, kept between frames), and `analysis` / `us` (`world/analysis.py`: who
-  reaches the ball first, threats; computed only if asked for).
-- A replaced slot that raises, returns something that isn't a `Command`, or
-  gives a role list that misses a robot falls back to the built-in slot for
-  that frame; the error is logged once.
-- Try it: `Brain(color, teams={"blue": my_team})`, or in the match runner,
-  `match.play_game(decide, decide, True, seed=0, duration_s=60, team_a=my_team)`.
+  `field_size`, `attack_angle`, `phase`, `kicked_off`, `lane_clear(a, b)`,
+  `memory` (your notes, kept between frames), and `analysis` / `us`
+  (`world/analysis.py`: who reaches the ball first, threats; computed only if
+  asked for).
+- A slot that raises, returns something that isn't a `Command`, takes longer
+  than 10 ms, or gives a role list that misses a robot falls back to the
+  built-in slot for that frame. The error is reported once, with the line in
+  your file: in the strategy node's log (the web app's Log card), and after
+  the score in the match runner.
+- A file that doesn't load (a syntax error, say) is reported the same way;
+  live, the last version that loaded keeps playing until you fix it.
+- A team file runs as trusted code on your own computer: an endless loop in
+  it stops the strategy, and a file can do anything a Python program can, so
+  never load files from people you don't trust.
+- From Python: `load_team("my_team.py")` (`core/loader.py`) gives a `Team`,
+  as does `DEFAULT_TEAM.replace(supporter=get_open)`; pass it to
+  `Brain(color, teams={"blue": team})` or `match.play_game(..., team_a=team)`.
 
 ## Testing and matches
 
 From the repo root, no hardware and no running sim needed:
 
 ```powershell
-uv run python -m unittest discover -s strategy/tests -t .   # unit tests (~5 s)
-uv run python -m strategy.eval.match                         # current vs v0: 10 games of 120 s (~3 min)
-uv run python -m strategy.eval.match --a current --b current --games 4
+uv run python -m unittest discover -s strategy/tests -t .   # unit tests (~12 s)
+uv run python -m strategy.eval.match                         # current vs v1: 10 games of 120 s (~3 min)
+uv run python -m strategy.eval.match --a my_team.py --games 40
+uv run python -m strategy.eval.match --a current --b v0 --games 4
 $env:ROBOCUP_FIELD = "1.93 1.32"; uv run python -m strategy.eval.match   # on the real table's size
 ```
 
@@ -202,13 +224,22 @@ process: the sim's physics, robot_node's controllers and one `Brain` per team,
 about 8-10x faster than real time. Sides swap every game and each game is
 seeded, so the same flags play the same games. It prints goals, the goal
 difference per game with a 95% confidence interval, possession, territory,
-kicks, and how often the ball got stuck (it resets a ball that sits still for
-10 s, as the sim's `9` key does; `--no-stuck-reset` turns that off).
+kicks, how often the ball got stuck (it resets a ball that sits still for
+10 s, as the sim's `9` key does; `--no-stuck-reset` turns that off), and the
+errors in each side's replaced slots.
 
-`v0` is the frozen baseline (`eval/baseline_v0.py`): `decide()` as it was on
-2026-11-14. Every step of the [Design](#design) has to match or beat it. Don't
-edit it. `current` is `strategy_node.decide`. To compare a new version, add it
-to `STRATEGIES` in `eval/match.py`.
+A side (`--a`, `--b`) is a team file or one of:
+
+- `current`: the built-in team as the code is now (`core/team.py`);
+- `v1`, the default opponent: a frozen copy of the built-in team as of
+  2026-11-20 (`eval/baseline_v1.py`). Every change to the built-in team has
+  to match or beat it;
+- `v0`: the frozen team of 2026-11-14 (`eval/baseline_v0.py`), before the
+  attacker pushed the ball.
+
+Don't edit the frozen files: they're the bar. When the built-in team gets
+clearly better, freeze it as the next one and add it to `STRATEGIES` in
+`eval/match.py`.
 
 `Brain` (in `core/brain.py`) is everything the strategy remembers between
 frames around `decide()`: the sticky attacker, kickoff, lost camera robots, the
