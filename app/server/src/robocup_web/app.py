@@ -31,11 +31,12 @@ from tag_tracking import photon_lens
 from . import __version__
 from .ball import VIEWS, BallCalibration
 from .calib import FieldCalibration
+from .motion_test import MotionTests
 from .photonvision import ENV_DIR, PhotonVisionProcess
 from .procs import CommandError
-from .motion_test import MotionTests
 from .robots import RealRobots
 from .sim import SIM_DIR, SimBridge, SimProcess
+from .teams import GUIDE, Conflict, MatchProcess, Workspaces
 from .tracking import (
     VIDEO_PORT,
     TrackerProcess,
@@ -78,6 +79,8 @@ class App:
         self.feed = TrackingFeed()
         self.robots = RealRobots()
         self.motion = MotionTests(self.robots, self.feed)
+        self.teams = Workspaces()
+        self.match = MatchProcess()
 
 
 def create_app(photonvision_dir: Path | None = None, start_photonvision: bool = False) -> FastAPI:
@@ -105,6 +108,7 @@ def create_app(photonvision_dir: Path | None = None, start_photonvision: bool = 
             await asyncio.to_thread(state.ball.disconnect)
             await asyncio.to_thread(state.photon.stop)
             await asyncio.to_thread(state.motion.close)
+            await asyncio.to_thread(state.match.stop)
             await asyncio.to_thread(state.robots.close)
             state.bridge.close()
             state.feed.close()
@@ -114,6 +118,9 @@ def create_app(photonvision_dir: Path | None = None, start_photonvision: bool = 
 
     @app.exception_handler(CommandError)
     async def _command_error(_req: Request, exc: CommandError):
+        if isinstance(exc, Conflict):  # a taken name: the page asks before replacing
+            return JSONResponse({"error": str(exc), "taken": exc.taken, "suggest": exc.suggest},
+                                status_code=409)
         return JSONResponse({"error": str(exc)}, status_code=400)
 
     # -- general ------------------------------------------------------------
@@ -139,6 +146,8 @@ def create_app(photonvision_dir: Path | None = None, start_photonvision: bool = 
         opts = dict(opts or {})
         opts["vision"] = check_vision_source(str(opts.get("vision") or "").strip())
         state.sim.start(opts)
+        # "ai_on": the AI plays from the start (the Code page's Play).
+        state.bridge.ai_on_start = bool(opts.get("ai_on"))
         return state.sim.status()
 
     @app.post("/api/v1/sim/stop")
@@ -197,6 +206,103 @@ def create_app(photonvision_dir: Path | None = None, start_photonvision: bool = 
             sender.cancel()
             state.bridge.clients.discard(q)
             state.bridge.stop_driving(driven)
+
+    # -- workspaces (the Code page) ---------------------------------------------
+
+    @app.get("/api/v1/teams")
+    def teams_list() -> dict[str, Any]:
+        return {"workspaces": state.teams.list()}
+
+    @app.get("/api/v1/teams/guide")
+    def teams_guide() -> dict[str, Any]:
+        """The students' guide (strategy/docs/guide.md), for the Code page's Guide tab."""
+        return {"text": GUIDE.read_text(encoding="utf-8")}
+
+    @app.get("/api/v1/teams/match")
+    def teams_match_status(after: int = 0) -> dict[str, Any]:
+        return state.match.status(after)
+
+    @app.post("/api/v1/teams/match/start")
+    def teams_match_start(opts: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
+        state.match.start(str(opts.get("a") or ""), str(opts.get("b") or "v1"),
+                          int(opts.get("games") or 6), float(opts.get("duration") or 60))
+        return state.match.status()
+
+    @app.post("/api/v1/teams/match/stop")
+    def teams_match_stop() -> dict[str, Any]:
+        state.match.stop()
+        return state.match.status()
+
+    @app.post("/api/v1/teams/new")
+    def teams_new(opts: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
+        return state.teams.create(str(opts.get("name") or ""), str(opts.get("start") or "template"))
+
+    @app.post("/api/v1/teams/upload")
+    def teams_upload(opts: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
+        """{"files": [{"name", "data": base64}], "into": workspace | null,
+        "as": new name | null, "replace": bool}"""
+        return state.teams.upload(list(opts.get("files") or []), opts.get("into") or None,
+                                  opts.get("as") or None, bool(opts.get("replace")))
+
+    @app.get("/api/v1/teams/{ws}")
+    def teams_info(ws: str) -> dict[str, Any]:
+        return state.teams.info(ws)
+
+    @app.post("/api/v1/teams/{ws}/duplicate")
+    def teams_duplicate(ws: str, opts: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
+        return state.teams.duplicate(ws, str(opts.get("name") or ""))
+
+    @app.post("/api/v1/teams/{ws}/rename")
+    def teams_rename(ws: str, opts: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
+        return state.teams.rename(ws, str(opts.get("name") or ""))
+
+    @app.post("/api/v1/teams/{ws}/delete")
+    def teams_delete(ws: str) -> dict[str, Any]:
+        state.teams.delete(ws)
+        return {"workspaces": state.teams.list()}
+
+    @app.post("/api/v1/teams/{ws}/author")
+    def teams_author(ws: str, opts: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
+        return state.teams.set_author(ws, str(opts.get("author") or ""))
+
+    @app.post("/api/v1/teams/{ws}/check")
+    def teams_check(ws: str) -> dict[str, Any]:
+        return state.teams.check(ws)
+
+    @app.get("/api/v1/teams/{ws}/results")
+    def teams_results(ws: str) -> dict[str, Any]:
+        return {"results": state.teams.results(ws)}
+
+    @app.get("/api/v1/teams/{ws}/download")
+    def teams_download(ws: str) -> Response:
+        return Response(state.teams.download(ws), media_type="application/zip",
+                        headers={"Content-Disposition": f'attachment; filename="{ws}.zip"'})
+
+    @app.post("/api/v1/teams/{ws}/files/new")
+    def teams_file_new(ws: str, opts: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
+        return state.teams.new_file(ws, str(opts.get("name") or ""))
+
+    @app.get("/api/v1/teams/{ws}/files/{name}")
+    def teams_file_read(ws: str, name: str) -> dict[str, Any]:
+        return state.teams.read_file(ws, name)
+
+    @app.get("/api/v1/teams/{ws}/files/{name}/download")
+    def teams_file_download(ws: str, name: str) -> Response:
+        text = state.teams.read_file(ws, name)["text"]
+        return Response(text, media_type="text/x-python",
+                        headers={"Content-Disposition": f'attachment; filename="{name}"'})
+
+    @app.post("/api/v1/teams/{ws}/files/{name}/save")
+    def teams_file_save(ws: str, name: str, body: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
+        return state.teams.save_file(ws, name, str(body.get("text") or ""))
+
+    @app.post("/api/v1/teams/{ws}/files/{name}/rename")
+    def teams_file_rename(ws: str, name: str, opts: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
+        return state.teams.rename_file(ws, name, str(opts.get("name") or ""))
+
+    @app.post("/api/v1/teams/{ws}/files/{name}/delete")
+    def teams_file_delete(ws: str, name: str) -> dict[str, Any]:
+        return state.teams.delete_file(ws, name)
 
     # -- real robots --------------------------------------------------------
 
