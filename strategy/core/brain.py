@@ -95,6 +95,18 @@ class Brain:
         self._stale_since: dict[int, float] = {}
         self.memory: dict[str, dict[str, Any]] = {}  # each team's World.memory
 
+    def set_team(self, color: str, team: Team | None) -> None:
+        """Give a colour its own Team, or None for the built-in one; e.g.
+        after a team file is saved. Errors in the new code are reported
+        afresh, even ones the old code had."""
+        if team is None:
+            self.teams.pop(color, None)
+        else:
+            if not getattr(self.decide_fn, "takes_teams", False):
+                raise ValueError("this decide function has no slots to replace (teams)")
+            self.teams[color] = team
+        self._reported.clear()
+
     def handle_control(self, msg: dict[str, Any]) -> None:
         """A control message from the manual port (viz_node or the web app)."""
         if "rl_kick_enabled" in msg:
