@@ -6,6 +6,8 @@ A Team names one function per slot:
     attacker   the robot on the ball:  attacker(me, world) -> Command
     supporter  the second robot:       supporter(me, world) -> Command
     defender   the third robot, or a robot playing alone: defender(me, world) -> Command
+    prepare    once a frame, before the others: prepare(world), for work the
+               whole team shares (results in world.memory); built-in: nothing
 
 DEFAULT_TEAM holds the built-in ones, from tactics/, written against the same
 interface (strategy/api.py). Replace any of them:
@@ -52,6 +54,11 @@ class SlotTooSlow(Exception):
 
 Behavior = Callable[[Me, World], Command]
 RoleAssigner = Callable[[list[Me], World], list[tuple[Me, str]]]
+Preparer = Callable[[World], None]
+
+
+def builtin_prepare(world: World) -> None:
+    """The built-in team has nothing to prepare."""
 
 
 @dataclass(frozen=True)
@@ -60,6 +67,7 @@ class Team:
     attacker: Behavior = builtin_attacker
     supporter: Behavior = builtin_supporter
     defender: Behavior = builtin_defender
+    prepare: Preparer = builtin_prepare
 
     def replace(self, **slots: Callable) -> "Team":
         """This team with some slots swapped, e.g. replace(supporter=get_open)."""
@@ -77,6 +85,19 @@ class Team:
 
 
 DEFAULT_TEAM = Team()
+
+
+def run_prepare(team: Team, world: World, errors: list[str] | None) -> None:
+    """The team's prepare slot, once a frame before any robot's; if it
+    fails, the frame goes on without it."""
+    if team.prepare is DEFAULT_TEAM.prepare:
+        return
+    try:
+        t0 = time.perf_counter()
+        team.prepare(world)
+        _check_time(t0)
+    except Exception as e:  # noqa: BLE001 -- student code may raise anything
+        _report(errors, world.color, "prepare", None, e, fallback="skipping it this frame")
 
 
 def run_roles(team: Team, members: list[Me], world: World, errors: list[str] | None) -> list[tuple[Me, str]]:
@@ -127,13 +148,14 @@ def _check_time(t0: float) -> None:
 
 
 def _report(errors: list[str] | None, color: str, slot: str, robot: int | None,
-            e: BaseException) -> None:
+            e: BaseException, fallback: str | None = None) -> None:
     if errors is None:
         return
     where = None if isinstance(e, SlotTooSlow) else _your_line(e)
     at = f" ({os.path.basename(where.filename)}:{where.lineno})" if where else ""
     who = "" if robot is None else f", robot {robot}"
-    errors.append(f"{color} {slot}{who}: {type(e).__name__}: {e}{at}; using the built-in {slot}")
+    then = fallback or f"using the built-in {slot}"
+    errors.append(f"{color} {slot}{who}: {type(e).__name__}: {e}{at}; {then}")
 
 
 def _your_line(e: BaseException) -> traceback.FrameSummary | None:
