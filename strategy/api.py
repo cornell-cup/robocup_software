@@ -123,10 +123,11 @@ class World:
         self.teammates: list[Me] = [Me(r) for r in team]
         theirs = gamestate.red if color == "blue" else gamestate.blue
         self.opponents: list[Me] = [Me(r) for r in theirs if r.id not in self._unavailable]
-        # The built-in attacker's learned kick, and the built-in roles' memory.
+        # The built-in attacker's learned kick.
         self.rl_skill = rl_skill
         self.rl_enabled = rl_enabled
-        self._sticky = sticky if sticky is not None else {}
+        # Each team's attacker last frame, kept by the built-in roles slot.
+        self.sticky: dict[str, int] = sticky if sticky is not None else {}
 
     @property
     def ball(self) -> BallState:

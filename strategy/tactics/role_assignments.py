@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import numpy as np
 
+from strategy.api import Me, World
 from strategy.geometry import distance
 from strategy.state import FIELD_SCALE, RobotState
 
@@ -21,6 +22,14 @@ DEFENDER = "defender"
 # closer to the ball. Bigger than typical per-tick noise and the supporter's
 # transient pass-by distance. Tuned on 9 x 6, scaled by FIELD_SCALE.
 ATTACKER_HYSTERESIS = 0.4 * FIELD_SCALE
+
+
+def roles(team: list[Me], world: World) -> list[tuple[Me, str]]:
+    """The built-in roles slot: assign_roles(), keeping the incumbent
+    attacker in world.sticky."""
+    by_id = {m.id: m for m in team}
+    pairs = assign_roles([m.state for m in team], world.ball.pos, world.sticky, world.color)
+    return [(by_id[r.id], role) for r, role in pairs]
 
 
 def assign_roles(

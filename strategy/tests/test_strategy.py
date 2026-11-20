@@ -33,11 +33,16 @@ from strategy.state import (
 from strategy.slots import DEFAULT_TEAM, Team
 from strategy.brain import Brain
 from strategy.team import decide, resolve_kick_conflict
-from strategy.tactics.attacker import APPROACH_OFFSET, CONTESTED_SKEW, aim_point, attack
+from strategy.tactics.attacker import APPROACH_OFFSET, CONTESTED_SKEW, aim_point, attacker
 from strategy.tactics.defender import defend_goal
 from strategy.tactics.role_assignments import ATTACKER, DEFENDER, SUPPORTER, assign_roles
 
 from config import BALL_DAMP, DT  # sim/config.py, on sys.path via strategy
+
+def attack_as(robot, gs, color):
+    """The built-in attacker slot for one robot, as decide() runs it."""
+    return attacker(Me(robot), World(gs, color, gs.blue if color == "blue" else gs.red))
+
 
 # Six robots well apart, roughly the sim's spawn layout (0-2 blue, 3-5 red).
 SPAWNS = {
@@ -320,16 +325,16 @@ class TestTactics(unittest.TestCase):
     def test_contested_ball_is_kicked_at_an_angle(self):
         robots = {1: (4.0, 3.0, 0.0), 4: (4.6, 3.0, math.pi)}
         gs = build_game_state(world(robots, ball=(4.3, 3.0, 0, 0)))
-        command = attack(gs.blue[1], gs, "blue")
+        command = attack_as(gs.blue[1], gs, "blue")
         self.assertTrue(command.kick)
         self.assertAlmostEqual(command.angle, CONTESTED_SKEW)
 
     def test_classic_attacker_gets_behind_the_ball(self):
         gs = build_game_state(world(ball=(5.0, 3.0, 0, 0)))  # nobody near it
-        command = attack(gs.blue[1], gs, "blue")
+        command = attack_as(gs.blue[1], gs, "blue")
         self.assertFalse(command.kick)
         self.assertLess(command.x, 5.0)  # blue attacks +x: stands on the -x side
-        command = attack(gs.red[1], gs, "red")
+        command = attack_as(gs.red[1], gs, "red")
         self.assertGreater(command.x, 5.0)
 
     def test_goalie_stays_inside_the_posts(self):
@@ -413,7 +418,7 @@ class TestPush(unittest.TestCase):
         ball = (5.0, 3.0)
         behind = (5.0 - APPROACH_OFFSET, 3.0)  # on the line to red's goal, facing it
         gs = build_game_state(world({1: (*behind, 0.0)}, ball=(*ball, 0, 0)))
-        command = attack(gs.blue[1], gs, "blue")
+        command = attack_as(gs.blue[1], gs, "blue")
         self.assertGreater(command.x, ball[0])  # past the ball, toward the goal
         self.assertAlmostEqual(command.angle, 0.0, places=6)
 
@@ -423,7 +428,7 @@ class TestPush(unittest.TestCase):
                       (5.0 + APPROACH_OFFSET, 3.0, 0.0),          # wrong side of the ball
                       (5.0 - APPROACH_OFFSET, 3.6, 0.0)):         # off the line
             gs = build_game_state(world({1: robot}, ball=(*ball, 0, 0)))
-            self.assertLess(attack(gs.blue[1], gs, "blue").x, ball[0], msg=str(robot))
+            self.assertLess(attack_as(gs.blue[1], gs, "blue").x, ball[0], msg=str(robot))
 
     def test_aim_is_inside_the_goal(self):
         from config import FIELD_W

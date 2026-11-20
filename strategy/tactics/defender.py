@@ -9,6 +9,7 @@ import math
 
 import numpy as np
 
+from strategy.api import Me, World
 from strategy.command import Command
 from strategy.geometry import our_goal
 from strategy.state import FIELD_SCALE, GOAL_Y_MAX, GOAL_Y_MIN
@@ -25,6 +26,11 @@ GOALIE_RUSH_DIST = 2.5 * FIELD_SCALE
 GOALIE_RUSH_STANDOFF = 1.6 * FIELD_SCALE
 # Keep the goalie a hair inside the posts so it never wedges against a wall.
 GOALIE_Y_MARGIN = 0.05 * FIELD_SCALE
+
+
+def defender(me: Me, world: World) -> Command:
+    """The built-in defender slot: the goalie spot for this ball."""
+    return defend_goal(world.ball.pos, world.color)
 
 
 def defend_goal(ball_pos: np.ndarray, team_color: str) -> Command:

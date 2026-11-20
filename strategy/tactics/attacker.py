@@ -12,19 +12,15 @@ Three ways, checked in order:
 from __future__ import annotations
 
 import math
-from typing import TYPE_CHECKING
 
 import numpy as np
 
+from strategy.api import Me, World
 from strategy.command import Command
 from strategy.geometry import attack_angle, distance, opp_goal, wrap_angle
-from strategy.skills.navigate import behind_ball, heading_while_driving
-from strategy.state import FIELD_SCALE, GOAL_MOUTH_H, GOAL_Y_MAX, GOAL_Y_MIN, BallState, GameState, RobotState
-
 from strategy.simconfig import ARRIVAL_THRESH
-
-if TYPE_CHECKING:
-    from strategy.skills.rl_kick import RLKickSkill
+from strategy.skills.navigate import behind_ball, heading_while_driving
+from strategy.state import FIELD_SCALE, GOAL_MOUTH_H, GOAL_Y_MAX, GOAL_Y_MIN, BallState, RobotState
 
 # Distances below are tuned on the 9 x 6 field and scaled by FIELD_SCALE, like
 # the robot, ball and kick zone (sim/config.py), so on a custom --field they
@@ -76,13 +72,10 @@ AIM_POST_MARGIN = GOAL_MOUTH_H / 4
 RL_BEHIND_BALL = 0.1
 
 
-def attack(
-    robot: RobotState,
-    gamestate: GameState,
-    team_color: str,
-    rl_skill: "RLKickSkill | None" = None,
-    rl_enabled: bool = False,
-) -> Command:
+def attacker(me: Me, world: World) -> Command:
+    """The built-in attacker slot."""
+    robot, gamestate, team_color = me.state, world.gamestate, world.color
+    rl_skill, rl_enabled = world.rl_skill, world.rl_enabled
     ball = gamestate.ball
     attacks_right = team_color == "blue"
     team_dir = attack_angle(team_color)

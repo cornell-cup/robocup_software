@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import numpy as np
 
+from strategy.api import Me, World
 from strategy.command import Command
 from strategy.geometry import attack_angle, opp_goal
 from strategy.skills.navigate import face_point
-from strategy.state import FIELD_SCALE, BallState, RobotState
+from strategy.state import FIELD_SCALE
 
 # Distances are tuned on 9 x 6 and scaled by FIELD_SCALE (see attacker.py).
 # This far past the ball toward the opponent's goal (behind it before
@@ -16,10 +17,12 @@ SUPPORT_AHEAD = 1.5 * FIELD_SCALE
 SUPPORT_SIDE = 1.0 * FIELD_SCALE
 
 
-def support(robot: RobotState, ball: BallState, team_color: str, kicked_off: bool) -> Command:
-    """Hold a point past the ball toward their goal, facing the ball. Before
-    kickoff, hold it on our side instead, so the two teams' supporters don't
-    cross paths and collide while the attackers set up."""
+def supporter(me: Me, world: World) -> Command:
+    """The built-in supporter slot. Hold a point past the ball toward their
+    goal, facing the ball. Before kickoff, hold it on our side instead, so
+    the two teams' supporters don't cross paths and collide while the
+    attackers set up."""
+    robot, ball, team_color, kicked_off = me.state, world.ball, world.color, world.kicked_off
     goal = opp_goal(team_color)
     to_goal = (goal - ball.pos) / (np.linalg.norm(goal - ball.pos) + 1e-6)
     # Fixed +y perp so blue/red mirror across midfield instead of
