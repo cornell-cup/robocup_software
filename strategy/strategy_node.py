@@ -1,27 +1,34 @@
-# receives world state, runs strategy & control the game
+"""The strategy node: the team AI as a process in the sim pipeline.
+
+Every frame it reads the world state from the sim (VISION_PORT), runs a Brain
+(brain.py) on it, publishes each robot's target for robot_node
+(STRATEGY_PORT), and sends kicks and dribbler on/off straight to the sim
+(COMMAND_PORT). Toggles (RL kick, dribble, human drivers) arrive on
+MANUAL_PORT from viz_node or the web app. sim/run_pipeline.py starts it.
+"""
+
 from __future__ import annotations
 
 import argparse
 import json
 import os
 import sys
+import traceback
 from typing import Any, final
 
-# Add project root so `strategy.*` resolves when run as a standalone script
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-VISION_PORT = 9090
-STRATEGY_PORT = 9091
-COMMAND_PORT = 9092
-MANUAL_PORT = 9093
+# Run as a script: put the repo root on sys.path so `strategy` imports.
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _ROOT not in sys.path:
+    sys.path.insert(0, _ROOT)
 
 from strategy.brain import DEFAULT_RL_CHECKPOINT, Brain  # noqa: E402
-
-our_color = "blue"
+from strategy.simconfig import COMMAND_PORT, MANUAL_PORT, STRATEGY_PORT, VISION_PORT  # noqa: E402
 
 
 @final
-class ZMQBackend:
+class SimLink:
+    """The node's ZMQ sockets to the sim, the web app and robot_node."""
+
     def __init__(self):
         import zmq
 
@@ -47,7 +54,7 @@ class ZMQBackend:
         _ = self.cmd_push.connect(f"tcp://localhost:{COMMAND_PORT}")
 
         print(
-            f"[Strategy node] ZMQ mode: vision←:{VISION_PORT}  "
+            f"[Strategy node] vision←:{VISION_PORT}  "
             + f"strategy→:{STRATEGY_PORT}  manual←:{MANUAL_PORT}  cmds→:{COMMAND_PORT}"
         )
 
@@ -87,72 +94,8 @@ class ZMQBackend:
         )
 
 
-@final
-class TCPBackend:
-    def __init__(self):
-        import socket
-        import time
-
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        for attempt in range(10):
-            try:
-                self.sock.connect(("127.0.0.1", VISION_PORT))
-                print(f"[StrategyNode] TCP mode: connected to localhost:{VISION_PORT}")
-                break
-            except ConnectionRefusedError:
-                print(
-                    f"[StrategyNode] Connection refused, retrying ({attempt + 1}/10)..."
-                )
-                time.sleep(1)
-        else:
-            raise ConnectionError("Could not connect to Godot after 10 attempts")
-
-        self.sock.setblocking(False)
-        self.buffer = ""
-
-    def receive_state(self) -> dict[str, Any] | None:
-        import socket
-
-        try:
-            chunk = self.sock.recv(65536).decode()
-            if not chunk:
-                return None
-            self.buffer += chunk
-        except (BlockingIOError, socket.error):
-            pass
-
-        raw = None
-        while "\n" in self.buffer:
-            line, self.buffer = self.buffer.split("\n", 1)
-            line = line.strip()
-            if line:
-                try:
-                    raw = json.loads(line)
-                except json.JSONDecodeError:
-                    pass
-        return raw
-
-    def drain_manual(self) -> list[dict[str, Any]]:
-        return []
-
-    def send_targets(self, msg: dict[str, Any]) -> None:
-        try:
-            self.sock.sendall((json.dumps(msg) + "\n").encode())
-        except BrokenPipeError:
-            print("[Strategy node] TCP mode: connection lost")
-
-    def send_kick(self, robot_id: int) -> None:
-        pass  # TCP mode has no command channel; kicks only work in ZMQ mode.
-
-    def send_dribble(self, robot_id: int, active: bool) -> None:
-        pass  # TCP mode has no command channel; dribble only works in ZMQ mode.
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Strategy node for the RoboCup game")
-    _ = parser.add_argument(
-        "--mode", choices=["tcp", "zmq"], default="zmq", help="Mode: tcp or zmq"
-    )
     _ = parser.add_argument(
         "--color",
         choices=["blue", "red"],
@@ -167,13 +110,10 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    global our_color
-    our_color = args.color
+    backend = SimLink()
 
-    backend = ZMQBackend() if args.mode == "zmq" else TCPBackend()
-
-    print(f"[Strategy node] {args.mode} mode: started")
-    print(f"[Strategy node] controlling BOTH teams (blue attacks right, red attacks left)")
+    print("[Strategy node] started")
+    print("[Strategy node] controlling BOTH teams (blue attacks right, red attacks left)")
 
     brain = Brain(args.color, rl_checkpoint=args.rl_checkpoint, log=print)
 
@@ -202,7 +142,6 @@ def main() -> None:
                 backend.send_dribble(rid, on)
         except Exception as e:
             print(f"[ERROR] {e}")
-            import traceback
             traceback.print_exc()
             continue
 

@@ -142,7 +142,7 @@ def main() -> None:
     for name, script, cwd in nodes:
         extra = None
         if name == "StrategyNode":
-            extra = ["--mode", "zmq", "--color", args.color]
+            extra = ["--color", args.color]
         elif name == "SimNode":
             extra = sim_args
         p = _launch(name, script, cwd, extra_args=extra)
