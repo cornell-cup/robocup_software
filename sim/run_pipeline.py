@@ -77,10 +77,10 @@ def main() -> None:
     for color in ("blue", "red"):
         _ = parser.add_argument(
             f"--{color}",
-            metavar="FILE",
+            metavar="TEAM",
             default=None,
-            help=f"Team file for {color}: its slots replace the built-in ones "
-            + "(strategy/core/loader.py). Reloaded when saved.",
+            help=f"A team for {color}, a workspace folder or a .py file: its slots replace "
+            + "the built-in ones (strategy/core/loader.py). Reloaded when a file is saved.",
         )
     _ = parser.add_argument(
         "--vision",
