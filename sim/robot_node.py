@@ -43,6 +43,7 @@ from config import (  # noqa: E402
     NUM_ROBOTS,
     REAL_PORT,
     ROBOT_MASS,
+    ROBOT_MAX_SPEED,
     STRATEGY_PORT,
     VISION_PORT,
     WHEEL_ANGLES,
@@ -214,6 +215,8 @@ class RobotController:
         # world frame, or the robot's own (x forward, y left) if direct_body
         self.direct_vel: tuple[float, float, float] | None = None
         self.direct_body: bool = False
+        # The strategy's speed limit for this target, m/s (None: full speed).
+        self.max_speed: float | None = None
 
     def set_target(
         self,
@@ -221,9 +224,11 @@ class RobotController:
         y: float,
         mode: str | None = None,
         target_angle: float | None = None,
+        max_speed: float | None = None,
     ) -> None:
         self.target = [x, y]
         self.target_angle = target_angle
+        self.max_speed = max_speed
         self.path_length = 0.0
         self.total_time = 0.0
         self._last_pos = None
@@ -234,6 +239,7 @@ class RobotController:
     def set_direct_vel(self, vx: float, vy: float, w: float, body: bool = False) -> None:
         """Switch to MANUAL mode and set a velocity command: world frame, or
         with body the robot's own (vx forward, vy left)."""
+        self.max_speed = None
         self.direct_vel = (vx, vy, w)
         self.direct_body = body
         self.mode = "MANUAL"
@@ -241,7 +247,20 @@ class RobotController:
 
     def compute_wheels(self, rstate: dict[str, float]) -> list[float]:
         """Given robot state dict, return normalised wheel speeds [w0,w1,w2]."""
-        return _inverse_kinematics(*self.compute_command(rstate))
+        return self.limit(_inverse_kinematics(*self.compute_command(rstate)))
+
+    def limit(self, speeds: list[float] | tuple[float, ...]) -> list[float]:
+        """Wheel (or body-axis) commands scaled down for the strategy's
+        max_speed. A robot's top speed is proportional to its motors' share
+        of full power, so a share of max_speed / ROBOT_MAX_SPEED caps it there;
+        turning slows by the same share."""
+        if self.max_speed is None or self.mode == "MANUAL":
+            return list(speeds)
+        share = min(1.0, max(0.05, self.max_speed / ROBOT_MAX_SPEED))
+        biggest = max((abs(s) for s in speeds), default=0.0)
+        if biggest <= share:
+            return list(speeds)
+        return [s * share / biggest for s in speeds]
 
     def compute_command(self, rstate: dict[str, float]) -> tuple[float, float, float]:
         """Given robot state dict, return the body-frame command (vx, vy, ω)
@@ -414,11 +433,11 @@ def main() -> None:
                 json.dumps(
                     {
                         "robot_id": robot.id,
-                        "wheel_speeds": _inverse_kinematics(*command),
+                        "wheel_speeds": robot.limit(_inverse_kinematics(*command)),
                     }
                 )
             )
-            forward, left, turn = (0.0, 0.0, 0.0) if paused else _body_command(*command)
+            forward, left, turn = (0.0, 0.0, 0.0) if paused else robot.limit(_body_command(*command))
             real[rid_str] = {
                 "forward": round(forward, 3),
                 "left": round(left, 3),
@@ -445,6 +464,7 @@ def _drain_targets(sub_socket, robots, zmq_module):
                         info["y"],
                         info.get("mode", "2005_INVERSION"),
                         info.get("angle"),
+                        info.get("max_speed"),
                     )
         except zmq_module.Again:
             break
