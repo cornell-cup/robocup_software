@@ -7,9 +7,11 @@ From the repo root (no hardware, no running sim):
 
 from __future__ import annotations
 
+import json
 import math
 import tempfile
 import textwrap
+import time
 import unittest
 from pathlib import Path
 from typing import Any
@@ -19,10 +21,11 @@ import numpy as np
 from strategy.api import Me, World
 from strategy.core.brain import Brain
 from strategy.core.command import Command
-from strategy.core.loader import TeamFile, TeamFileError, load_team, replaced_slots
+from strategy.core.loader import TeamFile, TeamFileError, load_team, module_name_problem, replaced_slots
 from strategy.core.slots import DEFAULT_TEAM, Team
-from strategy.core.team import decide, resolve_kick_conflict
-from strategy.eval import match
+from strategy.core.team import decide
+from strategy.core.worker import TeamWorker
+from strategy.eval import baseline_v1, match
 from strategy.tactics.attacker import (
     APPROACH_OFFSET,
     CONTESTED_SKEW,
@@ -51,6 +54,9 @@ from strategy.world.state import (
     RobotState,
     build_game_state,
 )
+
+
+ROOT = Path(__file__).resolve().parents[2]  # the repo
 
 
 def attack_as(robot, gs, color):
@@ -317,11 +323,15 @@ class TestDecide(unittest.TestCase):
         self.assertNotIn(4, targets)
         self.assertIn(2, targets)
 
-    def test_kick_conflict_keeps_closer(self):
-        robots = {1: (4.0, 3.0, 0.0), 4: (5.2, 3.0, math.pi)}
-        gs = build_game_state(world(robots, ball=(4.4, 3.0, 0, 0)))
-        self.assertEqual(resolve_kick_conflict([4, 1], gs), [1])
-        self.assertEqual(resolve_kick_conflict([4], gs), [4])
+    def test_only_the_kicker_closest_to_the_ball_fires(self):
+        from pymunk_world import PymunkWorld  # sim/, on the path via world.simconfig
+
+        physics = PymunkWorld(seed=0)
+        physics.robots[1].position = (4.0, 3.0)
+        physics.robots[4].position = (5.2, 3.0)
+        physics.ball.position = (4.4, 3.0)
+        self.assertEqual(physics.closest_kicker([4, 1]), [1])
+        self.assertEqual(physics.closest_kicker([4]), [4])
 
 
 class TestTactics(unittest.TestCase):
@@ -394,7 +404,9 @@ class TestBrain(unittest.TestCase):
         brain = Brain("blue")
         brain.handle_control({"dribble_attacker": True})
         plan = brain.tick(world(ball=(3.5, 1.5, 0, 0)))
-        self.assertEqual(plan.dribble, {0: False, 1: True, 2: False})
+        # The toggle is for our attacker; every other robot the AI drives, red
+        # too, is told "off" (a red team file can turn its own on).
+        self.assertEqual(plan.dribble, {0: False, 1: True, 2: False, 3: False, 4: False, 5: False})
 
     def test_human_robots_left_alone(self):
         brain = Brain("blue")
@@ -656,9 +668,9 @@ class TestTeamFiles(unittest.TestCase):
 
     def test_match_sides_are_names_or_files(self):
         self.assertEqual(match.resolve("v1")[2], "v1")
-        fn, team, label = match.resolve(str(EXAMPLES / "get_open.py"))
-        self.assertIs(fn, decide)
-        self.assertEqual((label, replaced_slots(team)), ("get_open.py", ["supporter"]))
+        fn, path, label = match.resolve(str(EXAMPLES / "get_open.py"))
+        self.assertIs(fn, decide)  # the team itself plays in its own process
+        self.assertEqual((label, path), ("get_open.py", EXAMPLES / "get_open.py"))
         with self.assertRaises(ValueError):
             match.resolve("v9")
 
@@ -672,6 +684,380 @@ class TestTeamFiles(unittest.TestCase):
         self.assertEqual(sum("ZeroDivisionError" in m for m in logged), 2)  # reported afresh
         brain.set_team("blue", None)
         self.assertEqual(brain.teams, {})
+
+
+class TestSeeingAndCommands(unittest.TestCase):
+    """world.draw, world.show, world.events, prepare(), dribble= and max_speed=."""
+
+    def team_brain(self, **slots) -> Brain:
+        return Brain("blue", teams={"blue": DEFAULT_TEAM.replace(**slots)})
+
+    def test_drawings_and_shown_values_come_with_the_plan(self):
+        def supporter(me, w):
+            spot = (6.0, 4.0)
+            w.draw.line(w.ball.pos, spot, color="green")
+            w.draw.text(spot, "here")
+            w.show("distance", me.distance_to(spot))
+            return me.go_to(spot)
+
+        plan = self.team_brain(supporter=supporter).tick(world())
+        shapes = plan.drawings["blue"]
+        self.assertEqual([s["kind"] for s in shapes], ["line", "text"])
+        self.assertEqual(shapes[0]["color"], "#3fb950")
+        self.assertEqual(shapes[0]["to"], [6.0, 4.0])
+        robot = shapes[0]["robot"]  # tagged with the robot whose slot drew it
+        self.assertIn("distance", plan.shown["blue"][f"robot {robot}"])
+        self.assertNotIn("red", plan.drawings)  # the built-in team draws nothing
+
+    def test_a_bad_drawing_is_an_error_on_its_line(self):
+        def supporter(me, w):
+            w.draw.circle(me.pos, 0.3, color="sparkly")
+            return me.stop()
+
+        plan = self.team_brain(supporter=supporter).tick(world())
+        self.assertTrue(any("color must be one of" in e and "using the built-in supporter" in e
+                            for e in plan.errors), plan.errors)
+
+    def test_drawing_too_much_is_capped(self):
+        def supporter(me, w):
+            for i in range(500):
+                w.draw.point((i * 0.01, 1.0))
+            return me.stop()
+
+        plan = self.team_brain(supporter=supporter).tick(world())
+        self.assertEqual(len(plan.drawings["blue"]), 100)
+
+    def test_dribble_and_max_speed_reach_the_plan(self):
+        def supporter(me, w):
+            return me.go_to((6.0, 4.0), dribble=True, max_speed=0.4)
+
+        plan = self.team_brain(supporter=supporter).tick(world())
+        supporter_id = assign_roles(build_game_state(world()).blue, np.array([4.5, 3.0]), {}, "blue")[1][0].id
+        self.assertTrue(plan.dribble[supporter_id])
+        self.assertEqual(plan.max_speed, {supporter_id: 0.4})
+        self.assertEqual(sum(plan.dribble.values()), 1)  # the dribble toggle is off
+        with self.assertRaises(ValueError):
+            Me(build_game_state(world()).blue[0]).go_to((1, 1), max_speed=0)
+
+    def test_prepare_runs_once_a_frame_before_the_robots(self):
+        def prepare(w):
+            w.memory["frames"] = w.memory.get("frames", 0) + 1
+            w.memory["spot"] = (6.0, 4.0)
+
+        def supporter(me, w):
+            return me.go_to(w.memory["spot"])
+
+        brain = self.team_brain(prepare=prepare, supporter=supporter)
+        for t in (1.0, 1.1, 1.2):
+            plan = brain.tick(world(t=t))
+        self.assertEqual(brain.memory["blue"]["frames"], 3)
+        self.assertIn((6.0, 4.0), [t[:2] for t in plan.targets.values()])
+        self.assertEqual(plan.errors, [])
+
+    def test_events_new_game_goals_and_kickoff(self):
+        def prepare(w):
+            w.memory.setdefault("events", []).extend(w.events)
+
+        brain = self.team_brain(prepare=prepare)
+        brain.tick(world(t=1.0, score={"blue": 0, "red": 0}))
+        brain.tick(world(t=1.1, score={"blue": 1, "red": 0}))
+        brain.tick(world(t=1.2, ball=(4.5, 3.0, 1.0, 0.0), score={"blue": 1, "red": 1}))
+        brain.tick(world(t=1.3, ball=(4.6, 3.0, 1.0, 0.0), score={"blue": 1, "red": 1}))
+        self.assertEqual(brain.memory["blue"]["events"],
+                         ["new_game", "goal_for", "goal_against", "kickoff"])
+
+    def test_max_speed_caps_how_fast_the_robot_drives(self):
+        from pymunk_world import PymunkWorld  # sim/, on the path via world.simconfig
+        from robot_node import RobotController
+
+        def top_speed(cap):
+            physics = PymunkWorld(seed=0)
+            control = RobotController(0)
+            state = physics.step()
+            fastest = 0.0
+            for _ in range(240):  # 4 s
+                r = state["robots"]["0"]
+                control.set_target(r["x"] + 3.0, r["y"], None, 0.0, cap)
+                state = physics.step({0: control.compute_wheels(r)})
+                fastest = max(fastest, math.hypot(state["robots"]["0"]["vx"], state["robots"]["0"]["vy"]))
+            return fastest
+
+        self.assertLess(top_speed(0.4), 0.45)
+        self.assertGreater(top_speed(None), 0.9)
+
+
+def first_answer(worker, raw, within_s: float = 20.0):
+    """Ask a worker until it answers (it imports and loads first), once a
+    frame as the sim does: asked faster, every answer would arrive stale."""
+    end = time.monotonic() + within_s
+    while time.monotonic() < end:
+        answer = worker.plan(raw, True, "play", set(), set())
+        if answer is not None:
+            return answer
+        time.sleep(1 / 60)
+    raise AssertionError("the worker never answered")
+
+
+class TestWorker(unittest.TestCase):
+    """Team files in their own process (core/worker.py). These start real processes."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+        self.logged: list[str] = []
+        self.workers: list[TeamWorker] = []
+
+    def tearDown(self):
+        for w in self.workers:
+            w.close()
+        self._tmp.cleanup()
+
+    def start(self, code: str, **kw) -> TeamWorker:
+        path = self.dir / "team.py"
+        path.write_text(textwrap.dedent(code), encoding="utf-8")
+        w = TeamWorker(path, "blue", log=self.logged.append, **kw)
+        self.workers.append(w)
+        return w
+
+    def test_plays_the_file_and_prints_go_to_the_log(self):
+        w = self.start("""\
+            def supporter(me, world):
+                if "said" not in world.memory:  # once is enough to prove the point
+                    print("(a print from a team file: it goes to the log)")
+                    world.memory["said"] = True
+                return me.go_to((1.0, 5.0))
+            """)
+        answer = first_answer(w, world())
+        supporter = assign_roles(build_game_state(world()).blue, np.array([4.5, 3.0]), {}, "blue")[1][0].id
+        self.assertEqual(answer["targets"][str(supporter)][:2], [1.0, 5.0])
+        self.assertEqual(set(answer["targets"]), {"0", "1", "2"})  # its colour only
+        self.assertTrue(any("blue plays team.py: supporter replaced" in m for m in self.logged))
+
+    def test_draws_dribbles_and_gets_the_game_events(self):
+        w = self.start("""\
+            def supporter(me, world):
+                world.memory.setdefault("events", []).extend(world.events)
+                world.draw.point((2.0, 2.0))
+                world.show("seen", ",".join(world.memory["events"]))
+                return me.go_to((1.0, 5.0), dribble=True, max_speed=0.5)
+            """)
+        raw = world()
+        end = time.monotonic() + 20
+        answer, events = None, ["goal_blue"]  # a goal on the first frame, while it's starting up
+        while time.monotonic() < end:
+            answer = w.plan(raw, True, "play", set(), set(), events)
+            events = []
+            if answer is not None:
+                break
+            time.sleep(1 / 60)
+        assert answer is not None
+        supporter = next(iter(answer["max_speed"]))
+        self.assertEqual(answer["dribble"], [int(supporter)])
+        self.assertEqual(answer["max_speed"][supporter], 0.5)
+        self.assertEqual(answer["draw"][0]["at"], [2.0, 2.0])
+        # Every request repeated the goal until the first answer; it counts once.
+        self.assertEqual(answer["show"][f"robot {supporter}"]["seen"], "goal_for")
+
+    def test_an_endless_loop_never_blocks_and_gets_restarted(self):
+        w = self.start("""\
+            def supporter(me, world):
+                while True:
+                    pass
+            """, timeout_s=0.02, restart_after_s=0.3, startup_grace_s=3.0)
+        took = []
+        end = time.monotonic() + 5.0
+        while time.monotonic() < end:
+            t0 = time.monotonic()
+            self.assertIsNone(w.plan(world(), True, "play", set(), set()))
+            took.append(time.monotonic() - t0)
+        self.assertLess(max(took), 0.3)  # a frame's wait, plus a restart now and then
+        self.assertLess(sorted(took)[len(took) // 2], 0.01)  # once stuck, the node only glances
+        self.assertGreaterEqual(w.restarts, 1)
+        self.assertTrue(any("endless loop" in m for m in self.logged))
+
+    def test_brain_plays_built_in_while_the_worker_is_stuck(self):
+        w = self.start("""\
+            def supporter(me, world):
+                world.memory["n"] = world.memory.get("n", 0) + 1
+                while world.memory["n"] > 3:  # answers three frames, then gets stuck
+                    pass
+                return me.go_to((1.0, 5.0))
+            """, timeout_s=0.05)
+        brain = Brain("blue", log=self.logged.append)
+        brain.set_worker("blue", w)
+        built_in = Brain("blue")
+        end = time.monotonic() + 20
+        while time.monotonic() < end:
+            plan, reference = brain.tick(world()), built_in.tick(world())
+            if any("isn't answering in time" in e for e in plan.errors):
+                break
+            time.sleep(1 / 60)  # once a frame, as the sim does
+        self.assertTrue(w.ready)
+        self.assertEqual(plan.targets, reference.targets)  # the built-in team meanwhile
+        self.assertTrue(any("isn't answering in time" in e for e in plan.errors))
+
+    def test_exits_when_the_node_goes_away(self):
+        w = self.start("def supporter(me, world):\n    return me.stop()\n")
+        first_answer(w, world())
+        w._proc.stdin.close()  # what the node's death looks like from the worker
+        w._proc.wait(timeout=10)
+        self.assertIsNotNone(w._proc.returncode)
+
+    def test_a_broken_file_plays_built_in_and_says_why(self):
+        w = self.start("def supporter(me, world)\n    return me.stop()\n")
+        answer = first_answer(w, world())
+        self.assertEqual({int(r): tuple(t) for r, t in answer["targets"].items()},
+                         {r: t for r, t in decide(build_game_state(world()), sticky_attackers={})[0].items()
+                          if r < 3})
+        self.assertTrue(any("syntax error" in m and "playing the built-in team" in m for m in self.logged))
+
+
+class TestGuide(unittest.TestCase):
+    """Every example in the students' guide (strategy/docs/guide.md) plays
+    without an error, so the guide can't drift from the code. (```python
+    blocks are whole team files; ```py blocks are excerpts of several files.)"""
+
+    def test_every_example_plays(self):
+        import re
+
+        guide = Path(__file__).resolve().parents[1] / "docs" / "guide.md"
+        blocks = re.findall(r"```python\n(.*?)```", guide.read_text(encoding="utf-8"), re.S)
+        self.assertGreaterEqual(len(blocks), 5)
+        with tempfile.TemporaryDirectory() as d:
+            for i, code in enumerate(blocks):
+                path = Path(d) / f"example_{i}.py"
+                path.write_text(code, encoding="utf-8")
+                with self.subTest(example=i, starts=code.splitlines()[0]):
+                    r = match.play_game(decide, decide, i % 2 == 0, seed=i, duration_s=4,
+                                        team_a=load_team(path))
+                    self.assertEqual(r.errors_a, [])
+
+
+class TestWorkspaces(unittest.TestCase):
+    """A team as a folder of files (core/loader.py), safe mode for someone
+    else's (core/safety.py), and matches with each team in its own process."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self._tmp.name)
+        self.workers: list[TeamWorker] = []
+
+    def tearDown(self):
+        for w in self.workers:
+            w.close()
+        self._tmp.cleanup()
+
+    def workspace(self, name: str, files: dict[str, str], safe: bool = False) -> Path:
+        ws = self.dir / name
+        ws.mkdir(exist_ok=True)
+        for file, code in files.items():
+            (ws / file).write_text(textwrap.dedent(code), encoding="utf-8")
+        if safe:
+            (ws / "workspace.json").write_text(json.dumps({"safe": True}), encoding="utf-8")
+        return ws
+
+    def answer(self, ws: Path) -> dict[str, Any]:
+        w = TeamWorker(ws, "blue", log=lambda _m: None)
+        self.workers.append(w)
+        return first_answer(w, world())
+
+    def test_team_py_imports_the_workspace_files(self):
+        ws = self.workspace("anna", {
+            "team.py": "from spots import spot\n\ndef supporter(me, world):\n    return me.go_to(spot())\n",
+            "spots.py": "def spot():\n    return (1.0, 5.0)\n",
+        })
+        self.assertEqual(replaced_slots(load_team(ws)), ["supporter"])
+        team = TeamFile(ws)
+        time.sleep(0.05)
+        (ws / "spots.py").write_text("def spot():\n    return (2.0, 4.0)\n", encoding="utf-8")
+        self.assertTrue(team.reload_if_changed())  # a helper changed: the team reloads
+        gs = build_game_state(world())
+        targets, _, _ = decide(gs, sticky_attackers={}, teams={"blue": team.team})
+        self.assertIn((2.0, 4.0), [t[:2] for t in targets.values()])
+
+    def test_errors_name_the_file_and_line(self):
+        ws = self.workspace("ben", {
+            "team.py": "from spots import spot\n\ndef supporter(me, world):\n    return me.go_to(spot())\n",
+            "spots.py": "def spot():\n    return (1.0, 5.0\n",
+        })
+        with self.assertRaisesRegex(TeamFileError, r"^spots.py:\d+: syntax error"):
+            load_team(ws)
+        (ws / "spots.py").write_text("def spot():\n    return 1 / 0\n", encoding="utf-8")
+        errors: list[str] = []
+        decide(build_game_state(world()), sticky_attackers={}, errors=errors,
+               teams={"blue": load_team(ws)})
+        self.assertTrue(any("ZeroDivisionError" in e and "(spots.py:2)" in e for e in errors), errors)
+        self.assertIsNotNone(module_name_problem("random.py"))  # would hide Python's random
+        self.assertIsNotNone(module_name_problem("my-helpers.py"))  # can't be imported
+        self.assertIsNone(module_name_problem("passing.py"))
+
+    def test_no_team_py_is_a_clear_error(self):
+        ws = self.workspace("empty", {"spots.py": "x = 1\n"})
+        with self.assertRaisesRegex(TeamFileError, "has no team.py"):
+            load_team(ws)
+
+    def test_safe_mode_refuses_files_programs_and_imports(self):
+        ws = self.workspace("from_a_friend", {"team.py": """\
+            def supporter(me, world):
+                open("written_by_a_team.txt", "w").write("x")
+                return me.stop()
+
+            def defender(me, world):
+                import os
+                return me.stop()
+
+            def attacker(me, world):
+                # The classic way around an import guard: find os.system on a class.
+                cls = [c for c in ().__class__.__base__.__subclasses__() if c.__name__ == "_wrap_close"][0]
+                cls.__init__.__globals__["system"]("echo hi")
+                return me.stop()
+
+            def prepare(world):
+                import math, numpy, spots          # allowed
+                from strategy.api import Me         # allowed
+                world.memory["ok"] = math.pi
+            """, "spots.py": "X = 1\n"}, safe=True)
+        errors = self.answer(ws)["errors"]
+        joined = "\n".join(errors)
+        self.assertIn("supporter", joined)
+        self.assertIn("SafeModeError", joined)
+        self.assertIn("can't import os", joined)
+        self.assertIn("starting programs isn't allowed", joined)
+        self.assertNotIn("prepare", joined)
+        self.assertFalse((ROOT / "written_by_a_team.txt").exists())
+
+    def test_own_workspace_is_trusted(self):
+        ws = self.workspace("mine", {"team.py": """\
+            import os
+
+            def supporter(me, world):
+                world.show("cwd", os.getcwd())
+                return me.stop()
+            """})
+        self.assertEqual(self.answer(ws)["errors"], [])
+
+    def test_match_between_two_workspaces(self):
+        a = self.workspace("a", {"team.py": "def supporter(me, world):\n    return me.go_to((1.0, 5.0))\n"})
+        b = self.workspace("b", {"team.py": "def supporter(me, world):\n    return me.go_to(world.ball.pos)\n"},
+                           safe=True)
+        results = match.run_match(str(a), str(b), games=2, duration_s=3, seed=0)
+        self.assertEqual(len(results), 2)
+        self.assertEqual([r.errors_a + r.errors_b for r in results], [[], []])
+
+    def test_a_team_in_its_own_process_plays_as_in_process(self):
+        get_open = EXAMPLES / "get_open.py"
+        here = match.play_game(decide, baseline_v1.decide, True, seed=3, duration_s=8,
+                               team_a=load_team(get_open))
+        worker = TeamWorker(get_open, "blue", log=lambda _m: None, lockstep=True)
+        self.workers.append(worker)
+        there = match.play_game(decide, baseline_v1.decide, True, seed=3, duration_s=8, team_a=worker)
+        self.assertEqual((here.goals_a, here.goals_b, here.kicks_a, here.kicks_b, here.possession_a),
+                         (there.goals_a, there.goals_b, there.kicks_a, there.kicks_b, there.possession_a))
+
+    def test_a_team_that_hangs_is_given_up_on(self):
+        ws = self.workspace("loops", {"team.py": "def supporter(me, world):\n    while True:\n        pass\n"})
+        results = match.run_match(str(ws), "v1", games=1, duration_s=2, seed=0)
+        self.assertTrue(any("hung 3 times" in e for e in results[0].errors_a), results[0].errors_a)
 
 
 class TestMatch(unittest.TestCase):
