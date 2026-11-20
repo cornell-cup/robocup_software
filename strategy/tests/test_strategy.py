@@ -14,6 +14,8 @@ from typing import Any
 import numpy as np
 
 from strategy.analysis import analyze, ball_intercept, drive_accel, time_to_reach
+from strategy.api import Me, World
+from strategy.command import Command
 from strategy.eval import match
 from strategy.prediction import (
     ball_rest_position,
@@ -28,6 +30,7 @@ from strategy.state import (
     RobotState,
     build_game_state,
 )
+from strategy.slots import DEFAULT_TEAM, Team
 from strategy.strategy_node import Brain, decide, resolve_kick_conflict
 from strategy.tactics.attacker import APPROACH_OFFSET, CONTESTED_SKEW, aim_point, attack
 from strategy.tactics.defender import defend_goal
@@ -434,6 +437,111 @@ class TestPush(unittest.TestCase):
         """It used to park behind the ball and never move it."""
         for spot in ((0.45, 0.4), (0.75, 0.6)):
             self.assertIsNotNone(lone_attacker_scores(spot), msg=str(spot))
+
+
+SPOT = (2.0, 5.0)
+
+
+def to_spot(me: Me, world: World) -> Command:
+    return me.go_to(SPOT, face=world.ball.pos)
+
+
+def crashes(me: Me, world: World) -> Command:
+    return 1 / 0
+
+
+def returns_junk(me: Me, world: World) -> Command:
+    return (1.0, 2.0)  # not a Command
+
+
+class TestSlots(unittest.TestCase):
+    def test_default_team_is_the_built_in_one(self):
+        gs = build_game_state(world(ball=(4.0, 2.5, 0.3, 0.1)))
+        a = decide(gs, sticky_attackers={})
+        b = decide(gs, sticky_attackers={}, teams={"blue": DEFAULT_TEAM, "red": Team()})
+        self.assertEqual(a, b)
+
+    def test_replacing_a_slot_changes_only_that_team(self):
+        gs = build_game_state(world(ball=(4.5, 3.0, 0, 0)))
+        base_targets, _, attackers = decide(gs, sticky_attackers={})
+        targets, _, _ = decide(gs, sticky_attackers={},
+                               teams={"blue": DEFAULT_TEAM.replace(supporter=to_spot)})
+        blue_supporter = assign_roles(gs.blue, gs.ball.pos, {}, "blue")[1][0].id
+        self.assertEqual(targets[blue_supporter][:2], SPOT)
+        changed = {rid for rid in targets if targets[rid] != base_targets[rid]}
+        self.assertEqual(changed, {blue_supporter})
+
+    def test_custom_roles(self):
+        def all_defend(team, w):
+            return [(m, DEFENDER) for m in team]
+
+        gs = build_game_state(world())
+        _, kicks, attackers = decide(gs, sticky_attackers={},
+                                     teams={"red": DEFAULT_TEAM.replace(roles=all_defend)})
+        self.assertEqual(attackers & {3, 4, 5}, set())
+        self.assertTrue(attackers & {0, 1, 2})  # blue still has its attacker
+
+    def test_broken_slots_fall_back_to_built_in(self):
+        gs = build_game_state(world(ball=(4.5, 3.0, 0, 0)))
+        expected = decide(gs, sticky_attackers={})
+        for bad in (crashes, returns_junk):
+            errors: list[str] = []
+            got = decide(gs, sticky_attackers={}, errors=errors,
+                         teams={"blue": DEFAULT_TEAM.replace(supporter=bad, attacker=bad)})
+            self.assertEqual(got, expected, bad.__name__)
+            self.assertEqual(len(errors), 2, errors)  # attacker and supporter
+            self.assertTrue(all("using the built-in" in e for e in errors), errors)
+
+    def test_bad_role_list_falls_back(self):
+        def forgets_a_robot(team, w):
+            return [(team[0], ATTACKER)]
+
+        gs = build_game_state(world())
+        errors: list[str] = []
+        got = decide(gs, sticky_attackers={}, errors=errors,
+                     teams={"blue": DEFAULT_TEAM.replace(roles=forgets_a_robot)})
+        self.assertEqual(got, decide(gs, sticky_attackers={}))
+        self.assertIn("exactly one role", errors[0])
+
+    def test_unknown_slot_is_refused(self):
+        with self.assertRaises(ValueError):
+            DEFAULT_TEAM.replace(goalkeeper=to_spot)
+        with self.assertRaises(TypeError):
+            DEFAULT_TEAM.replace(supporter="to_spot")
+
+    def test_brain_reports_each_error_once_and_keeps_memory(self):
+        def counts(me, w):
+            w.memory["n"] = w.memory.get("n", 0) + 1
+            return me.stop()
+
+        logged: list[str] = []
+        brain = Brain("blue", log=logged.append,
+                      teams={"blue": DEFAULT_TEAM.replace(supporter=crashes, defender=counts)})
+        for t in (1.0, 1.1, 1.2):
+            plan = brain.tick(world(t=t))
+        self.assertEqual(len(plan.errors), 1)
+        self.assertEqual(sum("ZeroDivisionError" in m for m in logged), 1)
+        self.assertEqual(brain.memory["blue"]["n"], 3)
+        with self.assertRaises(ValueError):  # v0 has no slots
+            Brain("blue", decide_fn=match.STRATEGIES["v0"], teams={"blue": DEFAULT_TEAM})
+
+    def test_me_and_world_helpers(self):
+        gs = build_game_state(world({1: (3.0, 1.5, 0.0), 4: (5.0, 3.0, math.pi)}))
+        w = World(gs, "blue", gs.blue)
+        me = w.teammates[1]
+        self.assertEqual(me.go_to((4.0, 1.5)).angle, 0.0)  # faces where it goes
+        self.assertAlmostEqual(me.go_to((3.0, 3.0), face=math.pi).angle, math.pi)
+        self.assertAlmostEqual(me.face((3.0, 2.5)).angle, math.pi / 2)
+        self.assertTrue(me.go_to((4.0, 1.5), kick=True).kick)
+        self.assertFalse(w.lane_clear((4.0, 3.0), (6.0, 3.0)))  # red 4 sits on it
+        self.assertTrue(w.lane_clear((4.0, 1.0), (6.0, 1.0)))
+        self.assertIs(w.analysis, w.analysis)  # computed once per frame
+        self.assertEqual(w.us.color, "blue")
+
+    def test_a_team_with_a_replaced_slot_plays_a_match(self):
+        r = match.play_game(decide, decide, True, seed=1, duration_s=5,
+                            team_a=DEFAULT_TEAM.replace(supporter=to_spot))
+        self.assertEqual(r.ticks, round(5 / DT))
 
 
 class TestMatch(unittest.TestCase):

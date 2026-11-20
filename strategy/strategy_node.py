@@ -5,7 +5,7 @@ import argparse
 import json
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, final
 
 if TYPE_CHECKING:
@@ -25,16 +25,11 @@ DEFAULT_RL_CHECKPOINT = os.path.join(
     "rl", "checkpoints", "first_final", "final.zip",
 )
 
+from strategy.api import World  # noqa: E402
 from strategy.geometry import distance  # noqa: E402
+from strategy.slots import DEFAULT_TEAM, Team, run_behavior, run_roles  # noqa: E402
 from strategy.state import GameState, build_game_state  # noqa: E402
-from strategy.tactics.attacker import attack  # noqa: E402
-from strategy.tactics.defender import defend_goal  # noqa: E402
-from strategy.tactics.role_assignments import (  # noqa: E402
-    ATTACKER,
-    SUPPORTER,
-    assign_roles,
-)
-from strategy.tactics.supporter import support  # noqa: E402
+from strategy.tactics.role_assignments import ATTACKER  # noqa: E402
 
 our_color = "blue"
 
@@ -175,14 +170,20 @@ def decide(
     kicked_off: bool = True,
     human_blue_ids: set[int] | None = None,
     lost_ids: set[int] | None = None,
+    *,
+    teams: dict[str, Team] | None = None,
+    memory: dict[str, dict[str, Any]] | None = None,
+    errors: list[str] | None = None,
 ) -> tuple[dict[int, tuple[float, float, float]], list[int], set[int]]:
     """One frame of the team AI, for both teams: who plays which role, and
     where each robot goes. Returns (targets, kicks, attackers): robot id ->
     (x, y, heading), robots firing their kicker, and each team's attacker.
 
-    Roles come from tactics/role_assignments.py and each role's behaviour from
-    tactics/attacker.py, supporter.py, defender.py. `sticky_attackers` (each
-    team's attacker last frame) is updated in place.
+    Each team runs its slots (slots.py): `teams` maps a colour to a Team,
+    DEFAULT_TEAM (the built-in tactics/) for a colour not in it. `memory`
+    holds each team's notes between frames (World.memory); `errors` collects
+    what failed in replaced slots. `sticky_attackers` (each team's attacker
+    last frame) is updated in place.
     """
     targets: dict[int, tuple[float, float, float]] = {}
     kicks: list[int] = []
@@ -190,6 +191,8 @@ def decide(
     sticky = sticky_attackers if sticky_attackers is not None else {}
     human_ids = human_blue_ids or set()
     lost = lost_ids or set()
+    teams = teams or {}
+    memory = memory if memory is not None else {}
 
     for team_color, team in (("blue", gamestate.blue), ("red", gamestate.red)):
         # Drop the robots the AI can't drive: human-driven ones (blue only)
@@ -203,21 +206,26 @@ def decide(
                 sticky.pop(team_color, None)
                 continue
 
-        for robot, role in assign_roles(team, gamestate.ball.pos, sticky, team_color):
+        spec = teams.get(team_color, DEFAULT_TEAM)
+        world = World(
+            gamestate, team_color, team,
+            kicked_off=kicked_off, memory=memory.setdefault(team_color, {}),
+            unavailable=skip, rl_skill=rl_skill, rl_enabled=rl_enabled, sticky=sticky,
+        )
+        for me, role in run_roles(spec, world.teammates, world, errors):
             if role == ATTACKER:
-                attacker_rids.add(robot.id)
-                command = attack(robot, gamestate, team_color, rl_skill, rl_enabled)
-            elif role == SUPPORTER:
-                command = support(robot, gamestate.ball, team_color, kicked_off)
-            else:
-                command = defend_goal(gamestate.ball.pos, team_color)
-            targets[robot.id] = command.target
+                attacker_rids.add(me.id)
+            command = run_behavior(spec, role, me, world, errors)
+            targets[me.id] = command.target
             if command.kick:
-                kicks.append(robot.id)
+                kicks.append(me.id)
 
     # Both teams' kicks. When both attackers kick in the same tick, Brain keeps
     # only the closer one (resolve_kick_conflict).
     return targets, kicks, attacker_rids
+
+
+decide.takes_teams = True  # Brain passes teams / memory / errors (baseline v0 has none)
 
 
 def resolve_kick_conflict(kicks: list[int], gamestate: GameState) -> list[int]:
@@ -316,6 +324,7 @@ class Plan:
     dribble: dict[int, bool]  # dribbler on/off for each of our AI-driven robots
     attackers: set[int]  # both teams' attackers (viewers ring them)
     gamestate: GameState
+    errors: list[str] = field(default_factory=list)  # replaced slots that failed this frame
 
 
 class Brain:
@@ -324,6 +333,7 @@ class Brain:
     strategy_node's main loop and the match runner (eval/match.py) both run the
     strategy through this, so the two behave the same. `decide_fn` swaps the
     decision function, e.g. eval/baseline_v0.decide for the frozen baseline.
+    `teams` gives a colour its own Team (slots.py) instead of the built-in one.
     """
 
     def __init__(
@@ -333,9 +343,14 @@ class Brain:
         rl_checkpoint: str = DEFAULT_RL_CHECKPOINT,
         log: Any = None,
         resolve_kicks: bool = True,
+        teams: dict[str, Team] | None = None,
     ):
         self.color = color
         self.decide_fn = decide_fn or decide
+        self.teams: dict[str, Team] = dict(teams or {})
+        if self.teams and not getattr(self.decide_fn, "takes_teams", False):
+            raise ValueError("this decide function has no slots to replace (teams)")
+        self._reported: set[str] = set()  # slot errors already logged
         # False when something else settles kicks between two brains (the
         # match runner runs one brain per team).
         self.resolve_kicks = resolve_kicks
@@ -359,6 +374,7 @@ class Brain:
         self._half: int | None = None
         self._last_t: float | None = None
         self._stale_since: dict[int, float] = {}
+        self.memory: dict[str, dict[str, Any]] = {}  # each team's World.memory
 
     def handle_control(self, msg: dict[str, Any]) -> None:
         """A control message from the manual port (viz_node or the web app)."""
@@ -381,10 +397,17 @@ class Brain:
         self._update_kickoff(gamestate)
         lost = self._update_lost(gamestate)
 
+        errors: list[str] = []
+        slots = ({"teams": self.teams, "memory": self.memory, "errors": errors}
+                 if getattr(self.decide_fn, "takes_teams", False) else {})
         targets, kicks, attackers = self.decide_fn(
             gamestate, self.rl_skill, self.rl_enabled, self.sticky, self.kicked_off,
-            self.human_blue_ids, lost,
+            self.human_blue_ids, lost, **slots,
         )
+        for e in errors:
+            if e not in self._reported:  # once each, not 60 times a second
+                self._reported.add(e)
+                self.log(f"[Strategy node] {e}")
         if self.resolve_kicks:
             kicks = resolve_kick_conflict(kicks, gamestate)
 
@@ -400,7 +423,7 @@ class Brain:
         our_attacker = next((rid for rid in attackers if rid in our_ids), None)
         dribble = {rid: self.dribble_attacker and rid == our_attacker for rid in sorted(our_ids)}
 
-        return Plan(targets, kicks, dribble, attackers, gamestate)
+        return Plan(targets, kicks, dribble, attackers, gamestate, errors)
 
     def _update_kickoff(self, gamestate: GameState) -> None:
         if self._last_t is not None and gamestate.timestamp < self._last_t:

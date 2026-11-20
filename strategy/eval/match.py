@@ -39,6 +39,7 @@ from simulation_node import BALL_STUCK_DURATION, BALL_STUCK_THRESHOLD  # noqa: E
 
 from strategy import strategy_node  # noqa: E402
 from strategy.eval import baseline_v0  # noqa: E402
+from strategy.slots import Team  # noqa: E402
 from strategy.strategy_node import Brain, resolve_kick_conflict  # noqa: E402
 
 STRATEGIES: dict[str, Callable[..., Any]] = {
@@ -79,12 +80,17 @@ def play_game(
     seed: int,
     duration_s: float,
     stuck_reset: bool = True,
+    team_a: Team | None = None,
+    team_b: Team | None = None,
 ) -> GameResult:
-    """Play one game of `duration_s` sim seconds."""
+    """Play one game of `duration_s` sim seconds. `team_a` / `team_b` give a
+    side its own slots (slots.py) instead of the built-in ones."""
     a_color, b_color = ("blue", "red") if a_is_blue else ("red", "blue")
     brains = {
-        a_color: Brain(a_color, decide_fn=decide_a, resolve_kicks=False),
-        b_color: Brain(b_color, decide_fn=decide_b, resolve_kicks=False),
+        a_color: Brain(a_color, decide_fn=decide_a, resolve_kicks=False,
+                       teams={a_color: team_a} if team_a else None),
+        b_color: Brain(b_color, decide_fn=decide_b, resolve_kicks=False,
+                       teams={b_color: team_b} if team_b else None),
     }
     team_ids = {"blue": BLUE_IDS, "red": RED_IDS}
     result = GameResult(seed=seed, a_color=a_color)
