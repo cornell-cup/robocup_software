@@ -108,7 +108,7 @@ def ball_intercept(robot: RobotState, ball: BallState,
     if ball.speed < 1e-3:
         return Intercept(robot.id, time_to_reach(robot, ball.pos, TOUCH_DIST), ball.pos.copy())
 
-    ts = np.arange(1, int(round(horizon / step)) + 1) * step
+    ts = np.arange(1, round(horizon / step) + 1) * step
     travel = (1.0 - np.exp(-BALL_DAMP * ts)) / BALL_DAMP if BALL_DAMP > 0 else ts
     points = ball.pos[None, :] + ball.vel[None, :] * travel[:, None]
     d = points - robot.pos[None, :]

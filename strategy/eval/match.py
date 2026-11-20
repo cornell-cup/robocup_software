@@ -98,7 +98,7 @@ def play_game(
     stuck_anchor = (world.ball.position.x, world.ball.position.y)
 
     state = world.step()  # first observation; robots haven't moved yet
-    n_ticks = int(round(duration_s / DT))
+    n_ticks = round(duration_s / DT)
     for _ in range(n_ticks):
         raw = {
             "t": state["t"],
