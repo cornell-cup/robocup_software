@@ -74,6 +74,14 @@ def main() -> None:
         default="blue",
         help="Team color for the strategy node",
     )
+    for color in ("blue", "red"):
+        _ = parser.add_argument(
+            f"--{color}",
+            metavar="FILE",
+            default=None,
+            help=f"Team file for {color}: its slots replace the built-in ones "
+            + "(strategy/core/loader.py). Reloaded when saved.",
+        )
     _ = parser.add_argument(
         "--vision",
         default=None,
@@ -143,6 +151,10 @@ def main() -> None:
         extra = None
         if name == "StrategyNode":
             extra = ["--color", args.color]
+            for color in ("blue", "red"):
+                team_file = getattr(args, color)
+                if team_file:  # the strategy node runs with cwd=strategy/
+                    extra += [f"--{color}", os.path.abspath(team_file)]
         elif name == "SimNode":
             extra = sim_args
         p = _launch(name, script, cwd, extra_args=extra)

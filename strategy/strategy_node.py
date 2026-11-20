@@ -22,6 +22,7 @@ if _ROOT not in sys.path:
     sys.path.insert(0, _ROOT)
 
 from strategy.core.brain import DEFAULT_RL_CHECKPOINT, Brain  # noqa: E402
+from strategy.core.loader import TeamFile, replaced_slots  # noqa: E402
 from strategy.world.simconfig import (  # noqa: E402
     COMMAND_PORT,
     MANUAL_PORT,
@@ -113,6 +114,13 @@ def main() -> None:
         default=DEFAULT_RL_CHECKPOINT,
         help="Path to the trained PPO kick checkpoint. Loaded lazily on first toggle-on.",
     )
+    for color in ("blue", "red"):
+        _ = parser.add_argument(
+            f"--{color}",
+            metavar="FILE",
+            help=f"Team file for {color} (see strategy/core/loader.py): its slots replace "
+            + "the built-in ones. Reloaded when you save it.",
+        )
     args = parser.parse_args()
 
     backend = SimLink()
@@ -121,6 +129,9 @@ def main() -> None:
     print("[Strategy node] controlling BOTH teams (blue attacks right, red attacks left)")
 
     brain = Brain(args.color, rl_checkpoint=args.rl_checkpoint, log=print)
+    team_files = {c: TeamFile(p) for c, p in (("blue", args.blue), ("red", args.red)) if p}
+    for color, team_file in team_files.items():
+        _use_team_file(brain, color, team_file)
 
     frame = 0
     while True:
@@ -151,6 +162,10 @@ def main() -> None:
             continue
 
         frame += 1
+        if frame % 30 == 0:  # twice a second: pick up saved team files
+            for color, team_file in team_files.items():
+                if team_file.reload_if_changed():
+                    _use_team_file(brain, color, team_file)
         if frame % 300 == 0:
             gamestate = plan.gamestate
             print(
@@ -159,6 +174,18 @@ def main() -> None:
                 + f"rl_kick={'ON' if brain.rl_enabled else 'OFF'}  "
                 + f"ball=({gamestate.ball.pos[0]:.1f}, {gamestate.ball.pos[1]:.1f})"
             )
+
+
+def _use_team_file(brain: Brain, color: str, team_file: TeamFile) -> None:
+    """Play a team file's latest version that loaded, and say what happened."""
+    name = team_file.path.name
+    if team_file.error:
+        keeps = "keeping the last version that loaded" if team_file.team else "playing the built-in team"
+        print(f"[Strategy node] {color} team file {team_file.error} ({keeps})")
+    if team_file.team is not None and not team_file.error:
+        brain.set_team(color, team_file.team)
+        print(f"[Strategy node] {color} plays {name}: "
+              + f"{', '.join(replaced_slots(team_file.team))} replaced, the rest built-in")
 
 
 if __name__ == "__main__":
