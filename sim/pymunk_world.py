@@ -281,7 +281,7 @@ class PymunkWorld:
         # Kicks fire once per tick: impulses are instantaneous, not cleared
         # by space.step, so they don't need re-applying inside the substep loop.
         fired: list[int] = []
-        for rid in kicks:
+        for rid in self.closest_kicker(kicks):
             if rid in self.mirrored:
                 continue  # real robot kicks for itself
             if rid in dribbling:
@@ -315,6 +315,17 @@ class PymunkWorld:
             self.space.step(sub_dt)
         self.sim_time += DT
         return self.state(fired)
+
+    def closest_kicker(self, kicks: Iterable[int]) -> list[int]:
+        """Of the robots kicking this tick, only the one closest to the ball.
+        Two kicks in the same tick give equal-opposite impulses that cancel,
+        pinning the ball between the robots; the rule is the same for both
+        teams, so it lives here and not in either team's strategy."""
+        kicks = [rid for rid in kicks if 0 <= rid < len(self.robots)]
+        if len(kicks) <= 1:
+            return kicks
+        ball = self.ball.position
+        return [min(kicks, key=lambda rid: (self.robots[rid].position - ball).length)]
 
     def state(self, kicks: list[int] | None = None) -> dict[str, Any]:
         """The world as step() reports it, without advancing it (a paused game)."""
