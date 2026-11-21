@@ -9,6 +9,9 @@ from __future__ import annotations
 
 import json
 import math
+import os
+import subprocess
+import sys
 import tempfile
 import textwrap
 import time
@@ -21,7 +24,13 @@ import numpy as np
 from strategy.api import Me, World
 from strategy.core.brain import Brain
 from strategy.core.command import Command
-from strategy.core.loader import TeamFile, TeamFileError, load_team, module_name_problem, replaced_slots
+from strategy.core.loader import (
+    TeamFile,
+    TeamFileError,
+    load_team,
+    module_name_problem,
+    replaced_slots,
+)
 from strategy.core.slots import DEFAULT_TEAM, Team
 from strategy.core.team import decide
 from strategy.core.worker import TeamWorker
@@ -54,7 +63,6 @@ from strategy.world.state import (
     RobotState,
     build_game_state,
 )
-
 
 ROOT = Path(__file__).resolve().parents[2]  # the repo
 
@@ -802,6 +810,36 @@ class TestSeeingAndCommands(unittest.TestCase):
         self.assertGreater(top_speed(None), 0.9)
 
 
+def process_running(pid: int) -> bool:
+    """Whether a process is still running (without touching it: on Windows,
+    os.kill(pid, 0) would end it)."""
+    if os.name == "nt":
+        import ctypes
+
+        k32 = ctypes.windll.kernel32
+        handle = k32.OpenProcess(0x00100000 | 0x1000, False, pid)  # SYNCHRONIZE | QUERY_LIMITED
+        if not handle:
+            return False
+        try:
+            return k32.WaitForSingleObject(handle, 0) != 0  # 0: it has exited
+        finally:
+            k32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def gone_within(pid: int, seconds: float) -> bool:
+    end = time.monotonic() + seconds
+    while time.monotonic() < end:
+        if not process_running(pid):
+            return True
+        time.sleep(0.1)
+    return False
+
+
 def first_answer(worker, raw, within_s: float = 20.0):
     """Ask a worker until it answers (it imports and loads first), once a
     frame as the sim does: asked faster, every answer would arrive stale."""
@@ -911,6 +949,59 @@ class TestWorker(unittest.TestCase):
         self.assertTrue(w.ready)
         self.assertEqual(plan.targets, reference.targets)  # the built-in team meanwhile
         self.assertTrue(any("isn't answering in time" in e for e in plan.errors))
+
+    def test_close_ends_the_worker_process_itself(self):
+        # On Windows a venv's python.exe is a launcher with the real Python
+        # as its child: closing has to end that child, not only the launcher.
+        w = self.start("def supporter(me, world):\n    return me.stop()\n")
+        first_answer(w, world())
+        self.assertIsNotNone(w.pid)
+        self.assertTrue(process_running(w.pid))
+        w.close()
+        self.assertTrue(gone_within(w.pid, 5))
+
+    def test_a_restarted_stuck_worker_is_really_gone(self):
+        w = self.start("""\
+            def supporter(me, world):
+                world.memory["n"] = world.memory.get("n", 0) + 1
+                while world.memory["n"] > 3:  # answers three frames, then gets stuck
+                    pass
+                return me.stop()
+            """, timeout_s=0.05, restart_after_s=0.3)
+        first_answer(w, world())
+        stuck = w.pid
+        end = time.monotonic() + 20
+        while w.restarts == 0 and time.monotonic() < end:
+            w.plan(world(), True, "play", set(), set())
+            time.sleep(1 / 60)
+        self.assertGreaterEqual(w.restarts, 1)
+        self.assertTrue(gone_within(stuck, 5))  # not left spinning in its loop
+
+    def test_a_stuck_worker_exits_when_the_node_is_killed(self):
+        team = self.dir / "loops.py"
+        team.write_text("def supporter(me, world):\n    while True:\n        pass\n", encoding="utf-8")
+        node = textwrap.dedent(f"""\
+            import os, sys, time
+            sys.path.insert(0, {str(ROOT)!r})
+            from strategy.core.worker import TeamWorker
+            from strategy.tests.test_strategy import world
+            w = TeamWorker({str(team)!r}, "blue", log=lambda m: None)
+            end = time.monotonic() + 30
+            while w.pid is None and time.monotonic() < end:
+                w.plan(world(), True, "play", set(), set())
+                time.sleep(1 / 60)
+            print(os.getpid(), w.pid, flush=True)
+            time.sleep(120)
+            """)
+        proc = subprocess.Popen([sys.executable, "-c", node], cwd=ROOT, stdout=subprocess.PIPE, text=True)
+        try:
+            node_pid, worker_pid = (int(x) for x in proc.stdout.readline().split())
+            self.assertTrue(process_running(worker_pid))
+            os.kill(node_pid, 9)  # the node itself, not a launcher in front of it
+            self.assertTrue(gone_within(worker_pid, 10))
+        finally:
+            proc.kill()
+            proc.wait(timeout=10)
 
     def test_exits_when_the_node_goes_away(self):
         w = self.start("def supporter(me, world):\n    return me.stop()\n")
@@ -1198,6 +1289,18 @@ class TestWorkspaces(unittest.TestCase):
 
 
 class TestMatch(unittest.TestCase):
+    def test_v2_plays_like_the_built_in_team(self):
+        """baseline_v2 is a frozen copy of today's built-in team (strategy step
+        2). When the built-in team changes on purpose, drop this test: v2 stays
+        the bar."""
+        from strategy.eval import baseline_v2
+
+        gs = build_game_state(world(ball=(4.2, 2.6, 1.2, -0.6)))  # rolling: the attacker meets it
+        self.assertEqual(decide(gs, sticky_attackers={}), baseline_v2.decide(gs, sticky_attackers={}))
+        a = match.play_game(decide, decide, True, seed=4, duration_s=15)
+        b = match.play_game(baseline_v2.decide, baseline_v2.decide, True, seed=4, duration_s=15)
+        self.assertEqual(a, b)
+
     def test_v1_still_plays(self):
         """baseline_v1, the frozen built-in team of 2026-11-20 (before the
         attacker met rolling balls), stays the bar to beat: it still plays."""
