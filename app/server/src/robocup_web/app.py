@@ -28,7 +28,7 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from tag_tracking import photon_lens
 
-from . import __version__
+from . import __version__, blocks, lint
 from .ball import VIEWS, BallCalibration
 from .calib import FieldCalibration
 from .motion_test import MotionTests
@@ -36,7 +36,6 @@ from .photonvision import ENV_DIR, PhotonVisionProcess
 from .procs import CommandError
 from .robots import RealRobots
 from .sim import SIM_DIR, SimBridge, SimProcess
-from . import lint
 from .teams import ENTRY, GUIDE, Conflict, MatchProcess, Workspaces, file_path
 from .tracking import (
     VIDEO_PORT,
@@ -243,6 +242,15 @@ def create_app(photonvision_dir: Path | None = None, start_photonvision: bool = 
     def teams_new(opts: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
         return state.teams.create(str(opts.get("name") or ""), str(opts.get("start") or "template"))
 
+    @app.post("/api/v1/teams/to_blocks")
+    def teams_to_blocks(body: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
+        """A team file's Python as blocks (blocks.py): {"state", "roles",
+        "python_blocks", "dropped_comments"}."""
+        try:
+            return blocks.to_blocks(str(body.get("text") or ""))
+        except SyntaxError as e:
+            raise CommandError(f"fix the syntax error on line {e.lineno} first: {e.msg}") from None
+
     @app.post("/api/v1/teams/upload")
     def teams_upload(opts: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
         """{"files": [{"name", "data": base64}], "into": workspace | null,
@@ -270,6 +278,16 @@ def create_app(photonvision_dir: Path | None = None, start_photonvision: bool = 
     @app.post("/api/v1/teams/{ws}/author")
     def teams_author(ws: str, opts: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
         return state.teams.set_author(ws, str(opts.get("author") or ""))
+
+    @app.get("/api/v1/teams/{ws}/blocks/{name}")
+    def teams_blocks_read(ws: str, name: str) -> dict[str, Any]:
+        return {"blocks": state.teams.get_blocks(ws, name)}
+
+    @app.post("/api/v1/teams/{ws}/blocks/{name}")
+    def teams_blocks_save(ws: str, name: str, body: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
+        """{"blocks": Blockly's JSON} keeps a file's blocks; {"blocks": null}
+        makes it a Python file again."""
+        return state.teams.set_blocks(ws, name, body.get("blocks"))
 
     @app.post("/api/v1/teams/{ws}/lint")
     def teams_lint(ws: str, body: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
