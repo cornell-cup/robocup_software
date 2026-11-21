@@ -19,6 +19,8 @@ export interface Workspace {
   safe: boolean;
   origin: "own" | "uploaded";
   from: string;
+  /** Files edited as blocks (their Python is made from them). */
+  blocks: string[];
 }
 
 export interface CheckResult {
@@ -67,7 +69,15 @@ export interface HeadToHead {
   goals: [number, number];
 }
 
-export type Start = "template" | "get_open" | "blank";
+/** A team file's Python as blocks (the server's blocks.py). */
+export interface ToBlocks {
+  state: object;
+  roles: string[];
+  python_blocks: number;
+  dropped_comments: number;
+}
+
+export type Start = "template" | "get_open" | "blank" | "blocks";
 export const ENTRY = "team.py";
 
 const enc = encodeURIComponent;
@@ -94,6 +104,9 @@ export const teams = {
     api.post<Workspace>("/teams/upload", { files, ...opts }),
   guide: () => api.get<{ text: string }>("/teams/guide").then((r) => r.text),
   reference: () => api.get<Reference>("/teams/reference"),
+  toBlocks: (text: string) => api.post<ToBlocks>("/teams/to_blocks", { text }),
+  getBlocks: (w: string, f: string) => api.get<{ blocks: object | null }>(`${ws(w)}/blocks/${enc(f)}`).then((r) => r.blocks),
+  setBlocks: (w: string, f: string, blocks: object | null) => api.post<Workspace>(`${ws(w)}/blocks/${enc(f)}`, { blocks }),
   lint: (w: string, f: string, text: string) =>
     api.post<{ diagnostics: LintFinding[] }>(`${ws(w)}/lint`, { file: f, text }).then((r) => r.diagnostics),
   matchStart: (a: string, b: string, games: number, duration: number) =>
