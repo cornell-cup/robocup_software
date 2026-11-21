@@ -32,6 +32,7 @@ Delete it and the built-in one is back.
 | `roles(team, world)` | Who plays which role | Closest to the ball attacks, next supports, the last defends | Two defenders when we're ahead |
 | `prepare(world)` | Nothing by itself: a place for shared work | Does nothing | Count goals, pick a plan for the whole team |
 | Your own roles, `PLAYS` and `pick_play`, `team()`, `kickoff()` | Plans for the whole team | None | See [Plans for the whole team](#plans-for-the-whole-team) |
+| `go_to_ball`, `kick_toward`, `intercept`, `pass_to`, `dribble_to` | One action with the ball | Used by the built-in attacker | A kick instead of a push: see [Skills](#skills-one-action-at-a-time) |
 
 The easiest start: **New… → Template**. It has all of these, each calling the built-in
 one, so it plays exactly like the built-in team. Change one line, save, and watch.
@@ -63,6 +64,7 @@ Every role function returns one command:
 | `me.go_to(point, max_speed=0.5)` | Drive no faster than 0.5 m/s (full speed is about 1.2 m/s) |
 | `me.face(point)` | Stay here and turn toward `point` |
 | `me.stop()` | Stay here |
+| `me.kick_toward(point)`, `me.pass_to(mate)`, ... | A **skill**: a whole action with the ball (see [Skills](#skills-one-action-at-a-time)) |
 
 You can combine them: `me.go_to(spot, face=world.ball.pos, max_speed=0.6)`.
 
@@ -96,6 +98,11 @@ All positions are in metres, as `(x, y)`. Angles are in radians.
 | `world.phase` | `"kickoff"` (waiting for the first touch), `"play"`, or `"halt"` (game over) |
 | `world.kicked_off` | `False` from a restart until the ball first moves |
 | `world.time` | Seconds since the game started |
+| `world.score` | `(ours, theirs)` |
+| `world.time_left` | Seconds left in this half |
+| `world.ball.at(t)` | Where the ball will be in `t` seconds, slowing down as it rolls |
+| `world.ball.stops_at` | Where the ball comes to rest if nothing touches it |
+| `me.time_to(point)` | Seconds this robot needs to get to `point` |
 | `world.memory` | A dictionary that keeps what you put in it from frame to frame |
 | `world.events` | What just happened (see below) |
 | `world.us.race_margin` | Seconds we reach the ball before them (below 0: they get there first) |
@@ -281,6 +288,52 @@ take the kickoff: it plays its role (the attacker goes for the ball).
 When you write several of these, `team()` decides first, then `kickoff()`'s spots, then
 the play's roles (or `roles()`), then each robot's role function.
 
+## Skills: one action at a time
+
+A **skill** is one action with the ball, smaller than a whole role. Your robots use them
+like commands, and the built-in attacker is made of them:
+
+| Skill | What the robot does | The built-in attacker uses it |
+| --- | --- | --- |
+| `me.go_to_ball()` | Drive to the ball, facing it | |
+| `me.kick_toward(point)` | Get behind the ball on the line to `point`, and send it there | To push the ball at their goal |
+| `me.intercept()` | Meet a rolling ball where this robot can first reach it | When the ball rolls faster than 0.3 m/s |
+| `me.pass_to(mate)` | Send the ball to a teammate, where it's going to be (kicks once lined up) | |
+| `me.dribble_to(point)` | Take the ball with the dribbler on and carry it to `point` | |
+
+Use them in any role:
+
+```python
+def attacker(me, world):
+    if world.ball.speed > 0.3:
+        return me.intercept()
+    if me.distance_to(world.their_goal) < 3:
+        return me.kick_toward(world.their_goal)
+    return me.dribble_to(world.their_goal)
+```
+
+And replace any of them: write a function with the skill's name, and every robot that uses
+the skill uses yours, **the built-in attacker too**. The built-in `kick_toward` pushes the
+ball with the robot's body; this one kicks:
+
+```python
+import numpy as np
+
+
+def kick_toward(me, world, target):
+    ball = world.ball.pos
+    line = np.asarray(target) - ball
+    line = line / max(float(np.linalg.norm(line)), 0.01)
+    behind = ball - line * 0.25  # 25 cm behind the ball, on the line to the target
+    if me.distance_to(behind) > 0.08:
+        return me.go_to(behind, face=target)
+    return me.go_to(ball, face=target, kick=True)
+```
+
+A skill you write takes `me` and `world` first, then what the call gives it:
+`kick_toward(me, world, target)`, `pass_to(me, world, mate)`, `dribble_to(me, world, target)`.
+If it fails, the built-in one plays instead, and the problem shows on its line.
+
 ## More examples
 
 A goalie that stays on its goal line, level with the ball:
@@ -360,8 +413,7 @@ same rule holds for everyone: you see the other team only on the field.
 ## What you can't change (yet)
 
 How a robot drives to its target (speed, turning), the physics, the referee (goals,
-kickoffs), and the rule that only one robot's kick fires at a time. Coming later: smaller
-pieces to replace, like "kick toward a point" and "intercept a moving ball".
+kickoffs), and the rule that only one robot's kick fires at a time.
 
 ## Read the built-in code
 

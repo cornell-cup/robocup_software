@@ -67,4 +67,6 @@ def defender(me: Me, world: World) -> Command:
 #
 # Plans for the whole team (your own roles, PLAYS and pick_play, team() for
 # every robot at once, kickoff() spots): the Guide tab, "Plans for the whole
-# team".
+# team". Smaller pieces, one action with the ball each (go_to_ball,
+# kick_toward, intercept, pass_to, dribble_to), which the built-in attacker
+# uses too: the Guide tab, "Skills".
