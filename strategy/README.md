@@ -101,6 +101,7 @@ strategy/
 │   ├── supporter.py      # supporter(): wait ahead of the ball
 │   └── defender.py       # defender(): goalie on the goal-to-ball line
 ├── skills/
+│   ├── ball.py           # ball skills, each a slot: go_to_ball, kick_toward, intercept, pass_to, dribble_to
 │   ├── navigate.py       # poses: stand behind the ball, face a point, face where you drive
 │   └── rl_kick.py        # wraps the trained PPO kick policy
 ├── core/                 # how a frame runs
@@ -201,8 +202,9 @@ cd sim; uv run python run_pipeline.py --blue ..\my_team.py        # live; --red 
 | `PLAYS`, `pick_play` | `PLAYS = {"attack": ["attacker", "supporter", "goalie"], ...}` (roles most important first, to the robots closest to the ball first) and `pick_play(world) -> name`; a new pick takes over after 0.25 s; `world.play` | no plays |
 | `team` | `team(robots, world) -> {robot: Command}`: any robots at once; the rest play their roles | none |
 | `kickoff` | `kickoff(robots, world) -> {robot: (x, y)}`: spots on our half before a kickoff | none |
+| skills | `go_to_ball(me, world)`, `kick_toward(me, world, target)`, `intercept(me, world)`, `pass_to(me, world, mate)`, `dribble_to(me, world, target)`; called as `me.kick_toward(target)` from any slot, the built-in attacker included | `skills/ball.py` |
 
-- `me`: `id`, `pos`, `vel`, `angle`, `has_ball`, `distance_to()`, `angle_to()`;
+- `me`: `id`, `pos`, `vel`, `angle`, `has_ball`, `distance_to()`, `angle_to()`, `time_to()`;
   commands `go_to(target, face=..., kick=..., dribble=..., max_speed=...)`,
   `face(...)`, `stop()`. `dribble=True` turns the dribbler on (a kick
   doesn't fire while it's on); `max_speed` is in m/s (full speed is about
