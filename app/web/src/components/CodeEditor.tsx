@@ -81,6 +81,7 @@ export function CodeEditor({
   jump,
   reference = null,
   lint,
+  readOnly = false,
 }: {
   /** Which file this is: switching keeps each file's own undo history. */
   docKey: string;
@@ -94,6 +95,8 @@ export function CodeEditor({
   reference?: Reference | null;
   /** Checks a file's text as typed: the problems to underline. */
   lint?: (text: string) => Promise<LintFinding[]>;
+  /** Show only (the Python a file's blocks make). */
+  readOnly?: boolean;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
@@ -109,6 +112,7 @@ export function CodeEditor({
       doc,
       extensions: [
           basicSetup,
+          EditorState.readOnly.of(readOnly),
           pythonSupport(() => ref.current),
           syntaxHighlighting(oneDarkHighlightStyle),
           look,
