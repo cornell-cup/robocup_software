@@ -1160,6 +1160,130 @@ class TestCodeAssist(unittest.TestCase):
         self.assertEqual(found, [])  # not team.py: no slot rules
 
 
+def _block_types(state: dict) -> list[str]:
+    """Every block's type in a Blockly workspace state, nested ones too."""
+    types: list[str] = []
+
+    def walk(b: dict | None) -> None:
+        if not b:
+            return
+        types.append(b["type"])
+        for i in (b.get("inputs") or {}).values():
+            walk(i.get("block"))
+            walk(i.get("shadow"))
+        walk((b.get("next") or {}).get("block"))
+
+    for b in state["blocks"]["blocks"]:
+        walk(b)
+    return types
+
+
+class TestBlocks(unittest.TestCase):
+    """Python -> blocks on the Code page (robocup_web/blocks.py); blocks -> Python is
+    blocks/robotBlocks.ts in the web app, and writes the patterns read here."""
+
+    def test_a_role_the_blocks_can_show_becomes_all_blocks(self):
+        from robocup_web.blocks import to_blocks
+
+        r = to_blocks(textwrap.dedent('''\
+            def attacker(me: Me, world: World) -> Command:
+                """Go for the ball."""
+                # Rolling: meet it.
+                if world.ball.speed > 0.3:
+                    return me.intercept()
+                world.draw.line(me.pos, world.ball.pos, color="red")
+                return me.kick_toward(world.their_goal)
+            '''))
+        self.assertEqual(r["roles"], ["attacker"])
+        self.assertEqual(r["python_blocks"], 0)
+        self.assertEqual(r["dropped_comments"], 1)
+        types = _block_types(r["state"])
+        for t in ("robo_role", "controls_if", "robo_intercept", "robo_draw_line", "robo_kick_toward"):
+            self.assertIn(t, types)
+        self.assertNotIn("py_stmt", types)
+        self.assertNotIn("py_expr", types)
+        role = r["state"]["blocks"]["blocks"][0]
+        self.assertEqual(role["data"], "Go for the ball.")  # the docstring, shown in its tooltip
+
+    def test_roles_is_a_block_when_the_block_can_say_it(self):
+        from robocup_web.blocks import to_blocks
+
+        def roles_block(body: str) -> dict | None:
+            text = f"def roles(team: list[Me], world: World) -> list[tuple[Me, str]]:\n    {body}\n"
+            return next((b for b in to_blocks(text)["state"]["blocks"]["blocks"] if b["type"] == "robo_roles"), None)
+
+        self.assertEqual(roles_block("return built_in_roles(team, world)")["fields"], {"WAY": "built_in"})
+        self.assertEqual(roles_block('return [(robot, "defender") for robot in team]')["fields"], {"WAY": "defender"})
+        self.assertIsNone(roles_block("return [(team[0], 'attacker')]"))  # anything else: Python, as written
+
+    def test_what_blocks_cant_show_stays_as_python(self):
+        from robocup_web.blocks import to_blocks
+
+        r = to_blocks(textwrap.dedent("""\
+            import math
+
+            def supporter(me: Me, world: World) -> Command:
+                for o in world.opponents:
+                    pass
+                return me.go_to(world.ball.pos)
+            """))
+        self.assertEqual(r["roles"], ["supporter"])
+        types = _block_types(r["state"])
+        self.assertIn("py_code", types)  # import math
+        self.assertIn("py_stmt", types)  # the for loop
+        with self.assertRaises(SyntaxError):
+            to_blocks("def supporter(me, world)\n    return me.stop()\n")
+
+    def test_the_template_and_the_blocks_start_convert(self):
+        from robocup_web.blocks import to_blocks
+        from robocup_web.teams import ENTRY, STARTS
+
+        r = to_blocks((EXAMPLES / "template.py").read_text(encoding="utf-8"))
+        self.assertEqual(r["roles"], ["roles", "attacker", "supporter", "defender"])
+        top = r["state"]["blocks"]["blocks"]
+        self.assertTrue(top[0].get("collapsed"))  # the docstring, folded to its first line
+        self.assertEqual(next(b for b in top if b["type"] == "robo_roles")["fields"], {"WAY": "built_in"})
+        self.assertNotIn("role_assignments", json.dumps(r["state"]))  # its import comes with the block
+        self.assertEqual(r["dropped_comments"], 0)
+        # Each role calls the built-in one: a "play like the built-in ..." block, and
+        # its import goes (the blocks' Python adds it back when it's used).
+        roles = [b for b in top if b["type"] == "robo_role"]
+        self.assertEqual([b["inputs"]["DO"]["block"] for b in roles],
+                         [{"type": "robo_built_in", "fields": {"ROLE": r}} for r in ("attacker", "supporter", "defender")])
+        self.assertNotIn("strategy.tactics.attacker", json.dumps(r["state"]))
+
+        r = to_blocks(STARTS["blocks"][ENTRY])
+        self.assertEqual(r["roles"], ["supporter"])
+        self.assertEqual(r["python_blocks"], 1)  # its docstring
+
+    def test_a_workspace_keeps_its_files_blocks(self):
+        import base64
+        from unittest import mock
+
+        from robocup_web import teams
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(teams, "TEAMS_DIR", Path(tmp)):
+            spaces = teams.Workspaces()
+            self.assertEqual(spaces.create("kid", "blocks")["blocks"], [teams.ENTRY])
+            self.assertIsNotNone(spaces.get_blocks("kid", teams.ENTRY))
+
+            spaces.new_file("kid", "helper.py")
+            spaces.set_blocks("kid", "helper.py", {"blocks": {"languageVersion": 0, "blocks": []}})
+            spaces.rename_file("kid", "helper.py", "moves.py")
+            self.assertEqual(spaces.info("kid")["blocks"], ["moves.py", teams.ENTRY])
+            spaces.delete_file("kid", "moves.py")
+            self.assertEqual(spaces.info("kid")["blocks"], [teams.ENTRY])
+
+            # Downloaded and uploaded again: still blocks.
+            zipped = base64.b64encode(spaces.download("kid")).decode()
+            up = spaces.upload([{"name": "kid.zip", "data": zipped}], None, "kid2", False)
+            self.assertEqual(up["blocks"], [teams.ENTRY])
+
+            # Back to Python.
+            self.assertEqual(spaces.set_blocks("kid", teams.ENTRY, None)["blocks"], [])
+            self.assertIsNone(spaces.get_blocks("kid", teams.ENTRY))
+
+
 class TestPlaysAndTeam(unittest.TestCase):
     """Your own roles, goalie, PLAYS and pick_play, team() and kickoff()."""
 
