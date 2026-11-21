@@ -4,6 +4,7 @@
 
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Card } from "../components/Card";
+import type { Reference } from "../components/codeAssist";
 import { CodeEditor } from "../components/CodeEditor";
 import { Explorer, type WsAction } from "../components/Explorer";
 import { FieldView } from "../components/FieldView";
@@ -64,6 +65,11 @@ export function Code() {
   const [panel, setPanel] = useState<null | "new" | { upload: File[] }>(null);
   const [tab, setTab] = useSavedState<"code" | "guide">("code.tab", "code");
   const [guide, setGuide] = useState<string | null>(null);
+  // What team code can use, for the editor's hints (read once).
+  const [reference, setReference] = useState<Reference | null>(null);
+  useEffect(() => {
+    teams.reference().then(setReference).catch(() => {});
+  }, []);
   useEffect(() => {
     if (tab === "guide" && guide === null) teams.guide().then(setGuide).catch(toasts.error);
   }, [tab, guide]);
@@ -472,7 +478,8 @@ export function Code() {
           <div className="code-pane" style={tab === "code" ? undefined : { display: "none" }}>
             {loadedWs && doc ? (
               <CodeEditor docKey={`${loadedWs}/${file}`} value={doc.text} onChange={edit} onSave={() => save(file)}
-                problemLines={problemLines} jump={jump} />
+                problemLines={problemLines} jump={jump} reference={reference}
+                lint={(text) => teams.lint(loadedWs, file, text)} />
             ) : (
               <div className="code-empty dim">
                 {workspaces === null ? "Loading…"
@@ -617,7 +624,7 @@ function TeamPick({ label, value, onChange, here, others }: {
 }
 
 const STARTS: { value: Start; label: string; title: string }[] = [
-  { value: "template", label: "Template", title: "Every slot, each calling the built-in one: change what you like" },
+  { value: "template", label: "Template", title: "The roles and skills, each calling the built-in one, and the rest ready to switch on: change what you like" },
   { value: "get_open", label: "Example", title: "A supporter that gets open for a pass, and draws what it checks" },
   { value: "blank", label: "Blank", title: "One small supporter to start from" },
 ];

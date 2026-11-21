@@ -1,6 +1,7 @@
 // Workspaces for the Code page: the server's /api/v1/teams (teams.py). A
 // workspace is a folder of Python files; its team starts in team.py.
 
+import type { LintFinding, Reference } from "../components/codeAssist";
 import { api, BASE } from "./api";
 
 export interface WorkspaceFile {
@@ -92,6 +93,9 @@ export const teams = {
   upload: (files: { name: string; data: string }[], opts: { into?: string; as?: string; replace?: boolean }) =>
     api.post<Workspace>("/teams/upload", { files, ...opts }),
   guide: () => api.get<{ text: string }>("/teams/guide").then((r) => r.text),
+  reference: () => api.get<Reference>("/teams/reference"),
+  lint: (w: string, f: string, text: string) =>
+    api.post<{ diagnostics: LintFinding[] }>(`${ws(w)}/lint`, { file: f, text }).then((r) => r.diagnostics),
   matchStart: (a: string, b: string, games: number, duration: number) =>
     api.post<MatchStatus>("/teams/match/start", { a, b, games, duration }),
   matchStatus: (after: number) => api.get<MatchStatus>(`/teams/match?after=${after}`),
