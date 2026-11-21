@@ -34,8 +34,10 @@ Delete it and the built-in one is back.
 | Your own roles, `PLAYS` and `pick_play`, `team()`, `kickoff()` | Plans for the whole team | None | See [Plans for the whole team](#plans-for-the-whole-team) |
 | `go_to_ball`, `kick_toward`, `intercept`, `pass_to`, `dribble_to` | One action with the ball | Used by the built-in attacker | A kick instead of a push: see [Skills](#skills-one-action-at-a-time) |
 
-The easiest start: **New… → Template**. It has all of these, each calling the built-in
-one, so it plays exactly like the built-in team. Change one line, save, and watch.
+The easiest start: **New… → Template**. It has the roles and the skills, each calling
+the built-in one, so it plays exactly like the built-in team, and the rest (goalie,
+`prepare`, plays, `team()`, `kickoff()`) written out with an example each, ready to
+switch on by removing the `#`. Change one line, save, and watch.
 
 ## Your first change
 
@@ -49,6 +51,12 @@ def supporter(me, world):
 
 Save it (Ctrl+S), press **Play**, and turn on **Field**. Then change `0.2` to `0.6`, save
 again, and watch the supporter move. Your code reloads every time you save.
+
+The editor helps while you type. After `me.` or `world.` it lists what's there, with what
+each one does; after `def ` at the start of a line it lists the functions you can write,
+with the right parameters. Mistakes get underlined before you even save: red for errors
+(a typo like `wrold`, a missing `:`), yellow for warnings (a name that doesn't exist, like
+`me.kick_towards`, or a function that never returns a command). Hover to read why.
 
 ## Commands: what a robot can do
 
