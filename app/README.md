@@ -157,6 +157,14 @@ written for them (`strategy/docs/guide.md`).
   underlines mistakes about half a second after you stop: ruff with the rules that catch
   mistakes rather than style, plus the platform's own checks (a slot's parameters, a role
   that never returns, unknown names on `me` and `world`) in `robocup_web/lint.py`.
+- **Blocks** (Google Blockly 13, loaded only when used): **New… → Blocks**, or **Convert
+  to blocks** on a `team.py`. The blocks and their generator are in
+  `web/src/blocks/robotBlocks.ts`; Python → blocks is `robocup_web/blocks.py`, which reads
+  exactly the patterns the generator writes, so converting back and forth gives the same
+  Python. What it can't show stays as a Python block. A file's blocks are kept in the
+  workspace's `workspace.json` (`"blocks": {file: state}`), go along in downloads, and the
+  Python they generate is saved to the file as usual, so everything else just reads Python.
+  **Back to Python** drops the blocks and keeps that Python.
 - Problems from loading, playing and matches are listed under the editor with their file
   and line; click one to open the file there. A save clears the old ones.
 
@@ -290,11 +298,13 @@ HTTP 400 with `{"error": "..."}`.
 | GET | `/sim/log?after=N` | sim output lines after line N |
 | POST | `/sim/command` | one command, see below |
 | WS | `/sim/ws` | world state pushed ~30×/s; send commands as JSON text |
-| GET | `/teams` | `{"workspaces": [{"name", "files": [{"name", "size", "modified"}], "author", "safe", "origin", "from"}]}` |
+| GET | `/teams` | `{"workspaces": [{"name", "files": [{"name", "size", "modified"}], "author", "safe", "origin", "from", "blocks": [files edited as blocks]}]}` |
 | GET | `/teams/guide` | `{"text"}`, the students' guide (Markdown) |
 | GET | `/teams/reference` | what team code can use, for the editor's hints: `me`, `world`, `ball`, `us`, `draw` members and the slots |
 | POST | `/teams/{ws}/lint` | `{"file", "text"}` as typed: `{"diagnostics": [{"line", "col", "end_line", "end_col", "severity", "message", "code"}]}` |
-| POST | `/teams/new` | `{"name": "anna", "start": "template" \| "get_open" \| "blank"}`; a taken name is a 409 with `{"taken", "suggest"}` |
+| POST | `/teams/to_blocks` | `{"text"}` Python: `{"state": Blockly workspace JSON, "roles", "python_blocks", "dropped_comments"}`; a syntax error is a 400 naming the line |
+| GET, POST | `/teams/{ws}/blocks/{file}` | `{"blocks": state \| null}`: the file's blocks, or null for a Python file (POST null to make it Python again) |
+| POST | `/teams/new` | `{"name": "anna", "start": "template" \| "get_open" \| "blank" \| "blocks"}`; a taken name is a 409 with `{"taken", "suggest"}` |
 | POST | `/teams/upload` | `{"files": [{"name", "data": base64}], "into": workspace \| null, "as": name \| null, "replace": bool}`: a `.zip` or `.py` files, marked safe |
 | GET | `/teams/{ws}` | the workspace, as in the list |
 | POST | `/teams/{ws}/duplicate`, `/rename` | `{"name"}` |
