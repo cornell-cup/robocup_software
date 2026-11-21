@@ -43,7 +43,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -91,6 +91,7 @@ class TeamWorker:
         self.restarts = 0
         self.gave_up = False  # lockstep: hung too often; plays built-in from now on
         self.ready = False  # loaded (said hello) since the last (re)start
+        self.pid: int | None = None  # the worker's own process (its hello says)
         self._missed = False  # the last frame got no answer
         # Game events (World.events) not yet confirmed by an answer, with the
         # request they first went out with. Only the newest request is ever
@@ -106,7 +107,8 @@ class TeamWorker:
         env = {**os.environ, "OPENBLAS_NUM_THREADS": "1", "OMP_NUM_THREADS": "1",
                "PYTHONDONTWRITEBYTECODE": "1"}
         self._proc = subprocess.Popen(
-            [sys.executable, "-u", "-m", "strategy.core.worker", str(self.path), self.color],
+            [sys.executable, "-u", "-m", "strategy.core.worker", str(self.path), self.color,
+             "--node", str(os.getpid())],
             cwd=_REPO, stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
             encoding="utf-8", bufsize=1, env=env,
         )
@@ -116,25 +118,33 @@ class TeamWorker:
         self._started = self._last_answer = time.monotonic()
         self.ready = False
         self._missed = False
-        threading.Thread(target=self._read, args=(self._proc, self._answers), daemon=True).start()
-        threading.Thread(target=self._write, args=(self._proc, self._outbox), daemon=True).start()
+        heard = threading.Event()  # the worker has answered the request in flight
+        heard.set()
+        threading.Thread(target=self._read, args=(self._proc, self._answers, heard), daemon=True).start()
+        threading.Thread(target=self._write, args=(self._proc, self._outbox, heard), daemon=True).start()
 
     @staticmethod
-    def _read(proc: subprocess.Popen[str], answers: queue.Queue[dict[str, Any]]) -> None:
+    def _read(proc: subprocess.Popen[str], answers: queue.Queue[dict[str, Any]],
+              heard: threading.Event) -> None:
         assert proc.stdout is not None
         for line in proc.stdout:
             try:
                 answers.put(json.loads(line))
             except json.JSONDecodeError:
                 pass
+            heard.set()
 
     @staticmethod
-    def _write(proc: subprocess.Popen[str], outbox: queue.Queue[str]) -> None:
-        # Its own thread: writing to a worker stuck in a loop blocks once the
-        # pipe is full, and that must never block the node.
+    def _write(proc: subprocess.Popen[str], outbox: queue.Queue[str], heard: threading.Event) -> None:
+        # Its own thread: writing to a worker stuck in a loop blocks, and that
+        # must never block the node. One request in flight at a time, always
+        # the newest: a worker that's loading or slow never finds a backlog of
+        # old frames to work through.
         assert proc.stdin is not None
         while True:
+            heard.wait()
             line = outbox.get()
+            heard.clear()
             try:
                 proc.stdin.write(line)
                 proc.stdin.flush()
@@ -158,6 +168,13 @@ class TeamWorker:
         self._start()
 
     def close(self) -> None:
+        """Stop the worker, all of it: on Windows a venv's python.exe is a
+        launcher running the real Python as its child, and killing only the
+        launcher would leave a team stuck in a loop running. Its job object
+        holds both, so ending the job ends them."""
+        job, self._job = self._job, None
+        if job is not None:
+            _end_job(job)
         proc = self._proc
         if proc is not None and proc.poll() is None:
             proc.kill()
@@ -204,6 +221,8 @@ class TeamWorker:
             self.log(f"[Strategy node] {event}")
         self._last_answer = time.monotonic()
         self.ready = True
+        if answer.get("hello"):
+            self.pid = answer.get("pid")
         if "seq" in answer:
             seen = int(answer["seq"])
             self._unconfirmed = [(s, e) for s, e in self._unconfirmed if s > seen]
@@ -307,14 +326,30 @@ def _limit_memory(proc: subprocess.Popen[str], max_bytes: int) -> Any:
         return None
 
 
+def _end_job(job: Any) -> None:
+    """End every process in a worker's job object, and close it."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
+        k32.TerminateJobObject(job, 1)
+        k32.CloseHandle(job)
+    except (OSError, AttributeError, ValueError):
+        pass
+
+
 # -- the worker's side ---------------------------------------------------------------
 
 
-def _exit_with_parent() -> None:
+def _exit_with_parent(node: int | None = None) -> None:
     """Exit when the node is gone. The worker's main thread may be stuck in
     the team's endless loop, so stdin closing alone wouldn't be seen; this
-    thread still runs (Python switches threads every few ms)."""
-    parent = os.getppid()
+    thread still runs (Python switches threads every few ms). `node`: the
+    node's process id (its parent may be a venv launcher in between)."""
+    parent = node or os.getppid()
     if os.name == "nt":
         import ctypes
 
@@ -325,9 +360,20 @@ def _exit_with_parent() -> None:
         while kernel32.WaitForSingleObject(handle, 500) != 0:  # 0: the node exited
             pass
     else:
-        while os.getppid() == parent:
+        while _alive(parent):
             time.sleep(0.5)
     os._exit(0)
+
+
+def _alive(pid: int) -> bool:
+    """POSIX only: on Windows os.kill(pid, 0) would end the process."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 def _prepare(path: str) -> tuple[bool, Callable[..., Any]]:
@@ -366,12 +412,63 @@ def check(path: str) -> dict[str, Any]:
     return out
 
 
+def _newest_requests() -> Iterator[str]:
+    """The node's requests, newest first: if several are waiting (the worker
+    was loading, or a frame ran long), the older ones are skipped, so the
+    worker never works through a backlog of frames nobody wants any more.
+    Nothing is lost: each request repeats the game events not yet confirmed.
+    (In lockstep the node waits for each answer, so there is never a backlog.)"""
+    lines: queue.Queue[str | None] = queue.Queue()
+
+    def read() -> None:
+        for line in sys.stdin:
+            lines.put(line)
+        lines.put(None)  # stdin closed: the node is gone
+
+    threading.Thread(target=read, daemon=True, name="stdin").start()
+    while True:
+        line = lines.get()
+        while line is not None and not lines.empty():
+            newer = lines.get_nowait()
+            if newer is None:
+                break
+            line = newer
+        if line is None:
+            return
+        yield line
+
+
+def _warm_up(decide: Callable[..., Any], build_game_state: Callable[..., Any], color: str) -> None:
+    """One practice frame of the built-in team before saying hello: the first
+    frame imports and warms up numpy and the strategy, slow enough to look
+    like a stuck worker. The team's own code doesn't run here."""
+    from strategy.world.state import (
+        FIELD_LENGTH,
+        FIELD_WIDTH,
+        TEAM_BLUE_SIZE,
+        TEAM_RED_SIZE,
+    )
+
+    robots = {}
+    for i in range(TEAM_BLUE_SIZE + TEAM_RED_SIZE):
+        x = FIELD_LENGTH * (0.2 + 0.3 * (i % 3))
+        y = FIELD_WIDTH * (0.25 if i < TEAM_BLUE_SIZE else 0.75)
+        robots[str(i)] = {"x": x, "y": y, "angle": 0.0, "vx": 0.0, "vy": 0.0, "omega": 0.0}
+    raw = {"t": 0.0, "robots": robots,
+           "ball": {"x": FIELD_LENGTH / 2, "y": FIELD_WIDTH / 2, "vx": 1.0, "vy": 0.3}}
+    try:
+        decide(build_game_state(raw, color), None, False, {}, True, colors=(color,))
+    except Exception:  # noqa: BLE001, S110 -- only a warm-up: real frames report real problems
+        pass
+
+
 def main(argv: list[str]) -> None:
     if len(argv) >= 3 and argv[1] == "--check":
         check(argv[2])
         return
     path, color = argv[1], argv[2]
-    threading.Thread(target=_exit_with_parent, daemon=True, name="watchdog").start()
+    node = int(argv[argv.index("--node") + 1]) if "--node" in argv else None
+    threading.Thread(target=_exit_with_parent, args=(node,), daemon=True, name="watchdog").start()
     protocol = sys.stdout
     sys.stdout = sys.stderr  # the team's print()s go to the node's log
 
@@ -392,14 +489,15 @@ def main(argv: list[str]) -> None:
         return (f"{color} plays {name}: {', '.join(replaced_slots(team_file.team))} replaced, "
                 + f"the rest built-in{mode}")
 
-    protocol.write(json.dumps({"hello": True, "events": [describe()]}) + "\n")
+    _warm_up(decide, build_game_state, color)
+    protocol.write(json.dumps({"hello": True, "pid": os.getpid(), "events": [describe()]}) + "\n")
     protocol.flush()
     events: list[str] = []
     memory: dict[str, dict[str, Any]] = {}
     sticky: dict[str, int] = {}
     play_state: dict[str, dict[str, Any]] = {}
     events_seen = 0  # the newest request whose game events were played
-    for frames, line in enumerate(sys.stdin, start=1):
+    for frames, line in enumerate(_newest_requests(), start=1):
         request = json.loads(line)
         if request.get("color", color) != color:  # the match runner swapped sides
             color = request["color"]
