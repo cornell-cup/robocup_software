@@ -67,6 +67,25 @@ SKILLS = ("go_to_ball", "kick_toward", "intercept", "pass_to", "dribble_to")
 SLOT_NAMES = ("roles", ATTACKER, SUPPORTER, DEFENDER, GOALIE, "prepare", "team", "kickoff", "pick_play",
               *SKILLS)
 
+# Each slot's parameters (what it's called with) and what it gives back:
+# for the Code page's hints and its lint.
+SLOT_PARAMS: dict[str, tuple[tuple[str, ...], str]] = {
+    "roles": (("team", "world"), "[(robot, role), ...] for every robot in team"),
+    ATTACKER: (("me", "world"), "a Command"),
+    SUPPORTER: (("me", "world"), "a Command"),
+    DEFENDER: (("me", "world"), "a Command"),
+    GOALIE: (("me", "world"), "a Command"),
+    "prepare": (("world",), "nothing"),
+    "team": (("robots", "world"), "{robot: Command} for the robots it commands"),
+    "kickoff": (("robots", "world"), "{robot: (x, y)} on our half"),
+    "pick_play": (("world",), "the name of one of the PLAYS"),
+    "go_to_ball": (("me", "world"), "a Command"),
+    "kick_toward": (("me", "world", "target"), "a Command"),
+    "intercept": (("me", "world"), "a Command"),
+    "pass_to": (("me", "world", "mate"), "a Command"),
+    "dribble_to": (("me", "world", "target"), "a Command"),
+}
+
 # A replaced slot gets this long per call (a whole frame is 1/60 s). Slower,
 # and the robot falls back to the built-in slot for that frame, as on an error.
 SLOT_TIME_BUDGET_S = 0.010
@@ -238,6 +257,8 @@ def run_roles(team: Team, members: list[Me], world: World, errors: list[str] | N
               play_state: dict[str, Any] | None = None) -> list[tuple[Me, str]]:
     """Who plays which role: the running play's roles if the team has plays,
     else its roles slot, checked; the built-in roles if that fails."""
+    if not members:  # team() and kickoff() took every robot
+        return []
     play = _current_play(team, world, errors, play_state)
     world.play = play
     if play is not None:
