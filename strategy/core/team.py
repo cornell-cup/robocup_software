@@ -118,6 +118,7 @@ def decide(
             unavailable=skip, rl_skill=rl_skill, rl_enabled=rl_enabled, sticky=sticky,
             events=team_events(events or [], team_color),
         )
+        world._team, world._errors = spec, errors
         run_prepare(spec, world, errors)
         planned: dict[int, Command] = {}
         if not kicked_off:

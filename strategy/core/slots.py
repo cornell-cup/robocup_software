@@ -16,6 +16,12 @@ A Team names one function per slot:
                {robot: (x, y)} on our half; built-in: none
     pick_play  which of the team's PLAYS runs: pick_play(world) -> name; built-in: no plays
 
+and the skills, one action each (skills/ball.py), called as methods of a
+robot (`me.kick_toward(target)`) from any slot, the built-in attacker's too:
+
+    go_to_ball(me, world)  kick_toward(me, world, target)  intercept(me, world)
+    pass_to(me, world, mate)  dribble_to(me, world, target)
+
 and, besides the slots, `plays` (PLAYS in a team file: a play's name -> its
 roles, most important first) and `custom`, its own roles: functions by name
 (`runner`, `marker`) that roles() or a play can give a robot.
@@ -46,6 +52,7 @@ import numpy as np
 
 from strategy.api import Me, World
 from strategy.core.command import Command
+from strategy.skills import ball as builtin_skills
 from strategy.tactics.attacker import attacker as builtin_attacker
 from strategy.tactics.defender import defender as builtin_defender
 from strategy.tactics.defender import goalie as builtin_goalie
@@ -55,8 +62,10 @@ from strategy.tactics.supporter import supporter as builtin_supporter
 
 GOALIE = "goalie"
 ROLES = (ATTACKER, SUPPORTER, DEFENDER, GOALIE)  # the built-in roles
+SKILLS = ("go_to_ball", "kick_toward", "intercept", "pass_to", "dribble_to")
 # The slots: the functions a team file may define by these names.
-SLOT_NAMES = ("roles", ATTACKER, SUPPORTER, DEFENDER, GOALIE, "prepare", "team", "kickoff", "pick_play")
+SLOT_NAMES = ("roles", ATTACKER, SUPPORTER, DEFENDER, GOALIE, "prepare", "team", "kickoff", "pick_play",
+              *SKILLS)
 
 # A replaced slot gets this long per call (a whole frame is 1/60 s). Slower,
 # and the robot falls back to the built-in slot for that frame, as on an error.
@@ -112,6 +121,11 @@ class Team:
     team: TeamPlan = builtin_team
     kickoff: KickoffSpots = builtin_kickoff
     pick_play: PlayPicker = builtin_pick_play
+    go_to_ball: Callable[..., Command] = builtin_skills.go_to_ball
+    kick_toward: Callable[..., Command] = builtin_skills.kick_toward
+    intercept: Callable[..., Command] = builtin_skills.intercept
+    pass_to: Callable[..., Command] = builtin_skills.pass_to
+    dribble_to: Callable[..., Command] = builtin_skills.dribble_to
     # Not slots: a team's plays (name -> roles, most important first), and its
     # own roles (name -> function).
     plays: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
@@ -284,6 +298,26 @@ def _current_play(team: Team, world: World, errors: list[str] | None,
         state["play"] = wanted
         state.pop("wanted", None)
     return state.get("play")
+
+
+def run_skill(name: str, me: Me, world: World, *args: Any) -> Command:
+    """A skill for one robot (me.kick_toward(...) and the like): the team's
+    own, checked, or the built-in one if it has none or it fails."""
+    team = world._team if isinstance(world._team, Team) else DEFAULT_TEAM
+    fn = getattr(team, name)
+    default = getattr(DEFAULT_TEAM, name)
+    if fn is default:
+        return fn(me, world, *args)
+    try:
+        t0 = time.perf_counter()
+        command = fn(me, world, *args)
+        _check_time(t0)
+        if not isinstance(command, Command):
+            raise TypeError(f"must return a Command (e.g. me.go_to(...)), returned {command!r}")
+        return command
+    except Exception as e:  # noqa: BLE001 -- student code may raise anything
+        _report(world._errors, world.color, name, me.id, e)
+        return default(me, world, *args)
 
 
 def run_behavior(team: Team, role: str, me: Me, world: World, errors: list[str] | None) -> Command:
