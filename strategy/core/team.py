@@ -125,7 +125,8 @@ def decide(
             planned.update(run_kickoff(spec, world, errors))
         planned.update(run_team_plan(spec, world, errors))
         rest = [m for m in world.teammates if m.id not in planned] if planned else world.teammates
-        for me, role in run_roles(spec, rest, world, errors, play_state.setdefault(team_color, {})):
+        assigned = run_roles(spec, rest, world, errors, play_state.setdefault(team_color, {})) if rest else []
+        for me, role in assigned:
             if role == ATTACKER:
                 attacker_rids.add(me.id)
             world._running_for(me.id)
