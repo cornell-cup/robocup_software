@@ -623,7 +623,8 @@ class TestTeamFiles(unittest.TestCase):
 
     def test_template_plays_like_the_built_in_team(self):
         team = load_team(EXAMPLES / "template.py")
-        self.assertEqual(replaced_slots(team), ["roles", "attacker", "supporter", "defender"])
+        self.assertEqual(replaced_slots(team), ["roles", "attacker", "supporter", "defender", "go_to_ball",
+                                                "kick_toward", "intercept", "pass_to", "dribble_to"])
         a = match.play_game(decide, decide, True, seed=2, duration_s=10, team_a=team)
         b = match.play_game(decide, decide, True, seed=2, duration_s=10)
         self.assertEqual((a.goals_a, a.goals_b, a.kicks_a, a.kicks_b, a.possession_a, a.attacking_a),
@@ -1116,6 +1117,49 @@ class TestSkills(unittest.TestCase):
             self.assertEqual(replaced_slots(load_team(path)), ["go_to_ball"])
 
 
+class TestCodeAssist(unittest.TestCase):
+    """The Code page's hints (core/reference.py) and lint (robocup_web/lint.py)."""
+
+    def test_the_reference_lists_the_real_api(self):
+        from strategy.core.reference import reference
+
+        ref = reference()
+        me = {m["name"]: m for m in ref["me"]}
+        self.assertEqual(me["kick_toward"]["detail"], "(target)")
+        self.assertIn("go_to", me)
+        self.assertIn("memory", {m["name"] for m in ref["world"]})
+        self.assertIn("at", {m["name"] for m in ref["ball"]})
+        self.assertEqual({s["name"]: s["params"] for s in ref["slots"]}["pass_to"], ["me", "world", "mate"])
+
+    def test_lint_finds_slot_mistakes_typos_and_undefined_names(self):
+        from robocup_web.lint import lint
+
+        found = lint("team.py", textwrap.dedent("""            def supporter(me):
+                return me.kick_towards(wrold.ball.pos)
+
+            def defender(me, world):
+                me.stop()
+            """), entry=True)
+        messages = [f["message"] for f in found]
+        self.assertTrue(any("write def supporter(me, world)" in m for m in messages), messages)
+        self.assertTrue(any("did you mean kick_toward" in m for m in messages), messages)
+        self.assertTrue(any("`wrold` isn't defined" in m for m in messages), messages)
+        self.assertTrue(any("defender never returns anything" in m for m in messages), messages)
+
+    def test_the_code_students_start_from_is_clean(self):
+        from robocup_web.lint import lint
+
+        for name in ("template.py", "get_open.py"):
+            text = (EXAMPLES / name).read_text(encoding="utf-8")
+            self.assertEqual(lint("team.py", text, entry=True), [], name)
+
+    def test_a_helper_file_gets_only_the_general_checks(self):
+        from robocup_web.lint import lint
+
+        found = lint("passing.py", "def supporter(me):\n    return 1\n", entry=False)
+        self.assertEqual(found, [])  # not team.py: no slot rules
+
+
 class TestPlaysAndTeam(unittest.TestCase):
     """Your own roles, goalie, PLAYS and pick_play, team() and kickoff()."""
 
@@ -1212,6 +1256,19 @@ class TestPlaysAndTeam(unittest.TestCase):
         reference, _, _ = decide(build_game_state(world()), sticky_attackers={})
         self.assertIn(1, targets)  # robot 1 still went through its role
         self.assertEqual(set(targets), set(reference))
+
+    def test_team_can_command_every_robot(self):
+        team = self.load("""            PLAYS = {"attack": ["attacker", "supporter", "goalie"]}
+
+            def pick_play(world):
+                return "attack"
+
+            def team(robots, world):
+                return {robot: robot.go_to((2.0, 1.0 + robot.id)) for robot in robots}
+            """)
+        targets, _, errors = self.plan(team)
+        self.assertEqual(errors, [])
+        self.assertEqual({targets[r][:2] for r in (0, 1, 2)}, {(2.0, 1.0), (2.0, 2.0), (2.0, 3.0)})
 
     def test_a_broken_team_plan_falls_back_to_roles(self):
         team = self.load("""\
