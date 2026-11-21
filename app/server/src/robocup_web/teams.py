@@ -31,6 +31,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from .blocks import to_blocks
 from .procs import CommandError, ManagedProcess
 
 REPO = Path(__file__).resolve().parents[4]
@@ -44,6 +45,7 @@ WS_NAME = re.compile(r"[A-Za-z0-9_-]{1,40}")
 MAX_FILE_BYTES = 200_000
 MAX_FILES = 50
 MAX_UPLOAD_BYTES = 1_000_000
+MAX_BLOCKS_BYTES = 1_000_000  # a file's blocks (Blockly's JSON)
 CHECK_TIMEOUT_S = 20.0
 OPPONENTS = ("v2", "v1", "v0", "current")
 # New workspace: where its files come from.
@@ -53,6 +55,11 @@ STARTS: dict[str, dict[str, Path | str]] = {
     "blank": {ENTRY: '"""My team."""\n\nfrom strategy.api import Command, Me, World\n\n\n'
                      "def supporter(me: Me, world: World) -> Command:\n"
                      "    return me.go_to(world.ball.pos, face=world.ball.pos)\n"},
+    # A team of blocks: this Python is exactly what its blocks make (robotBlocks.ts).
+    "blocks": {ENTRY: '"""My team, made with blocks."""\n\nimport numpy as np  # noqa: F401\n\n'
+                      "from strategy.api import Command, Me, World  # noqa: F401\n\n\n"
+                      "def supporter(me: Me, world: World) -> Command:\n"
+                      "    return me.go_to(world.ball.pos, face=world.ball.pos)\n"},
 }
 _LOCATION = re.compile(r"\b([A-Za-z_]\w*\.py):(\d+)")
 # The strategy's own rule for module file names (strategy/core/loader.py),
@@ -167,6 +174,9 @@ class Workspaces:
             "safe": bool(meta.get("safe")),
             "origin": meta.get("origin", "own"),
             "from": meta.get("from", ""),
+            # Files edited as blocks (the Code page's Blocks view): their blocks
+            # are kept here, their Python is made from them.
+            "blocks": sorted(meta.get("blocks") or {}),
         }
 
     def list(self) -> list[dict[str, Any]]:
@@ -192,7 +202,10 @@ class Workspaces:
         for file, source in STARTS[start].items():
             text = source.read_text(encoding="utf-8") if isinstance(source, Path) else source
             _write(folder / file, text.encode("utf-8"))
-        self._write_meta(folder, {"origin": "own", "created": time.time()})
+        meta: dict[str, Any] = {"origin": "own", "created": time.time()}
+        if start == "blocks":
+            meta["blocks"] = {ENTRY: to_blocks((folder / ENTRY).read_text(encoding="utf-8"))["state"]}
+        self._write_meta(folder, meta)
         return self._info(folder)
 
     def duplicate(self, name: str, new: str) -> dict[str, Any]:
@@ -268,6 +281,10 @@ class Workspaces:
         if dst.exists():
             raise CommandError(f"{new} already exists in {ws}")
         src.rename(dst)
+        meta = self._meta(src.parent)
+        if name in (meta.get("blocks") or {}):
+            meta["blocks"][new] = meta["blocks"].pop(name)
+            self._write_meta(src.parent, meta)
         return self._info(src.parent)
 
     def delete_file(self, ws: str, name: str) -> dict[str, Any]:
@@ -276,6 +293,36 @@ class Workspaces:
             raise CommandError(f"{ENTRY} is where the team starts: delete the workspace instead")
         if path.exists():
             path.unlink()
+        meta = self._meta(path.parent)
+        if (meta.get("blocks") or {}).pop(name, None) is not None:
+            self._write_meta(path.parent, meta)
+        return self._info(path.parent)
+
+    # -- blocks -----------------------------------------------------------------
+
+    def get_blocks(self, ws: str, name: str) -> dict[str, Any] | None:
+        """A file's blocks (Blockly's JSON), or None for a file edited as Python."""
+        file_path(ws, name)
+        return (self._meta(ws_path(ws)).get("blocks") or {}).get(name)
+
+    def set_blocks(self, ws: str, name: str, state: dict[str, Any] | None) -> dict[str, Any]:
+        """Keep a file's blocks, or (None) make it a Python file again."""
+        path = file_path(ws, name)
+        if not path.is_file():
+            raise CommandError(f"no file {name} in {ws}")
+        if state is not None:
+            if not isinstance(state, dict):
+                raise CommandError("blocks must be Blockly's workspace JSON")
+            if len(json.dumps(state)) > MAX_BLOCKS_BYTES:
+                raise CommandError(f"those blocks are over {MAX_BLOCKS_BYTES // 1_000_000} MB")
+        meta = self._meta(path.parent)
+        blocks = dict(meta.get("blocks") or {})
+        if state is None:
+            blocks.pop(name, None)
+        else:
+            blocks[name] = state
+        meta["blocks"] = blocks
+        self._write_meta(path.parent, meta)
         return self._info(path.parent)
 
     # -- checking ---------------------------------------------------------------
@@ -316,7 +363,7 @@ class Workspaces:
             meta = self._meta(folder)
             z.writestr(f"{ws}/{META}", json.dumps({
                 "name": ws, "author": meta.get("author", ""), "exported": time.time(),
-                "from": meta.get("from", ""),
+                "from": meta.get("from", ""), "blocks": meta.get("blocks") or {},
             }, indent=2))
         return buf.getvalue()
 
@@ -431,6 +478,9 @@ class Workspaces:
         self._write_meta(folder, {
             "origin": "uploaded", "safe": True, "created": time.time(),
             "author": str(meta.get("author", ""))[:60],
+            # Blocks come along when they belong to files that came too.
+            "blocks": {k: v for k, v in (meta.get("blocks") or {}).items()
+                       if isinstance(v, dict) and k in files},
             "from": str(meta.get("from") or meta.get("name") or base)[:60],
         })
         return self._info(folder)
