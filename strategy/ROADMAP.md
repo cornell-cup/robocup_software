@@ -63,6 +63,18 @@ runner (`python -m strategy.eval.match`).
    the second-level threats (both come out of `analyze()`). The supporter
    holds a fixed distance from the ball: toward our goal when an opponent is
    near it, toward theirs otherwise.
+   **Tried 2026-11-20, not adopted.** The built-in team was first frozen as
+   `v2` (`eval/baseline_v2.py`, now the match runner's default opponent).
+   Against it, 40 games of 120 s each: the defender guarding the line to
+   the first-level threat instead of the ball, +0.12 ± 0.27 goals a game;
+   the supporter dropping halfway back to our goal while the opponents win
+   the race by over 0.3 s, +0.10 ± 0.30; both, +0.30 ± 0.30 on one set of
+   seeds and -0.05 ± 0.24 on another (64-54 over 80 games): no clear gain,
+   and every frame then runs the whole analysis (matches at about 2x real
+   time instead of 7x). With one defender and few goals conceded, defence
+   isn't where games are decided yet; the attacker is (step 2's gain).
+   Worth trying again with two defenders (a play that drops the supporter
+   back), or once role assignment by time (step 4) is in.
 4. **Role assignment by priority and cost, in seconds [6, 7].** Roles as
    tasks with priorities; with 3 robots, score all 6 assignments, with a
    bonus for keeping the current role. Formation spots (kickoff) by SCRAM's
