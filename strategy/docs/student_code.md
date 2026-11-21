@@ -410,7 +410,12 @@ it's a new built-in that has beaten v1.
    (same fingerprint). Built-in plays come with strategy step 6.
 7. **Skills:** the built-in attacker rewritten on `go_to_ball`,
    `kick_toward`, ...; skill slots; `time_to`, `ball.at`, `score`,
-   `time_left`.
+   `time_left`. **Done 2026-11-20:** `skills/ball.py` (the five skills, each
+   a slot, called as `me.kick_toward(target)`, a team's own version used by
+   the built-in attacker too, with the usual time budget and fallback);
+   `me.time_to()`, `world.ball.at(t)`, `world.ball.stops_at`, `world.score`,
+   `world.time_left`; the guide's "Skills" section, its examples played by a
+   test. The built-in team plays exactly as before (same fingerprint).
 8. **Drills:** the drill format and runner, lessons 1–5, a Drills list on the
    Code page.
 9. **Tournaments:** every chosen workspace against every other, a ranking

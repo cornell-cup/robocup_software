@@ -27,9 +27,12 @@ draws on the field and shows values, gets game events and a `prepare` slot,
 and can dribble and limit its speed; and steps 2-5: workspaces of several
 files, every team in its own process with safe mode for someone else's,
 upload and download, and students playing each other's code; and step 6:
-your own roles, plays, `team()` and `kickoff()`. Strategy step 2 has its
-first use: the attacker meets rolling balls, clearly better than v1. Next:
-skills on the platform (step 7 there), and strategy step 3.
+your own roles, plays, `team()` and `kickoff()`; and step 7, skill slots.
+Strategy step 2 has its first use: the attacker meets rolling balls, clearly
+better than v1, frozen as v2. Steps 3 (threat-based defence) and 5 (an
+attacker that shoots, passes or dribbles) were tried against v2 and not
+adopted: no variant beat it. Next on the platform: drills (step 8 there);
+for the team, step 4, roles by time.
 
 ## 1. Strategy: next steps
 
@@ -86,6 +89,21 @@ runner (`python -m strategy.eval.match`).
    the sim, so shots and passes can start there. Pushing with the dribbler
    on should also cut the ~17 s a lone attacker takes to walk the ball into
    the goal on 9 x 6.
+   **Tried 2026-11-20, not adopted.** First the attacker was rebuilt on
+   skills (`skills/ball.py`: `kick_toward`, `intercept`, `pass_to`,
+   `dribble_to`, `go_to_ball`), playing exactly as before (same
+   fingerprint), and those skills became slots students can replace. Then,
+   against v2, 40 games of 120 s each: kick instead of push when lined up
+   within 4 m with a clear lane, -0.15 ± 0.33 goals a game; plus aiming at
+   the most open point of the goal mouth, -0.05 ± 0.26; plus passing to a
+   teammate nearer their goal when the lane is blocked, +0.07 ± 0.28; the
+   dribbler on while pushing, +0.00 ± 0.30; the same at most 0.8 m/s,
+   -0.23 ± 0.28. The kicks gave the ball away (possession 7-9% against
+   13%); the dribbler kept it but scored no more, and slowed down it
+   conceded. Pushing with the body stays. Next to try: rating the options
+   with the analysis layer's timing (who reaches a passed ball first)
+   rather than fixed thresholds, and the kicker on the real robots, whose
+   kick may behave differently from the sim's.
 6. **Plays that commit, for game situations [1, 2].** Kickoff, after a goal,
    and the sim's pause / new-game controls, each a play that runs until it
    is done. That also fixes the strategy missing a new game (it waits for a
@@ -226,5 +244,8 @@ classmate's code. Done so far:
 6. Your own roles, `goalie`, plays and `pick_play`, `team()` and
    `kickoff()`. **Done 2026-11-20.**
 
-Next, in order: skills; drills; tournaments; settings and Blocks; the
-driving slot.
+7. Skill slots: `go_to_ball`, `kick_toward`, `intercept`, `pass_to`,
+   `dribble_to`, with `time_to`, `ball.at`, `score`, `time_left`.
+   **Done 2026-11-20.**
+
+Next, in order: drills; tournaments; settings and Blocks; the driving slot.
