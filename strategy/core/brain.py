@@ -150,6 +150,8 @@ class Brain:
         gamestate = build_game_state(raw, self.color)
         self._update_kickoff(gamestate)
         lost = self._update_lost(gamestate)
+        if gamestate.game_phase == "halt":
+            return self._hold(gamestate)
 
         errors: list[str] = []
         extras = Extras()
@@ -184,6 +186,15 @@ class Brain:
         events, self._events = self._events, []
         return Plan(targets, kicks, dribble, attackers, gamestate, errors,
                     max_speed=extras.max_speed, drawings=extras.drawings, shown=extras.shown,
+                    events=events)
+
+    def _hold(self, gamestate: GameState) -> Plan:
+        """The game is over: every robot the AI drives stays where it is, its
+        dribbler off, until the next game. Human-driven robots are left alone."""
+        targets = {r.id: (float(r.pos[0]), float(r.pos[1]), float(r.angle))
+                   for r in gamestate.blue + gamestate.red if r.id not in self.human_blue_ids}
+        events, self._events = self._events, []
+        return Plan(targets, [], {rid: False for rid in targets}, set(), gamestate,
                     events=events)
 
     def _merge_worker(self, color, worker, raw, gamestate, lost, targets, kicks, attackers,
