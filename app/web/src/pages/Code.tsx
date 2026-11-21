@@ -2,7 +2,7 @@
 // every save, played live in the simulator (against the built-in team or a
 // classmate's workspace), tested in matches, shared by download and upload.
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Card } from "../components/Card";
 import type { Reference } from "../components/codeAssist";
 import { CodeEditor } from "../components/CodeEditor";
@@ -31,8 +31,14 @@ import type { Shown, SimProcessStatus } from "../lib/types";
 import { useSavedState } from "../lib/useSavedState";
 import "../styles/code.css";
 
+// Blockly is big: the Blocks view loads it only when a file is opened as blocks.
+const BlocksEditor = lazy(() => import("../components/BlocksEditor"));
+
 type Side = "blue" | "red";
 type Doc = { text: string; saved: string };
+/** A file's blocks: Blockly's JSON, and its text as last saved and now
+ *  (fromServer: loaded from the workspace, not just converted). */
+type BlocksDoc = { state: object; saved: string; current: string; fromServer: boolean };
 interface Problem {
   from: "loading" | "match" | "live";
   text: string;
@@ -56,9 +62,15 @@ export function Code() {
   const [file, setFile] = useState(ENTRY);
   const [tabs, setTabs] = useState<string[]>([]); // the open files of the open workspace
   const [docs, setDocs] = useState<Record<string, Doc>>({});
+  // Files edited as blocks: their blocks (Blockly's JSON), as last saved and now.
+  const [blocks, setBlocks] = useState<Record<string, BlocksDoc>>({});
+  const [showPython, setShowPython] = useSavedState("code.blocksPython", true);
   const [expanded, setExpanded] = useSavedState<string[]>("code.expanded", []);
   const doc = docs[file];
-  const dirtyFiles = Object.entries(docs).filter(([, d]) => d.text !== d.saved).map(([f]) => f);
+  const dirtyFiles = Object.entries(docs)
+    .filter(([f, d]) => d.text !== d.saved || (blocks[f] && blocks[f].current !== blocks[f].saved))
+    .map(([f]) => f);
+  const asBlocks = !!blocks[file];
   const [check, setCheck] = useState<CheckResult | null>(null);
   const [checking, setChecking] = useState(false);
   const [jump, setJump] = useState<{ line: number } | null>(null);
@@ -101,6 +113,8 @@ export function Code() {
     try {
       const f = await teams.read(name, first);
       setDocs({ [first]: { text: f.text, saved: f.text } });
+      setBlocks({});
+      loadBlocks(name, first);
       setFile(first);
       setTabs([first]);
       setTab("code");
@@ -141,6 +155,7 @@ export function Code() {
       try {
         const f = await teams.read(loadedWs, name);
         setDocs((d) => ({ ...d, [name]: { text: f.text, saved: f.text } }));
+        loadBlocks(loadedWs, name);
       } catch (e) {
         toasts.error(e);
         return;
@@ -148,6 +163,52 @@ export function Code() {
     }
     setTabs((t) => (t.includes(name) ? t : [...t, name]));
     setFile(name);
+  };
+
+  /** Done when a workspace or file is opened: its blocks, if it's edited as blocks. */
+  function loadBlocks(w: string, name: string) {
+    teams.getBlocks(w, name).then((state) => {
+      if (state) setBlocks((b) => ({ ...b, [name]: { state, saved: "", current: "", fromServer: true } }));
+    }).catch(() => {});
+  }
+
+  /** The Blocks view changed (or loaded): the blocks and the Python they make. */
+  const blocksChanged = (name: string) => (state: object, python: string, loaded: boolean) => {
+    const json = JSON.stringify(state);
+    setBlocks((b) => b[name] ? {
+      ...b,
+      [name]: { ...b[name], state, current: json, saved: loaded && b[name].fromServer ? json : b[name].saved },
+    } : b);
+    setDocs((d) => d[name] ? { ...d, [name]: { ...d[name], text: python } } : d);
+  };
+
+  /** Python -> blocks: the server reads the Python and builds the blocks. */
+  const convertToBlocks = async () => {
+    const d = docs[file];
+    if (!d) return;
+    try {
+      const r = await teams.toBlocks(d.text);
+      if (r.dropped_comments && !confirm(
+        `${r.dropped_comments} comment${r.dropped_comments > 1 ? "s" : ""} inside the role functions won't be kept in blocks. `
+        + "Everything else is (what blocks can't show stays as Python blocks). Convert?")) return;
+      setBlocks((b) => ({ ...b, [file]: { state: r.state, saved: "", current: "", fromServer: false } }));
+      toasts.push("info", `As blocks: ${r.roles.length ? r.roles.join(", ") : "no roles"}`
+        + `${r.python_blocks ? `, and ${r.python_blocks} Python block${r.python_blocks > 1 ? "s" : ""} for the rest` : ""}. Save to keep it.`);
+    } catch (e) {
+      toasts.error(e);
+    }
+  };
+
+  /** Blocks -> Python for good: the Python the blocks make stays, the blocks go. */
+  const convertToPython = async () => {
+    if (!confirm("Edit this file as Python from now on? It keeps the Python your blocks make; the blocks are removed.")) return;
+    if (dirtyFiles.includes(file) && !(await save(file, true))) return;
+    try {
+      if (ws?.blocks.includes(file)) updateWs(await teams.setBlocks(loadedWs, file, null));
+      setBlocks(({ [file]: _gone, ...rest }) => rest);
+    } catch (e) {
+      toasts.error(e);
+    }
   };
 
   /** A file clicked in the tree: in the open workspace, or open that workspace at it. */
@@ -167,12 +228,20 @@ export function Code() {
 
   /** Save the changed files (all, or just one): the team reloads from them. */
   const save = useCallback(async (only?: string, quiet = false) => {
-    const todo = Object.entries(docs).filter(([f, d]) => d.text !== d.saved && (!only || f === only));
+    const todo = Object.entries(docs).filter(([f, d]) =>
+      (d.text !== d.saved || (blocks[f] && blocks[f].current !== blocks[f].saved)) && (!only || f === only));
     if (!loadedWs || !todo.length) return true;
     try {
       for (const [f, d] of todo) {
-        await teams.save(loadedWs, f, d.text);
-        setDocs((all) => ({ ...all, [f]: { ...all[f], saved: d.text } }));
+        if (d.text !== d.saved) {
+          await teams.save(loadedWs, f, d.text);
+          setDocs((all) => ({ ...all, [f]: { ...all[f], saved: d.text } }));
+        }
+        const b = blocks[f];
+        if (b && b.current !== b.saved) {
+          updateWs(await teams.setBlocks(loadedWs, f, b.state));
+          setBlocks((all) => ({ ...all, [f]: { ...all[f], saved: b.current, fromServer: true } }));
+        }
       }
       setLiveErrors([]);
       setMatchStale(true);
@@ -183,7 +252,8 @@ export function Code() {
       toasts.error(e);
       return false;
     }
-  }, [docs, loadedWs, runCheck, playingSides.length]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- updateWs is a plain setter wrapper
+  }, [docs, blocks, loadedWs, runCheck, playingSides.length]);
 
   const newFile = async (ws: string, name: string) => {
     try {
@@ -434,6 +504,13 @@ export function Code() {
             e.target.value = "";
             if (files.length) setPanel({ upload: files });
           }} />
+          {loadedWs && tab === "code" && file === ENTRY && docs[file] && (asBlocks ? (
+            <button className="btn sm" onClick={convertToPython} title="Edit this file as Python from now on">Back to Python</button>
+          ) : (
+            <button className="btn sm" onClick={convertToBlocks} title="Edit this file with blocks (Google Blockly): what blocks can't show stays as Python blocks">
+              Convert to blocks
+            </button>
+          ))}
           <span className="code-status">{status}</span>
           {proc?.running && (
             <button className={`btn sm${wantField ? "" : " ghost"}`} onClick={() => setWantField(!wantField)}
@@ -476,7 +553,28 @@ export function Code() {
         <div className={`code-body${bigField ? " split" : ""}`}>
           {/* Kept mounted behind the guide, so undo history survives a look at the guide. */}
           <div className="code-pane" style={tab === "code" ? undefined : { display: "none" }}>
-            {loadedWs && doc ? (
+            {loadedWs && doc && asBlocks ? (
+              <div className="blocks-pane">
+                <Suspense fallback={<div className="code-empty dim">Loading the blocks…</div>}>
+                  <BlocksEditor docKey={`${loadedWs}/${file}`} state={blocks[file].state} onChange={blocksChanged(file)} />
+                </Suspense>
+                {showPython ? (
+                  <div className="blocks-python">
+                    <div className="blocks-python-head">
+                      <span>Your blocks as Python</span>
+                      <span className="dim">read-only</span>
+                      <button className="btn sm ghost" onClick={() => setShowPython(false)}>Hide</button>
+                    </div>
+                    <CodeEditor docKey={`${loadedWs}/${file}/blocks-python`} value={doc.text} onChange={() => {}}
+                      onSave={() => save(file)} problemLines={problemLines} jump={jump} readOnly
+                      lint={(text) => teams.lint(loadedWs, file, text)} />
+                  </div>
+                ) : (
+                  <button className="btn sm blocks-show" onClick={() => setShowPython(true)}
+                    title="The Python your blocks make: what actually plays">Show Python</button>
+                )}
+              </div>
+            ) : loadedWs && doc ? (
               <CodeEditor docKey={`${loadedWs}/${file}`} value={doc.text} onChange={edit} onSave={() => save(file)}
                 problemLines={problemLines} jump={jump} reference={reference}
                 lint={(text) => teams.lint(loadedWs, file, text)} />
@@ -627,6 +725,7 @@ const STARTS: { value: Start; label: string; title: string }[] = [
   { value: "template", label: "Template", title: "The roles and skills, each calling the built-in one, and the rest ready to switch on: change what you like" },
   { value: "get_open", label: "Example", title: "A supporter that gets open for a pass, and draws what it checks" },
   { value: "blank", label: "Blank", title: "One small supporter to start from" },
+  { value: "blocks", label: "Blocks", title: "One small supporter, made with blocks (Google Blockly): snap blocks together instead of typing" },
 ];
 
 function NewWorkspace({ existing, onCreated, onCancel }: {
