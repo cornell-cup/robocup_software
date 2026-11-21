@@ -413,6 +413,19 @@ class TestBrain(unittest.TestCase):
         brain.tick(world(t=0.2, game={"half": 2}))
         self.assertFalse(brain.kicked_off)
 
+    def test_game_over_holds_robots_still(self):
+        brain = Brain("blue")
+        brain.handle_control({"human_blue_ids": [0], "dribble_attacker": True})
+        raw = world(ball=(3.5, 1.5, 0, 0), game={"half": 2, "half_over": True})
+        plan = brain.tick(raw)
+        # Each AI robot is sent to where it already is: no new plan, no kicks.
+        for rid in (1, 2, 3, 4, 5):
+            r = raw["robots"][str(rid)]
+            self.assertEqual(plan.targets[rid], (r["x"], r["y"], r["angle"]))
+        self.assertNotIn(0, plan.targets)  # the human-driven robot is left alone
+        self.assertEqual(plan.kicks, [])
+        self.assertFalse(any(plan.dribble.values()))
+
     def test_camera_robot_lost_after_a_while(self):
         brain = Brain("blue")
 
