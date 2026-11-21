@@ -123,6 +123,31 @@ runner (`python -m strategy.eval.match`).
     `TODO(hardware)` values in `sim/config.py`) so the time model fits the
     real robot; kicker firmware; optionally retrain the RL kick at the real
     table's size.
+11. **Fundamentals first: make the built-in team strong. INCOMPLETE, paused
+    2026-11-20.** Steps 3 and 5 (smarter defence, shooting and passing) gained
+    nothing, which points at the basics rather than the tactics: a robot that
+    can't move the ball forward quickly gains nothing from a better plan. So:
+    measure where games are lost, fix the fundamentals, then return to the
+    research ideas (CMDragons, TIGERs, RoboJackets).
+    Found so far, unopposed (the red robots parked in the corners):
+    - The built-in team needs a median of about 17 s to score from kickoff
+      (3.3 goals a minute); the ball starts 4.5 m from the goal, about 4-5 s at
+      the robot's 1.2 m/s. A frame-by-frame trace of one game: lined up, it
+      pushes at only 0.3-0.7 m/s for seconds (the push aims 0.3 m past the
+      ball, so the robot keeps slowing for that point), then at about
+      1 m/s once moving.
+    - Driving through to the goal once lined up ("carry"): 17.1 s to 15.8 s,
+      a small gain only.
+    - Caution: those numbers came from a first harness in which the parked
+      red robots crossed the field at the start and one kicked the ball. A
+      corrected harness (red robots placed in the corners before the first
+      frame, only blue's kicks passed on) was written but not yet run.
+    Next: run the corrected unopposed test and make it a tool in
+    `strategy/eval/` (with a trace mode); then measure 3v3 against v2 the same
+    way (time contested, time stuck, how goals happen); then the fixes it
+    points at, likely approaching the ball without knocking it (going around
+    it), pushing at full speed, and steering around robots (step 7), each
+    checked unopposed and against v2.
 
 ## 2. Student platform
 
@@ -248,4 +273,10 @@ classmate's code. Done so far:
    `dribble_to`, with `time_to`, `ball.at`, `score`, `time_left`.
    **Done 2026-11-20.**
 
-Next, in order: drills; tournaments; settings and Blocks; the driving slot.
+8. Blocks (Google Blockly 13) on the Code page, both ways: **New… → Blocks**,
+   **Convert to blocks** on any `team.py` and **Back to Python**. Roles are
+   blocks of moves, places, numbers and conditions; what blocks can't show
+   stays as a Python block, so nothing is lost but comments inside roles.
+   Converting back and forth gives the same Python. **Done 2026-11-20.**
+
+Next, in order: drills; tournaments; settings sliders; the driving slot.
