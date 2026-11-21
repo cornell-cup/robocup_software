@@ -1,15 +1,21 @@
 // A Python editor (CodeMirror 6): line numbers, highlighting, Tab indents,
-// Ctrl/Cmd+S saves, and the lines with problems marked. One editor for a
-// workspace's files: each file (docKey) keeps its own text and undo history.
+// Ctrl/Cmd+S saves, the lines with problems marked, hints as you type (me.,
+// world., def ...), descriptions on hover and the lint's squiggles
+// (codeAssist.ts). One editor for a workspace's files: each file (docKey)
+// keeps its own text and undo history.
 
 import { indentWithTab } from "@codemirror/commands";
-import { python } from "@codemirror/lang-python";
+import { globalCompletion, localCompletionSource, pythonLanguage } from "@codemirror/lang-python";
+import { LanguageSupport } from "@codemirror/language";
+import type { CompletionContext } from "@codemirror/autocomplete";
+import { lintGutter, linter } from "@codemirror/lint";
 import { EditorState, StateEffect, StateField } from "@codemirror/state";
 import { syntaxHighlighting } from "@codemirror/language";
 import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
 import { Decoration, type DecorationSet, EditorView, keymap } from "@codemirror/view";
 import { basicSetup } from "codemirror";
 import { useEffect, useRef } from "react";
+import { completions, hovers, type LintFinding, type Reference, toDiagnostics } from "./codeAssist";
 
 const setProblemLines = StateEffect.define<number[]>();
 
@@ -44,9 +50,27 @@ const look = EditorView.theme(
     ".cm-tooltip": { backgroundColor: "var(--panel)", border: "1px solid var(--line-2)" },
     ".cm-tooltip-autocomplete > ul > li[aria-selected]": { backgroundColor: "var(--panel-2)", color: "var(--text)" },
     ".cm-problem-line": { backgroundColor: "rgba(224, 38, 26, 0.18)" },
+    ".cm-tooltip-autocomplete ul li .cm-completionDetail": { color: "var(--muted)", fontStyle: "normal", marginLeft: "6px" },
+    ".cm-completionInfo": { maxWidth: "380px", padding: "6px 10px", lineHeight: "1.45" },
+    ".cm-hint-tooltip": { maxWidth: "420px", padding: "6px 10px", lineHeight: "1.45", fontSize: "13px" },
+    ".cm-hint-head": { fontFamily: "var(--mono)", color: "var(--text)", marginBottom: "2px" },
+    ".cm-tooltip-lint": { maxWidth: "460px" },
+    ".cm-diagnostic": { padding: "4px 8px", fontSize: "13px" },
+    ".cm-lintRange-error": { textDecorationColor: "var(--red-2)" },
   },
   { dark: true },
 );
+
+/** Python, with the platform's hints first: where there are some (after me.,
+ *  world., def ...) only those; elsewhere Python's own (the file's names,
+ *  keywords and builtins). */
+function pythonSupport(getRef: () => Reference | null) {
+  const ours = completions(getRef);
+  return new LanguageSupport(pythonLanguage, [
+    pythonLanguage.data.of({ autocomplete: (ctx: CompletionContext) => ours(ctx) ?? localCompletionSource(ctx) }),
+    pythonLanguage.data.of({ autocomplete: globalCompletion }),
+  ]);
+}
 
 export function CodeEditor({
   docKey,
@@ -55,6 +79,8 @@ export function CodeEditor({
   onSave,
   problemLines: lines,
   jump,
+  reference = null,
+  lint,
 }: {
   /** Which file this is: switching keeps each file's own undo history. */
   docKey: string;
@@ -64,11 +90,17 @@ export function CodeEditor({
   problemLines: number[];
   /** Move the cursor to this line; a new object each time, so the same line can be asked twice. */
   jump: { line: number } | null;
+  /** What team code can use, for the hints (from the server); null: no hints. */
+  reference?: Reference | null;
+  /** Checks a file's text as typed: the problems to underline. */
+  lint?: (text: string) => Promise<LintFinding[]>;
 }) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
-  const handlers = useRef({ onChange, onSave });
-  handlers.current = { onChange, onSave };
+  const handlers = useRef({ onChange, onSave, lint });
+  handlers.current = { onChange, onSave, lint };
+  const ref = useRef(reference);
+  ref.current = reference;
   const states = useRef(new Map<string, EditorState>()); // each file's editor state
   const shownKey = useRef(docKey);
 
@@ -77,10 +109,22 @@ export function CodeEditor({
       doc,
       extensions: [
           basicSetup,
-          python(),
+          pythonSupport(() => ref.current),
           syntaxHighlighting(oneDarkHighlightStyle),
           look,
           problemLines,
+          hovers(() => ref.current),
+          lintGutter(),
+          linter(async (v) => {
+            const check = handlers.current.lint;
+            if (!check) return [];
+            const text = v.state.doc.toString();
+            try {
+              return toDiagnostics(v.state.doc, await check(text));
+            } catch {
+              return []; // the server is away: no squiggles, nothing breaks
+            }
+          }, { delay: 600 }),
           keymap.of([
             { key: "Mod-s", preventDefault: true, run: () => (handlers.current.onSave(), true) },
             indentWithTab,
