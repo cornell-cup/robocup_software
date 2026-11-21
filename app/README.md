@@ -152,6 +152,11 @@ written for them (`strategy/docs/guide.md`).
   **Head to head** adds up every match per opponent (`teams/.results.json`).
 - **Field** (while the sim runs) puts the field beside the editor with what the code draws
   (`world.draw`); the **Values** card lists what it shows (`world.show`), per robot.
+- The editor hints as you type (after `me.`, `world.`, `world.ball.`, `world.us.`,
+  `world.draw.`, and the slots after `def `), from `strategy/core/reference.py`, and
+  underlines mistakes about half a second after you stop: ruff with the rules that catch
+  mistakes rather than style, plus the platform's own checks (a slot's parameters, a role
+  that never returns, unknown names on `me` and `world`) in `robocup_web/lint.py`.
 - Problems from loading, playing and matches are listed under the editor with their file
   and line; click one to open the file there. A save clears the old ones.
 
@@ -287,6 +292,8 @@ HTTP 400 with `{"error": "..."}`.
 | WS | `/sim/ws` | world state pushed ~30×/s; send commands as JSON text |
 | GET | `/teams` | `{"workspaces": [{"name", "files": [{"name", "size", "modified"}], "author", "safe", "origin", "from"}]}` |
 | GET | `/teams/guide` | `{"text"}`, the students' guide (Markdown) |
+| GET | `/teams/reference` | what team code can use, for the editor's hints: `me`, `world`, `ball`, `us`, `draw` members and the slots |
+| POST | `/teams/{ws}/lint` | `{"file", "text"}` as typed: `{"diagnostics": [{"line", "col", "end_line", "end_col", "severity", "message", "code"}]}` |
 | POST | `/teams/new` | `{"name": "anna", "start": "template" \| "get_open" \| "blank"}`; a taken name is a 409 with `{"taken", "suggest"}` |
 | POST | `/teams/upload` | `{"files": [{"name", "data": base64}], "into": workspace \| null, "as": name \| null, "replace": bool}`: a `.zip` or `.py` files, marked safe |
 | GET | `/teams/{ws}` | the workspace, as in the list |
