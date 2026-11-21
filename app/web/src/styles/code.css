@@ -618,3 +618,114 @@
     width: 190px;
   }
 }
+
+/* The Blocks view: Blockly, and the Python the blocks make beside it */
+.blocks-pane {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+}
+.blocks-host {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+.blocks-python {
+  width: 38%;
+  min-width: 280px;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--line);
+}
+.blocks-python-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 6px 0 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.blocks-python-head .dim {
+  font-weight: 400;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.blocks-python-head .btn {
+  margin-left: auto;
+}
+.blocks-show {
+  position: absolute;
+  z-index: 5;
+  top: 8px;
+  right: 10px;
+}
+
+/* Blockly in the app's font everywhere: blocks (set in the theme), the toolbox,
+   menus, the text boxes you type in, tooltips, comments. Menus and tooltips
+   live at the end of <body>, so these aren't under .blocks-host. */
+.blocks-host .blocklyText,
+.blocklyToolboxCategoryLabel,
+.blocklyFlyoutLabelText,
+.blocklyFlyoutButton .blocklyText,
+.blocklyWidgetDiv .blocklyHtmlInput,
+.blocklyHtmlTextAreaInput,
+.blocklyDropDownDiv .blocklyMenuItem,
+.blocklyWidgetDiv .blocklyMenuItem,
+.blocklyTooltipDiv,
+.blocklyComment textarea,
+.blocklyCommentTextarea {
+  font-family: var(--sans) !important;
+}
+.blocklyTooltipDiv {
+  background: var(--panel-2) !important;
+  color: var(--text) !important;
+  border: 1px solid var(--line-2);
+  border-radius: var(--radius-sm);
+  box-shadow: none !important;
+  font-size: 13px !important;
+  max-width: 320px;
+  padding: 6px 8px !important;
+  opacity: 1 !important;
+}
+.blocklyWidgetDiv .blocklyMenu,
+.blocklyDropDownDiv .blocklyMenu {
+  font-size: 13px;
+}
+
+/* The toolbox: one row per category, its colour as a dot */
+.blocks-host .blocklyToolbox,
+.blocks-host .blocklyToolboxDiv {
+  padding: 8px 6px;
+  border-right: 1px solid var(--line);
+}
+.blocks-host .blocklyToolboxCategory {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  margin-bottom: 2px;
+  padding: 0 12px 0 8px !important;
+  border-radius: var(--radius-sm);
+  border-left-width: 4px !important;
+  cursor: pointer;
+}
+.blocks-host .blocklyToolboxCategory:not(.blocklyToolboxSelected):hover {
+  background: var(--panel-2) !important;
+}
+.blocks-host .blocklyToolboxCategoryLabel {
+  font-size: 14px;
+  font-weight: 500;
+  padding-left: 4px;
+}
+.blocks-host .blocklyToolboxSelected .blocklyToolboxCategoryLabel {
+  color: #ffffff;
+  font-weight: 600;
+}
+.blocks-host .blocklyFlyoutLabelText {
+  fill: var(--muted);
+}
