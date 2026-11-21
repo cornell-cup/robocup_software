@@ -58,6 +58,30 @@ with the right parameters. Mistakes get underlined before you even save: red for
 (a typo like `wrold`, a missing `:`), yellow for warnings (a name that doesn't exist, like
 `me.kick_towards`, or a function that never returns a command). Hover to read why.
 
+## Blocks instead of typing
+
+You can build your roles by snapping blocks together (Google Blockly) instead of typing.
+**New… → Blocks** starts a workspace that way, or press **Convert to blocks** above any
+`team.py`. Each role is a **when I'm the supporter** block; put moves (**go to**, **kick
+toward**, **intercept**…) inside it, with places (**the ball**, **their goal**, **between
+… and …**) plugged into them. **Show Python** puts the Python your blocks make beside them,
+updating as you snap, and that Python is what plays: save, **Play** and **Test match**
+work just the same.
+
+**who plays which role** (in Roles) is `roles()`: the built-in way, or everyone in one role.
+**play like the built-in attacker** (in Move) does what the built-in team does for that
+role: the template's roles start that way, so swap it for your own blocks when you're ready.
+Hover over a block to read what it does; a role's description (its docstring) shows there too.
+
+Whatever blocks can't show yet stays as grey Python blocks, kept exactly as you wrote it.
+**other Python in the file** holds what isn't a role: the file's description, imports,
+helper functions, parts switched off with `#`. Each starts folded to its first line; click
+to open it. Inside a role, **Python step**, **Python move** and **Python value** hold a
+line the blocks can't say (a loop, an unusual command). Comments inside a role are the one
+thing that doesn't come along (the page asks first). **Back to Python** goes the other way:
+you keep the Python your blocks made and type from there, and **Convert to blocks** again
+any time.
+
 ## Commands: what a robot can do
 
 Every role function returns one command:
