@@ -421,7 +421,8 @@ it's a new built-in that has beaten v1.
 9. **Tournaments:** every chosen workspace against every other, a ranking
    table.
 10. **Settings and Blocks:** level 0 sliders; Blockly for lessons 1–6,
-    generating the same Python.
+    generating the same Python. Blocks **done 2026-11-20** (both ways:
+    Python → blocks and back); the sliders are next.
 11. **Driving:** the `drive` slot and its drills, sim first.
 
 ## Open questions
