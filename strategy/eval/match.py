@@ -6,15 +6,17 @@ game, so neither strategy keeps the side that happens to suit it.
 
 From the repo root:
 
-    uv run python -m strategy.eval.match                      # current vs v1, 10 games of 120 s
+    uv run python -m strategy.eval.match                      # current vs v2, 10 games of 120 s
     uv run python -m strategy.eval.match --a current --b current --games 4   # sanity: about even
     uv run python -m strategy.eval.match --games 40 --duration 300
-    uv run python -m strategy.eval.match --a strategy/examples/get_open.py   # a team file vs v1
+    uv run python -m strategy.eval.match --a strategy/examples/get_open.py   # a team file vs v2
     uv run python -m strategy.eval.match --a teams/anna --b teams/ben         # two workspaces
 
-Strategies are named in STRATEGIES: "current" is core/team.py's decide, "v1"
-and "v0" the frozen baselines (baseline_v1.py, the team on 2026-11-20, the
-default opponent; baseline_v0.py, before the attacker pushed the ball). A
+Strategies are named in STRATEGIES: "current" is core/team.py's decide;
+"v2", the default opponent, the built-in team after strategy step 2 (the
+attacker meeting rolling balls, baseline_v2.py); "v1" and "v0" the earlier
+frozen baselines (baseline_v1.py, the team earlier on 2026-11-20;
+baseline_v0.py, before the attacker pushed the ball). A
 side can also be a team, a workspace folder or a .py file (core/loader.py):
 the built-in team with the slots it defines swapped in. A team runs in its
 own process (core/worker.py, in lockstep: every frame waits for its answer),
@@ -41,7 +43,7 @@ from strategy.core.loader import ENTRY, TeamFileError
 from strategy.core.slots import Team
 from strategy.core.team import decide
 from strategy.core.worker import TeamWorker
-from strategy.eval import baseline_v0, baseline_v1
+from strategy.eval import baseline_v0, baseline_v1, baseline_v2
 from strategy.world.simconfig import DT, FIELD_W, NUM_ROBOTS, TEAM_BLUE_SIZE
 
 # isort: split
@@ -52,6 +54,7 @@ from simulation_node import BALL_STUCK_DURATION, BALL_STUCK_THRESHOLD
 
 STRATEGIES: dict[str, Callable[..., Any]] = {
     "current": decide,
+    "v2": baseline_v2.decide,
     "v1": baseline_v1.decide,
     "v0": baseline_v0.decide,
 }
@@ -327,7 +330,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Headless matches between two strategies")
     sides = f"{', '.join(STRATEGIES)}, or a team (a workspace folder or a .py file)"
     _ = parser.add_argument("--a", default="current", help=f"side A: {sides} (default current)")
-    _ = parser.add_argument("--b", default="v1", help=f"side B: {sides} (default v1)")
+    _ = parser.add_argument("--b", default="v2", help=f"side B: {sides} (default v2)")
     _ = parser.add_argument("--games", type=int, default=10)
     _ = parser.add_argument("--duration", type=float, default=120.0, help="sim seconds per game")
     _ = parser.add_argument("--seed", type=int, default=0, help="seed of the first game")
