@@ -40,7 +40,8 @@ interface Problem {
 }
 const THIS = "@this"; // the Play card's "this workspace"
 const BUILT_IN_OPPONENTS = [
-  { value: "v1", label: "v1: the built-in team (frozen)" },
+  { value: "v2", label: "v2: the built-in team (frozen)" },
+  { value: "v1", label: "v1: before it met rolling balls" },
   { value: "current", label: "current: the built-in team now" },
   { value: "v0", label: "v0: before it pushed the ball" },
 ];
@@ -342,7 +343,7 @@ export function Code() {
 
   // -- test matches ---------------------------------------------------------------------
 
-  const [opponent, setOpponent] = useSavedState("code.opponent", "v1");
+  const [opponent, setOpponent] = useSavedState("code.opponent", "v2");
   const [games, setGames] = useSavedState("code.games", 6);
   const [duration, setDuration] = useSavedState("code.duration", 60);
   const [match, setMatch] = useState<MatchStatus | null>(null);

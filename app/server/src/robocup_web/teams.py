@@ -45,7 +45,7 @@ MAX_FILE_BYTES = 200_000
 MAX_FILES = 50
 MAX_UPLOAD_BYTES = 1_000_000
 CHECK_TIMEOUT_S = 20.0
-OPPONENTS = ("v1", "v0", "current")
+OPPONENTS = ("v2", "v1", "v0", "current")
 # New workspace: where its files come from.
 STARTS: dict[str, dict[str, Path | str]] = {
     "template": {ENTRY: EXAMPLES / "template.py"},
