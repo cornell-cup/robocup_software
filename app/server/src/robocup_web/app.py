@@ -36,7 +36,8 @@ from .photonvision import ENV_DIR, PhotonVisionProcess
 from .procs import CommandError
 from .robots import RealRobots
 from .sim import SIM_DIR, SimBridge, SimProcess
-from .teams import GUIDE, Conflict, MatchProcess, Workspaces
+from . import lint
+from .teams import ENTRY, GUIDE, Conflict, MatchProcess, Workspaces, file_path
 from .tracking import (
     VIDEO_PORT,
     TrackerProcess,
@@ -218,6 +219,11 @@ def create_app(photonvision_dir: Path | None = None, start_photonvision: bool = 
         """The students' guide (strategy/docs/guide.md), for the Code page's Guide tab."""
         return {"text": GUIDE.read_text(encoding="utf-8")}
 
+    @app.get("/api/v1/teams/reference")
+    def teams_reference() -> dict[str, Any]:
+        """What team code can use, for the Code page's hints (strategy/core/reference.py)."""
+        return lint.reference()
+
     @app.get("/api/v1/teams/match")
     def teams_match_status(after: int = 0) -> dict[str, Any]:
         return state.match.status(after)
@@ -264,6 +270,13 @@ def create_app(photonvision_dir: Path | None = None, start_photonvision: bool = 
     @app.post("/api/v1/teams/{ws}/author")
     def teams_author(ws: str, opts: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
         return state.teams.set_author(ws, str(opts.get("author") or ""))
+
+    @app.post("/api/v1/teams/{ws}/lint")
+    def teams_lint(ws: str, body: Annotated[dict[str, Any], Body()]) -> dict[str, Any]:
+        """Problems in one file's text as typed (not saved), for the editor's squiggles."""
+        name = str(body.get("file") or "")
+        file_path(ws, name)  # checks the names
+        return {"diagnostics": lint.lint(name, str(body.get("text") or ""), name == ENTRY)}
 
     @app.post("/api/v1/teams/{ws}/check")
     def teams_check(ws: str) -> dict[str, Any]:
