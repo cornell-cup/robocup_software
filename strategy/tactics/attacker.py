@@ -1,15 +1,18 @@
 """Attacker tactic: get behind the ball and move it toward the opponent's goal.
 
-Three ways, checked in order:
+Checked in order:
   1. contested: an opponent is also on a slow ball, so kick it off at an angle
      to break the head-on standoff;
   2. RL kick: when turned on and the robot is on its own side of the ball,
      the learned policy picks the target and the kicker fires;
-  3. classic: get behind the ball on the line to their goal, facing along
-     it; once lined up there, drive through the ball toward the goal. A ball
-     rolling faster than MEET_BALL_SPEED is met where the attacker can first
-     reach it (world/analysis.py's ball_intercept), not chased where it is:
-     +0.58 goals a game against v1 over 80 games of 120 s (2026-11-20).
+  3. a rolling ball (faster than MEET_BALL_SPEED): me.intercept(), meet it
+     where the robot can first reach it and play it on toward their goal
+     (+0.58 goals a game against v1 over 80 games of 120 s, 2026-11-20);
+  4. otherwise me.kick_toward() their goal: get behind the ball on the line to
+     the goal, facing along it, then drive through it.
+
+3 and 4 are skills (skills/ball.py): a team that replaces intercept or
+kick_toward gets its own version used here too.
 """
 
 from __future__ import annotations
@@ -20,40 +23,28 @@ import numpy as np
 
 from strategy.api import Me, World
 from strategy.core.command import Command
-from strategy.skills.navigate import behind_ball, heading_while_driving
-from strategy.world.analysis import ball_intercept
-from strategy.world.geometry import attack_angle, distance, opp_goal, wrap_angle
-from strategy.world.simconfig import ARRIVAL_THRESH
-from strategy.world.state import (
-    FIELD_SCALE,
-    GOAL_MOUTH_H,
-    GOAL_Y_MAX,
-    GOAL_Y_MIN,
-    BallState,
-    RobotState,
+from strategy.skills.ball import (  # noqa: F401  (re-exported: the attacker's tuning, as before)
+    ALIGN_DIST as ATTACKER_ALIGN_DIST,
 )
+from strategy.skills.ball import (  # noqa: F401
+    APPROACH_LATERAL,
+    APPROACH_OFFSET,
+    LINEUP_ANGLE,
+    LINEUP_SLACK,
+    LINEUP_WIDTH,
+    MEET_BALL_SPEED,
+    PUSH_THROUGH,
+    aim_point,
+    lined_up,
+    push_through,
+)
+from strategy.skills.navigate import behind_ball
+from strategy.world.geometry import attack_angle, distance
+from strategy.world.state import FIELD_SCALE, BallState, RobotState
 
-# Distances below are tuned on the 9 x 6 field and scaled by FIELD_SCALE, like
-# the robot, ball and kick zone (sim/config.py), so on a custom --field they
-# keep the same size relative to the robots. Speeds are not scaled: the
-# physics isn't either.
-
-# Offset, in meters, placed on our side of the ball so body pushes forward.
-# Must keep the ball inside the kick zone (ROBOT_RADIUS … ROBOT_RADIUS+
-# KICK_ZONE_DEPTH ≈ 0.143 … 0.263 on 9 x 6) once the attacker arrives,
-# otherwise the kick never fires. 0.25 lands the ball cleanly inside that band.
-APPROACH_OFFSET = 0.25 * FIELD_SCALE
-# Per-team y bias on the approach point so the two attackers don't converge
-# head-on at the same point and pin the ball. Must stay below
-# KICK_ZONE_HALF_WIDTH (0.10) plus ARRIVAL_THRESH (~0.04) so the ball is still
-# inside the kick zone once the attacker stops at the approach point.
-APPROACH_LATERAL = 0.05 * FIELD_SCALE
-# Within this distance of the approach point, the attacker rotates to the kick
-# direction. Farther away, it faces the motion direction for natural driving.
-ATTACKER_ALIGN_DIST = 0.6 * FIELD_SCALE
 # Contested-ball detection: an opposing forward this close to a stalled ball
 # means we're in a head-on push stalemate. The attacker switches to a skewed
-# approach to break it.
+# approach to break it. Tuned on 9 x 6, scaled by FIELD_SCALE.
 CONTESTED_OPP_DIST = 0.5 * FIELD_SCALE
 CONTESTED_BALL_SPEED = 0.5  # m/s
 # Kick-angle skew applied when contested. Both teams skew by the same sign,
@@ -61,27 +52,6 @@ CONTESTED_BALL_SPEED = 0.5  # m/s
 # 2·SKEW — the two attackers end up on different diagonals around the ball
 # instead of pinning head-on along the goal-to-goal axis.
 CONTESTED_SKEW = math.pi / 6
-# Lined up to push: behind the ball, at most this much farther back than the
-# approach point (the controller stops anywhere within ARRIVAL_THRESH of it)...
-LINEUP_SLACK = ARRIVAL_THRESH + 0.02 * FIELD_SCALE
-# ...at most this far off the line from the ball to their goal (the kick
-# zone's half-width: the ball then meets the robot's front)...
-LINEUP_WIDTH = 0.10 * FIELD_SCALE
-# ...and facing along that line to within this.
-LINEUP_ANGLE = math.radians(25)
-# Pushing: the target this far past the ball toward their goal, so the robot
-# keeps driving into it instead of arriving and stopping.
-PUSH_THROUGH = 0.3 * FIELD_SCALE
-# Where to push the ball: a point this far behind their goal line, level with
-# the ball but at least AIM_POST_MARGIN inside the posts. Aiming at the goal
-# line's centre instead, a ball next to a post was pushed along the goal line,
-# from a spot inside the end wall the robot could never reach.
-AIM_DEPTH = GOAL_MOUTH_H / 2
-AIM_POST_MARGIN = GOAL_MOUTH_H / 4
-# A ball rolling faster than this (m/s) is met where the attacker can first
-# reach it (world.analysis), not chased where it is now.
-MEET_BALL_SPEED = 0.3
-
 # The RL policy only runs with the robot at least this far behind the ball
 # along the attack axis, meters (unscaled: RL runs on 9 x 6 only).
 RL_BEHIND_BALL = 0.1
@@ -115,18 +85,9 @@ def attacker(me: Me, world: World) -> Command:
         tx, ty = rl_skill.target(robot, ball, attacks_right=attacks_right)
         return Command(tx, ty, team_dir, kick=True)
 
-    return _push_toward_goal(robot, _ball_to_meet(robot, ball, world), team_color, team_dir)
-
-
-def _ball_to_meet(robot: RobotState, ball: BallState, world: World) -> BallState:
-    """The ball as the attacker should play it: where it can first reach a
-    rolling ball (the analysis layer's intercept), or where it is."""
-    if ball.speed <= MEET_BALL_SPEED:
-        return ball
-    meet = ball_intercept(robot, ball)  # this robot's only: cheaper than world.analysis
-    if meet.t <= 0.0:
-        return ball
-    return BallState(pos=meet.point, vel=np.zeros(2), speed=0.0)
+    if ball.speed > MEET_BALL_SPEED:
+        return me.intercept()
+    return me.kick_toward(aim_point(ball.pos, team_color))
 
 
 def is_contested(ball: BallState, opponents: list[RobotState]) -> bool:
@@ -146,66 +107,6 @@ def _break_standoff(ball: BallState, team_dir: float) -> Command:
     return Command(float(pt[0]), float(pt[1]), kick_angle, kick=True)
 
 
-def _push_toward_goal(
-    robot: RobotState, ball: BallState, team_color: str, team_dir: float
-) -> Command:
-    aim = aim_point(ball.pos, team_color)
-    to_aim = aim - ball.pos
-    n = float(np.linalg.norm(to_aim))
-    if n < 1e-6:  # ball already at the aim point, behind the goal line: it's in
-        return Command(float(ball.pos[0]), float(ball.pos[1]), team_dir)
-    direction = to_aim / n
-    push_angle = math.atan2(direction[1], direction[0])
-
-    # Lined up: drive through the ball. Stopping at the approach point would
-    # leave the robot parked short of the ball (it's farther back than the
-    # robot and ball radii), so the ball would never move. While the robot
-    # pushes it stays lined up; if the ball gets away, it lines up again.
-    if lined_up(robot, ball.pos, direction, push_angle):
-        pt = ball.pos + direction * PUSH_THROUGH
-        return Command(float(pt[0]), float(pt[1]), push_angle)
-
-    # Face the motion direction while navigating so the robot doesn't "shift"
-    # sideways with its back to the target. Once near the approach point,
-    # rotate to face along the push.
-    pt = _approach_point(ball.pos, aim, team_color)
-    ta = heading_while_driving(robot.pos, pt, push_angle, ATTACKER_ALIGN_DIST)
-    return Command(float(pt[0]), float(pt[1]), ta)
-
-
-def aim_point(ball_pos: np.ndarray, team_color: str) -> np.ndarray:
-    """Where to push the ball: behind their goal line, level with the ball,
-    kept inside the posts."""
-    goal = opp_goal(team_color)
-    into_goal = math.cos(attack_angle(team_color))  # +1 blue (+x), -1 red
-    y = min(max(float(ball_pos[1]), GOAL_Y_MIN + AIM_POST_MARGIN), GOAL_Y_MAX - AIM_POST_MARGIN)
-    return np.array([float(goal[0]) + into_goal * AIM_DEPTH, y])
-
-
-def lined_up(
-    robot: RobotState, ball_pos: np.ndarray, direction: np.ndarray, push_angle: float
-) -> bool:
-    """The robot is behind the ball on the push line, close, and facing along it."""
-    rel = ball_pos - robot.pos
-    along = float(rel @ direction)  # how far behind the ball, along the push
-    across = abs(float(direction[0] * rel[1] - direction[1] * rel[0]))  # off the line
-    return (
-        0.0 < along <= APPROACH_OFFSET + LINEUP_SLACK
-        and across <= LINEUP_WIDTH
-        and abs(wrap_angle(robot.angle - push_angle)) <= LINEUP_ANGLE
-    )
-
-
-def _approach_point(
-    ball_pos: np.ndarray, opp_goal_pos: np.ndarray, team_color: str
-) -> np.ndarray:
-    to_goal = opp_goal_pos - ball_pos
-    n = np.linalg.norm(to_goal)
-    if n < 1e-6:
-        return ball_pos
-    dir_goal = to_goal / n
-    # Blue from -y, red from +y so the two attackers don't pin head-on at the
-    # ball when they meet. Stays inside KICK_ZONE_HALF_WIDTH so the kick still
-    # fires once the robot settles.
-    lateral_y = -APPROACH_LATERAL if team_color == "blue" else APPROACH_LATERAL
-    return behind_ball(ball_pos, dir_goal, APPROACH_OFFSET) + np.array([0.0, lateral_y])
+def _push_toward_goal(robot: RobotState, ball: BallState, team_color: str, team_dir: float) -> Command:
+    """Push the ball toward their goal from where it is (as kick_toward does)."""
+    return push_through(robot, ball.pos, aim_point(ball.pos, team_color), team_color)
