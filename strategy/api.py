@@ -48,8 +48,9 @@ def _xy(p: Point) -> np.ndarray:
 class Me:
     """One robot, and the commands it can be given."""
 
-    def __init__(self, state: RobotState):
+    def __init__(self, state: RobotState, world: World | None = None):
         self.state = state
+        self._world = world  # set for our own robots: what their skills play in
 
     @property
     def id(self) -> int:
@@ -110,6 +111,42 @@ class Me:
         """Stay where it is, facing the way it faces."""
         return Command(float(self.pos[0]), float(self.pos[1]), self.angle, dribble=bool(dribble))
 
+    def time_to(self, point: Point) -> float:
+        """Seconds this robot needs to get to `point`, flat out (the analysis
+        layer's drive model: world/analysis.py)."""
+        from strategy.world.analysis import time_to_reach
+
+        return time_to_reach(self.state, _xy(point))
+
+    # -- skills: one action each (skills/ball.py), your team's own if it has one
+
+    def go_to_ball(self) -> Command:
+        """Drive to the ball, facing it."""
+        return self._skill("go_to_ball")
+
+    def kick_toward(self, target: Point) -> Command:
+        """Line up behind the ball on the line to `target`, and send it there."""
+        return self._skill("kick_toward", _xy(target))
+
+    def intercept(self) -> Command:
+        """Meet a rolling ball where this robot can first reach it, and play it on."""
+        return self._skill("intercept")
+
+    def pass_to(self, mate: Me) -> Command:
+        """Send the ball to a teammate, where it's going to be."""
+        return self._skill("pass_to", mate)
+
+    def dribble_to(self, target: Point) -> Command:
+        """Take the ball with the dribbler on and carry it to `target`."""
+        return self._skill("dribble_to", _xy(target))
+
+    def _skill(self, name: str, *args: Any) -> Command:
+        if self._world is None:
+            raise RuntimeError(f"{name}() is for your own robots (me, world.teammates)")
+        from strategy.core.slots import run_skill
+
+        return run_skill(name, self, self._world, *args)
+
     def __repr__(self) -> str:
         return f"Me(id={self.id}, pos=({self.pos[0]:.2f}, {self.pos[1]:.2f}))"
 
@@ -126,7 +163,7 @@ class World:
         kicked_off: bool = True,
         memory: dict[str, Any] | None = None,
         unavailable: set[int] | frozenset[int] = frozenset(),
-        rl_skill: "RLKickSkill | None" = None,
+        rl_skill: RLKickSkill | None = None,
         rl_enabled: bool = False,
         sticky: dict[str, int] | None = None,
         events: Iterable[str] = (),
@@ -137,7 +174,7 @@ class World:
         # Survives from frame to frame, one per team: keep your own notes here.
         self.memory: dict[str, Any] = memory if memory is not None else {}
         self._unavailable = set(unavailable)
-        self.teammates: list[Me] = [Me(r) for r in team]
+        self.teammates: list[Me] = [Me(r, self) for r in team]
         theirs = gamestate.red if color == "blue" else gamestate.blue
         self.opponents: list[Me] = [Me(r) for r in theirs if r.id not in self._unavailable]
         # The built-in attacker's learned kick.
@@ -150,6 +187,10 @@ class World:
         self.events: list[str] = list(events)
         # The play running now (one of the team's PLAYS), None without plays.
         self.play: str | None = None
+        # The team whose skills our robots use, and where their errors go
+        # (decide() sets both; the built-in skills otherwise).
+        self._team: Any = None
+        self._errors: list[str] | None = None
         # Shapes on the field and values beside it, this frame only.
         self.draw = Drawing(color)
         self.show = Shown()
@@ -162,6 +203,18 @@ class World:
     @property
     def ball(self) -> BallState:
         return self.gamestate.ball
+
+    @property
+    def score(self) -> tuple[int, int]:
+        """(our goals, their goals)."""
+        built_for = "blue" if self.gamestate.our_team is self.gamestate.blue else "red"
+        ours, theirs = self.gamestate.score_ours, self.gamestate.score_theirs
+        return (ours, theirs) if self.color == built_for else (theirs, ours)
+
+    @property
+    def time_left(self) -> float:
+        """Seconds left in this half (0 when the sim keeps no clock)."""
+        return self.gamestate.time_remaining
 
     @property
     def field_size(self) -> tuple[float, float]:
@@ -193,7 +246,7 @@ class World:
         return self.gamestate.timestamp
 
     @cached_property
-    def analysis(self) -> "Analysis":
+    def analysis(self) -> Analysis:
         """Both teams' race to the ball and threats (world/analysis.py), computed
         the first time it's asked for in a frame."""
         from strategy.world.analysis import analyze
@@ -201,7 +254,7 @@ class World:
         return analyze(self.gamestate, self._unavailable)
 
     @property
-    def us(self) -> "TeamView":
+    def us(self) -> TeamView:
         """Our side of the analysis: who reaches the ball first, threats."""
         return self.analysis.team(self.color)
 

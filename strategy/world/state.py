@@ -31,6 +31,20 @@ class BallState:
     vel: np.ndarray = field(default_factory=lambda: np.zeros(2))  # [vx, vy] meters/sec
     speed: float = 0.0  # meters/sec
 
+    def at(self, t: float) -> np.ndarray:
+        """Where the ball will be in `t` seconds, slowing down as in the sim
+        (robots and walls in its way aside)."""
+        from strategy.world.prediction import predict_ball_position
+
+        return predict_ball_position(self, t)
+
+    @property
+    def stops_at(self) -> np.ndarray:
+        """Where the ball comes to rest if nothing touches it."""
+        from strategy.world.prediction import ball_rest_position
+
+        return ball_rest_position(self)
+
 
 @dataclass
 class RobotState:
