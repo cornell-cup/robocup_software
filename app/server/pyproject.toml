@@ -12,6 +12,8 @@ dependencies = [
     "vision-core",
     "tag-tracking",
     "ball-tracking",
+    # The Code page's lint: squiggles under mistakes in students' code
+    "ruff>=0.6",
 ]
 
 [project.scripts]
