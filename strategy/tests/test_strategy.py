@@ -69,7 +69,9 @@ ROOT = Path(__file__).resolve().parents[2]  # the repo
 
 def attack_as(robot, gs, color):
     """The built-in attacker slot for one robot, as decide() runs it."""
-    return attacker(Me(robot), World(gs, color, gs.blue if color == "blue" else gs.red))
+    w = World(gs, color, gs.blue if color == "blue" else gs.red)
+    me = next(m for m in w.teammates if m.id == robot.id)  # as decide() hands it over
+    return attacker(me, w)
 
 
 # Six robots well apart, roughly the sim's spawn layout (0-2 blue, 3-5 red).
@@ -1038,6 +1040,80 @@ class TestGuide(unittest.TestCase):
                     r = match.play_game(decide, decide, i % 2 == 0, seed=i, duration_s=4,
                                         team_a=load_team(path))
                     self.assertEqual(r.errors_a, [])
+
+
+class TestSkills(unittest.TestCase):
+    """The skill slots (skills/ball.py) and the readings that came with them."""
+
+    def plan(self, team: Team, raw: dict[str, Any] | None = None):
+        errors: list[str] = []
+        gs = build_game_state(raw or world(ball=(4.5, 3.0, 0, 0)))
+        targets, kicks, attackers = decide(gs, sticky_attackers={}, teams={"blue": team}, errors=errors)
+        return targets, kicks, attackers, errors
+
+    def test_the_built_in_attacker_uses_your_kick_toward(self):
+        def kick_toward(me, world, target):
+            world.draw.point(target)
+            return me.go_to((1.0, 1.0))
+
+        targets, _, attackers, errors = self.plan(DEFAULT_TEAM.replace(kick_toward=kick_toward))
+        self.assertEqual(errors, [])
+        (blue_attacker,) = attackers & {0, 1, 2}
+        self.assertEqual(targets[blue_attacker][:2], (1.0, 1.0))
+
+    def test_the_built_in_attacker_uses_your_intercept_for_a_rolling_ball(self):
+        def intercept(me, world):
+            return me.go_to(world.ball.at(1.0))
+
+        raw = world(ball=(4.5, 3.0, 1.5, 0.5))
+        targets, _, attackers, errors = self.plan(DEFAULT_TEAM.replace(intercept=intercept), raw)
+        self.assertEqual(errors, [])
+        (blue_attacker,) = attackers & {0, 1, 2}
+        ahead = build_game_state(raw).ball.at(1.0)
+        self.assertAlmostEqual(targets[blue_attacker][0], float(ahead[0]), places=6)
+
+    def test_a_broken_skill_falls_back_to_the_built_in_one(self):
+        def kick_toward(me, world, target):
+            return 1 / 0
+
+        targets, _, _, errors = self.plan(DEFAULT_TEAM.replace(kick_toward=kick_toward))
+        self.assertTrue(any("kick_toward" in e and "ZeroDivisionError" in e for e in errors), errors)
+        self.assertEqual(targets, decide(build_game_state(world(ball=(4.5, 3.0, 0, 0))), sticky_attackers={})[0])
+
+    def test_skills_as_methods_of_a_robot(self):
+        gs = build_game_state(world({0: (3.6, 3.0, 0.0)}, ball=(4.0, 3.0, 0, 0)))
+        w = World(gs, "blue", gs.blue)
+        me, mate = w.teammates[0], w.teammates[1]
+        self.assertEqual(me.go_to_ball().target[:2], (4.0, 3.0))
+        self.assertIsInstance(me.kick_toward(w.their_goal), Command)
+        self.assertIsInstance(me.pass_to(mate), Command)
+        self.assertTrue(me.dribble_to((8.0, 3.0)).dribble)
+        with self.assertRaisesRegex(RuntimeError, "for your own robots"):
+            w.opponents[0].kick_toward(w.their_goal)
+
+    def test_a_lined_up_pass_fires_the_kicker(self):
+        # Robot 0 behind the ball, facing robot 1 straight ahead of it.
+        gs = build_game_state(world({0: (3.75, 3.0, 0.0), 1: (6.0, 3.0, 0.0)}, ball=(4.0, 3.0, 0, 0)))
+        w = World(gs, "blue", gs.blue)
+        self.assertTrue(w.teammates[0].pass_to(w.teammates[1]).kick)
+
+    def test_time_to_the_ball_ahead_and_the_score(self):
+        raw = world({0: (1.0, 3.0, 0.0)}, ball=(4.0, 3.0, 1.0, 0.0), score={"blue": 2, "red": 1},
+                    game={"half": 1, "time_remaining": 42.0})
+        gs = build_game_state(raw)
+        blue, red = World(gs, "blue", gs.blue), World(gs, "red", gs.red)
+        near, far = blue.teammates[0].time_to((2.0, 3.0)), blue.teammates[0].time_to((6.0, 3.0))
+        self.assertGreater(far, near)
+        self.assertGreater(gs.ball.at(1.0)[0], 4.0)  # rolling on
+        self.assertLess(gs.ball.at(1.0)[0], gs.ball.stops_at[0])  # slowing down
+        self.assertEqual((blue.score, red.score), ((2, 1), (1, 2)))
+        self.assertEqual(blue.time_left, 42.0)
+
+    def test_a_team_file_replaces_a_skill(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "team.py"
+            path.write_text("def go_to_ball(me, world):\n    return me.stop()\n", encoding="utf-8")
+            self.assertEqual(replaced_slots(load_team(path)), ["go_to_ball"])
 
 
 class TestPlaysAndTeam(unittest.TestCase):
