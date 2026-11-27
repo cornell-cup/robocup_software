@@ -239,6 +239,36 @@ strafe as fast as it drives, turn on the spot, react quickly, do the same thing
 twice? Use it on a new robot, after changing wheels or motors, or to compare
 two robots.
 
+### Experimental per-robot calibration
+
+`laptop.calibration` builds independent signed-axis steady-rate curves from
+completed motion-test records. For example, from the `robot/` directory:
+
+```python
+import json
+from laptop.calibration import Compensator, fit_profile, fleet_scale
+
+with open("reference.json", encoding="utf-8") as source:
+  reference = fit_profile(json.load(source))
+with open("robot.json", encoding="utf-8") as source:
+  robot = fit_profile(json.load(source))
+scale = fleet_scale([robot], reference)
+adjust = Compensator(robot, reference, scale)
+print(adjust(0.7, 0.0, 0.0))
+```
+
+The inputs are saved Robot test profiles, not calibration model files. A fleet
+scale requires valid, monotonic full-command measurements in both directions
+of every axis for every robot and the reference. Interrupted runs are excluded;
+repeats at the same command are averaged. Interpolation below the lowest
+measured command assumes zero response at zero command; it does not identify a
+deadband. Unmeasured or nonmonotonic curves and unreachable rates are rejected.
+
+This is an experimental offline model, not connected to the driving pipeline.
+It does not account for transient dynamics, drift, coupled motions, battery
+conditions or safety limits. Simulation results do not establish physical robot
+performance; validate independently with real measurements before deployment.
+
 **Before you start**
 
 - The camera tracks the field: field calibration done
